@@ -26,7 +26,7 @@ export function Stepper({ current }: StepperProps) {
         return (
           <div key={step.key} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             {i > 0 && (
-              <div style={{ width: 26, height: 2, borderRadius: 2, background: i <= currentIdx ? '#108474' : '#d4dade' }} />
+              <div style={{ width: 26, height: 2, borderRadius: 2, background: i <= currentIdx ? 'var(--brand-primary)' : '#d4dade' }} />
             )}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <div style={{
@@ -35,9 +35,9 @@ export function Stepper({ current }: StepperProps) {
                 fontSize: 12, fontWeight: 800, flexShrink: 0,
                 transition: 'all 0.2s',
                 ...(done
-                  ? { background: '#108474', color: '#fff' }
+                  ? { background: 'var(--brand-primary)', color: '#fff' }
                   : active
-                    ? { background: '#108474', color: '#fff', boxShadow: '0 0 0 4px rgba(16,132,116,0.16)' }
+                    ? { background: 'var(--brand-primary)', color: '#fff', boxShadow: '0 0 0 4px rgba(16,132,116,0.16)' }
                     : { background: '#eef1f0', color: '#9ca3af', border: '1.5px solid #d4dade' }
                 ),
               }}>

@@ -1,5 +1,5 @@
 'use client'
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import type { PortalState, PortalStep, FiscalData } from '../_lib/types'
 import { validateFiscal } from '../_lib/validators'
 import { DEMO_TICKETS } from '../_lib/constants'
@@ -30,6 +30,11 @@ export function usePortal(flash: (msg: string) => void) {
   const [state, setState] = useState<PortalState>(INITIAL_STATE)
   const lookupTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const generateTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (lookupTimer.current) clearTimeout(lookupTimer.current)
+    if (generateTimer.current) clearTimeout(generateTimer.current)
+  }, [])
 
   const set = useCallback((patch: Partial<PortalState>) =>
     setState(prev => ({ ...prev, ...patch })), [])

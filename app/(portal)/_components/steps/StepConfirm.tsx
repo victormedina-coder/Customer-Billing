@@ -69,10 +69,11 @@ export function StepConfirm({ ticket, fiscal, busy, onBack, onGenerate }: StepCo
             Receptor (tú)
           </div>
           <button
+            type="button"
             onClick={onBack}
             style={{
               background: 'none', border: 'none', cursor: 'pointer',
-              fontSize: 12, fontWeight: 800, color: '#108474',
+              fontSize: 12, fontWeight: 800, color: 'var(--brand-primary)',
               display: 'flex', alignItems: 'center', gap: 5,
             }}
           >
@@ -113,8 +114,8 @@ export function StepConfirm({ ticket, fiscal, busy, onBack, onGenerate }: StepCo
 
         {/* Items */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
-          {ticket.items.map((item, idx) => (
-            <div key={idx} style={{
+          {ticket.items.map((item) => (
+            <div key={item.sku} style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               background: '#f9fafb', borderRadius: 10, padding: '10px 13px',
             }}>
@@ -153,7 +154,7 @@ export function StepConfirm({ ticket, fiscal, busy, onBack, onGenerate }: StepCo
             <span style={{ fontSize: 13, fontWeight: 600, color: '#6b7280' }}>IVA 16%</span>
             <span style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a' }}>{formatMXN(iva)}</span>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', background: '#108474', borderRadius: 11, padding: '11px 14px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', background: 'var(--brand-primary)', borderRadius: 11, padding: '11px 14px' }}>
             <span style={{ fontSize: 15, fontWeight: 800, color: '#fff' }}>Total</span>
             <span style={{ fontSize: 16, fontWeight: 900, color: '#fff' }}>{formatMXN(ticket.total)}</span>
           </div>
@@ -163,6 +164,7 @@ export function StepConfirm({ ticket, fiscal, busy, onBack, onGenerate }: StepCo
       {/* Navigation */}
       <div style={{ display: 'flex', gap: 10 }}>
         <button
+          type="button"
           onClick={onBack}
           style={{
             flex: 1, height: 52,
@@ -174,11 +176,12 @@ export function StepConfirm({ ticket, fiscal, busy, onBack, onGenerate }: StepCo
           Atrás
         </button>
         <button
+          type="button"
           onClick={onGenerate}
           disabled={busy}
           style={{
             flex: 2, height: 52,
-            background: '#108474', color: '#fff',
+            background: 'var(--brand-primary)', color: '#fff',
             border: 'none', borderRadius: 13,
             fontSize: 15, fontWeight: 800,
             cursor: busy ? 'not-allowed' : 'pointer',

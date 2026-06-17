@@ -1,6 +1,5 @@
 'use client'
 import type { LookupError, Ticket } from '../../_lib/types'
-import { formatMXN } from '../../_lib/formatters'
 import { FormField } from '../ui/FormField'
 import { AlertBanner } from '../ui/AlertBanner'
 import { LoadingSpinner } from '../ui/LoadingSpinner'
@@ -32,7 +31,7 @@ const CARD: React.CSSProperties = {
 
 const BTN_PRIMARY: React.CSSProperties = {
   width: '100%', height: 52,
-  background: '#108474', color: '#fff',
+  background: 'var(--brand-primary)', color: '#fff',
   border: 'none', borderRadius: 13,
   fontSize: 15, fontWeight: 800,
   cursor: 'pointer', display: 'flex',
@@ -42,8 +41,8 @@ const BTN_PRIMARY: React.CSSProperties = {
 
 const BTN_OUTLINE: React.CSSProperties = {
   flex: 1, height: 44,
-  background: '#fff', color: '#108474',
-  border: '1.5px solid #108474', borderRadius: 11,
+  background: '#fff', color: 'var(--brand-primary)',
+  border: '1.5px solid var(--brand-primary)', borderRadius: 11,
   fontSize: 13, fontWeight: 800,
   cursor: 'pointer', display: 'flex',
   alignItems: 'center', justifyContent: 'center',
@@ -71,7 +70,7 @@ export function StepTicket({
       {/* Header */}
       <div style={{ textAlign: 'center', marginBottom: 24 }}>
         <div style={{
-          width: 56, height: 56, borderRadius: 16, background: 'linear-gradient(135deg, #108474, #0b6359)',
+          width: 56, height: 56, borderRadius: 16, background: 'linear-gradient(135deg, var(--brand-primary), var(--brand-dark))',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           margin: '0 auto 14px', boxShadow: '0 8px 24px rgba(16,132,116,0.28)',
         }}>
@@ -102,7 +101,7 @@ export function StepTicket({
         </div>
 
         {/* QR button */}
-        <button onClick={onScanQR} style={{
+        <button type="button" onClick={onScanQR} style={{
           width: '100%', height: 50, background: '#f5f8f7',
           border: '1.5px dashed #d4dade', borderRadius: 12,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -136,7 +135,7 @@ export function StepTicket({
                 onClick={onToggleFolioHelp}
                 style={{
                   background: 'none', border: 'none', cursor: 'pointer',
-                  fontSize: 11, fontWeight: 700, color: '#108474',
+                  fontSize: 11, fontWeight: 700, color: 'var(--brand-primary)',
                   display: 'flex', alignItems: 'center', gap: 4, padding: 0,
                 }}
               >
@@ -170,11 +169,11 @@ export function StepTicket({
                 <div style={{ borderTop: '1px dashed #d4dade', margin: '8px 0' }} />
                 <div style={{
                   display: 'flex', justifyContent: 'space-between',
-                  padding: '4px 0', color: '#108474', fontWeight: 900, fontSize: 12,
+                  padding: '4px 0', color: 'var(--brand-primary)', fontWeight: 900, fontSize: 12,
                 }}>
                   <span>FOLIO:</span>
                   <span style={{
-                    background: '#d1fae5', border: '2px solid #108474',
+                    background: '#d1fae5', border: '2px solid var(--brand-primary)',
                     borderRadius: 4, padding: '1px 6px',
                   }}>A1522-0847</span>
                 </div>
@@ -223,7 +222,7 @@ export function StepTicket({
             title="Ticket no encontrado"
             description="Verifica el folio. Recuerda que el folio tiene el formato A####-#### (letras y guión)."
             actions={
-              <button onClick={onDismissError} style={{
+              <button type="button" onClick={onDismissError} style={{
                 background: 'none', border: 'none', cursor: 'pointer',
                 fontSize: 12, fontWeight: 800, color: '#dc2626', padding: 0,
                 textDecoration: 'underline',
@@ -248,7 +247,7 @@ export function StepTicket({
             title="El importe no coincide"
             description="El importe ingresado no coincide con el total de este ticket. Verifica la cantidad o deja el campo en blanco."
             actions={
-              <button onClick={onDismissError} style={{
+              <button type="button" onClick={onDismissError} style={{
                 background: 'none', border: 'none', cursor: 'pointer',
                 fontSize: 12, fontWeight: 800, color: '#b45309', padding: 0,
                 textDecoration: 'underline',
@@ -278,13 +277,13 @@ export function StepTicket({
             }
             actions={
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                <button onClick={onDownloadPdf} style={BTN_OUTLINE}>
+                <button type="button" onClick={onDownloadPdf} style={BTN_OUTLINE}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
                   </svg>
                   Descargar factura
                 </button>
-                <button onClick={onDismissError} style={BTN_GHOST}>
+                <button type="button" onClick={onDismissError} style={BTN_GHOST}>
                   Usar otro ticket
                 </button>
               </div>
@@ -295,6 +294,7 @@ export function StepTicket({
 
       {/* CTA button */}
       <button
+        type="button"
         onClick={onLookup}
         disabled={busy}
         style={{ ...BTN_PRIMARY, opacity: busy ? 0.85 : 1, marginBottom: 14 }}
@@ -329,6 +329,7 @@ export function StepTicket({
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button
+            type="button"
             onClick={() => onFillDemo('A1522-0847', '2499')}
             style={{
               flex: 1, minWidth: 140, height: 38,
@@ -342,6 +343,7 @@ export function StepTicket({
             <span>$2,499</span>
           </button>
           <button
+            type="button"
             onClick={() => onFillDemo('A1522-1203', '1799')}
             style={{
               flex: 1, minWidth: 140, height: 38,

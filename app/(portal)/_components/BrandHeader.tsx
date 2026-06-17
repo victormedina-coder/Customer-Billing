@@ -12,7 +12,7 @@ export function BrandHeader({ storeName, tagline }: BrandHeaderProps) {
       position: 'sticky', top: 0, zIndex: 20, flexShrink: 0,
     }}>
       <div style={{
-        width: 40, height: 40, borderRadius: 11, background: '#108474',
+        width: 40, height: 40, borderRadius: 11, background: 'var(--brand-primary)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         flexShrink: 0, boxShadow: '0 4px 12px rgba(16,132,116,0.28)',
       }}>
@@ -26,7 +26,7 @@ export function BrandHeader({ storeName, tagline }: BrandHeaderProps) {
         <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, letterSpacing: '0.01em' }}>{tagline}</div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, background: '#f5f8f7', border: '1px solid #d4dade', borderRadius: 20, padding: '6px 13px' }}>
-        <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#108474', flexShrink: 0 }} />
+        <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--brand-primary)', flexShrink: 0 }} />
         <span style={{ fontSize: 12, fontWeight: 700, color: '#0b6359', whiteSpace: 'nowrap' }}>Portal de autofacturación</span>
       </div>
     </header>

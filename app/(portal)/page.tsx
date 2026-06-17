@@ -10,8 +10,8 @@ import { StepFiscal } from './_components/steps/StepFiscal'
 import { StepConfirm } from './_components/steps/StepConfirm'
 import { StepSuccess } from './_components/steps/StepSuccess'
 
-const STORE_NAME = 'Stetson México'
-const TAGLINE = 'Facturación electrónica · CFDI 4.0'
+const STORE_NAME = 'Grupo1522'
+const TAGLINE = 'Facturación electrónica'
 
 export default function PortalPage() {
   const toast = useToast()

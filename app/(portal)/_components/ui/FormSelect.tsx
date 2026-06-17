@@ -1,4 +1,5 @@
 'use client'
+import { useId } from 'react'
 import type { SelectHTMLAttributes } from 'react'
 import type { SelectOption } from '../../_lib/types'
 
@@ -10,13 +11,23 @@ interface FormSelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 }
 
 export function FormSelect({ label, options, error, placeholder = 'Selecciona…', ...selectProps }: FormSelectProps) {
+  const generatedId = useId()
+  const id = selectProps.id ?? generatedId
+  const errorId = `${id}-error`
+
   return (
     <div>
-      <label style={{ display: 'block', fontSize: 11, fontWeight: 800, color: '#6b7280', letterSpacing: '0.07em', textTransform: 'uppercase' as const, marginBottom: 7 }}>
+      <label
+        htmlFor={id}
+        style={{ display: 'block', fontSize: 11, fontWeight: 800, color: '#6b7280', letterSpacing: '0.07em', textTransform: 'uppercase' as const, marginBottom: 7 }}
+      >
         {label}
       </label>
       <select
         {...selectProps}
+        id={id}
+        aria-invalid={!!error}
+        aria-describedby={error ? errorId : undefined}
         style={{
           width: '100%', height: 50,
           border: `2px solid ${error ? '#fca5a5' : '#d4dade'}`,
@@ -35,7 +46,7 @@ export function FormSelect({ label, options, error, placeholder = 'Selecciona…
         ))}
       </select>
       {error && (
-        <div style={{ fontSize: 12, fontWeight: 700, color: '#dc2626', marginTop: 6 }}>
+        <div id={errorId} style={{ fontSize: 12, fontWeight: 700, color: '#dc2626', marginTop: 6 }}>
           {error}
         </div>
       )}

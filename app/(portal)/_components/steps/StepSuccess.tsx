@@ -1,7 +1,7 @@
 'use client'
 import type { Ticket, FiscalData, GeneratedInvoice } from '../../_lib/types'
 import { formatMXN, calcSubtotal, calcIva } from '../../_lib/formatters'
-import { METODO_PAGO_LABEL, REGIMENES, USOS_CFDI } from '../../_lib/constants'
+import { METODO_PAGO_LABEL, USOS_CFDI } from '../../_lib/constants'
 
 interface StepSuccessProps {
   ticket: Ticket
@@ -37,7 +37,7 @@ export function StepSuccess({
       <div style={{ textAlign: 'center', marginBottom: 24 }}>
         <div style={{
           width: 64, height: 64, borderRadius: '50%',
-          background: 'linear-gradient(135deg, #108474, #059669)',
+          background: 'linear-gradient(135deg, var(--brand-primary), #059669)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           margin: '0 auto 14px', boxShadow: '0 8px 28px rgba(16,132,116,0.35)',
         }}>
@@ -123,8 +123,8 @@ export function StepSuccess({
           {/* Concepts mini-table */}
           <div style={{ borderTop: '1px solid #e2e7e6', paddingTop: 12, marginBottom: 12 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Conceptos</div>
-            {ticket.items.map((item, idx) => (
-              <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+            {ticket.items.map((item) => (
+              <div key={item.sku} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
                 <div style={{ fontSize: 12, color: '#1a1a1a', fontWeight: 600, flex: 1 }}>
                   {item.qty}× {item.desc}
                   <span style={{ fontSize: 11, color: '#9ca3af', fontWeight: 600 }}> · {item.sku}</span>
@@ -148,7 +148,7 @@ export function StepSuccess({
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 900 }}>
               <span style={{ fontSize: 15, color: '#1a1a1a' }}>Total</span>
-              <span style={{ fontSize: 16, color: '#108474' }}>{formatMXN(ticket.total)}</span>
+              <span style={{ fontSize: 16, color: 'var(--brand-primary)' }}>{formatMXN(ticket.total)}</span>
             </div>
           </div>
         </div>
@@ -166,20 +166,20 @@ export function StepSuccess({
 
       {/* Action buttons 2×2 grid */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        <button onClick={onDownloadPdf} style={BTN_ACTION}>
+        <button type="button" onClick={onDownloadPdf} style={BTN_ACTION}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/>
             <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
           </svg>
           Descargar PDF
         </button>
-        <button onClick={onDownloadXml} style={BTN_ACTION}>
+        <button type="button" onClick={onDownloadXml} style={BTN_ACTION}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
           </svg>
           Descargar XML
         </button>
-        <button onClick={onResendEmail} style={BTN_ACTION}>
+        <button type="button" onClick={onResendEmail} style={BTN_ACTION}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#108474" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
             <polyline points="22,6 12,13 2,6"/>
@@ -187,8 +187,9 @@ export function StepSuccess({
           Reenviar por correo
         </button>
         <button
+          type="button"
           onClick={onNewInvoice}
-          style={{ ...BTN_ACTION, background: '#108474', border: 'none', color: '#fff' }}
+          style={{ ...BTN_ACTION, background: 'var(--brand-primary)', border: 'none', color: '#fff' }}
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>

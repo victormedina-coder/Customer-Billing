@@ -6,7 +6,6 @@ import { REGIMENES, USOS_CFDI, METODO_PAGO_LABEL } from '../../_lib/constants'
 import { FormField } from '../ui/FormField'
 import { FormSelect } from '../ui/FormSelect'
 import { BackButton } from '../ui/BackButton'
-import { LoadingSpinner } from '../ui/LoadingSpinner'
 
 interface StepFiscalProps {
   ticket: Ticket
@@ -30,7 +29,7 @@ const CARD: React.CSSProperties = {
 
 const BTN_PRIMARY: React.CSSProperties = {
   flex: 2, height: 52,
-  background: '#108474', color: '#fff',
+  background: 'var(--brand-primary)', color: '#fff',
   border: 'none', borderRadius: 13,
   fontSize: 15, fontWeight: 800,
   cursor: 'pointer', display: 'flex',
@@ -38,7 +37,7 @@ const BTN_PRIMARY: React.CSSProperties = {
   transition: 'background 0.15s',
 }
 
-function RfcBadge({ state, rfcRazon }: { state: RfcValidationState; rfcRazon: string }) {
+function RfcBadge({ state }: { state: RfcValidationState }) {
   if (state === 'idle') return (
     <span style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', background: '#f5f8f7', border: '1px solid #d4dade', borderRadius: 20, padding: '3px 9px' }}>
       Validación SAT
@@ -46,7 +45,7 @@ function RfcBadge({ state, rfcRazon }: { state: RfcValidationState; rfcRazon: st
   )
   if (state === 'checking') return (
     <span style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', background: '#f5f8f7', border: '1px solid #d4dade', borderRadius: 20, padding: '3px 9px', display: 'flex', alignItems: 'center', gap: 5 }}>
-      <span style={{ width: 10, height: 10, border: '1.5px solid rgba(0,0,0,0.15)', borderTopColor: '#108474', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
+      <span style={{ width: 10, height: 10, border: '1.5px solid rgba(0,0,0,0.15)', borderTopColor: 'var(--brand-primary)', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
       Verificando…
     </span>
   )
@@ -113,7 +112,7 @@ export function StepFiscal({
             placeholder="XAXX010101000"
             maxLength={13}
             error={errors.rfc}
-            badge={<RfcBadge state={rfcValidation} rfcRazon={rfcRazon} />}
+            badge={<RfcBadge state={rfcValidation} />}
             hint={
               rfcValidation === 'registered' && rfcRazon ? (
                 <div style={{ fontSize: 11.5, color: '#0b6359', fontWeight: 700, marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -228,6 +227,7 @@ export function StepFiscal({
       {/* Navigation buttons */}
       <div style={{ display: 'flex', gap: 10 }}>
         <button
+          type="button"
           onClick={onBack}
           style={{
             flex: 1, height: 52,
@@ -239,7 +239,7 @@ export function StepFiscal({
         >
           Atrás
         </button>
-        <button onClick={onContinue} style={BTN_PRIMARY}>
+        <button type="button" onClick={onContinue} style={BTN_PRIMARY}>
           Continuar
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
             <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>

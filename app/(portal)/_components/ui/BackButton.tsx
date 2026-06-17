@@ -12,7 +12,7 @@ export function BackButton({ onClick, label = 'Regresar' }: BackButtonProps) {
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 6,
         background: 'none', border: 'none', cursor: 'pointer',
-        fontSize: 13, fontWeight: 800, color: '#108474', padding: 0, marginBottom: 18,
+        fontSize: 13, fontWeight: 800, color: 'var(--brand-primary)', padding: 0, marginBottom: 18,
       }}
     >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">

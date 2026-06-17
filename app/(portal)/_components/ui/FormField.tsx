@@ -1,4 +1,5 @@
 'use client'
+import { useId } from 'react'
 import type { InputHTMLAttributes, ReactNode } from 'react'
 
 interface FormFieldProps extends InputHTMLAttributes<HTMLInputElement> {
@@ -9,16 +10,26 @@ interface FormFieldProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export function FormField({ label, error, hint, badge, ...inputProps }: FormFieldProps) {
+  const generatedId = useId()
+  const id = inputProps.id ?? generatedId
+  const errorId = `${id}-error`
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 7 }}>
-        <label style={{ fontSize: 11, fontWeight: 800, color: '#6b7280', letterSpacing: '0.07em', textTransform: 'uppercase' as const }}>
+        <label
+          htmlFor={id}
+          style={{ fontSize: 11, fontWeight: 800, color: '#6b7280', letterSpacing: '0.07em', textTransform: 'uppercase' as const }}
+        >
           {label}
         </label>
         {badge}
       </div>
       <input
         {...inputProps}
+        id={id}
+        aria-invalid={!!error}
+        aria-describedby={error ? errorId : undefined}
         style={{
           width: '100%', height: 50,
           border: `2px solid ${error ? '#fca5a5' : '#d4dade'}`,
@@ -29,7 +40,7 @@ export function FormField({ label, error, hint, badge, ...inputProps }: FormFiel
           ...inputProps.style,
         }}
         onFocus={(e) => {
-          e.target.style.borderColor = '#108474'
+          e.target.style.borderColor = 'var(--brand-primary)'
           inputProps.onFocus?.(e)
         }}
         onBlur={(e) => {
@@ -39,7 +50,7 @@ export function FormField({ label, error, hint, badge, ...inputProps }: FormFiel
       />
       {hint}
       {error && (
-        <div style={{ fontSize: 12, fontWeight: 700, color: '#dc2626', marginTop: 6 }}>
+        <div id={errorId} style={{ fontSize: 12, fontWeight: 700, color: '#dc2626', marginTop: 6 }}>
           {error}
         </div>
       )}

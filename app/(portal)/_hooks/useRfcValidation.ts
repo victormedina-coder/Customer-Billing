@@ -1,5 +1,5 @@
 'use client'
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import type { RfcValidationState } from '../_lib/types'
 import { isValidRfcFormat } from '../_lib/validators'
 import { DEMO_SAT_REGISTRY } from '../_lib/constants'
@@ -12,6 +12,10 @@ export interface RfcValidationResult {
 export function useRfcValidation() {
   const [result, setResult] = useState<RfcValidationResult>({ state: 'idle', rfcRazon: '' })
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current)
+  }, [])
 
   const validate = useCallback((rfc: string, onRegistered: (razon: string, regimen: string) => void) => {
     const normalized = rfc.trim().toUpperCase()
