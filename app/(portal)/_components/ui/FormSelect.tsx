@@ -30,7 +30,7 @@ export function FormSelect({ label, options, error, placeholder = 'Selecciona…
         aria-describedby={error ? errorId : undefined}
         style={{
           width: '100%', height: 50,
-          border: `2px solid ${error ? '#fca5a5' : '#d4dade'}`,
+          border: `2px solid ${error ? '#fca5a5' : 'var(--border-default)'}`,
           borderRadius: 11, padding: '0 38px 0 15px',
           fontSize: 15, fontWeight: 600, color: '#1a1a1a',
           outline: 'none', cursor: 'pointer', backgroundColor: '#fff',

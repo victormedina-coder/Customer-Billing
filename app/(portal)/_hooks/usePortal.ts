@@ -8,7 +8,7 @@ const INITIAL_FISCAL: FiscalData = { rfc: '', razon: '', regimen: '', cp: '', us
 
 const INITIAL_STATE: PortalState = {
   step: 'ticket',
-  folio: '', total: '',
+  folio: '',
   busy: false,
   lookupError: '',
   ticket: null,
@@ -30,6 +30,10 @@ export function usePortal(flash: (msg: string) => void) {
   const [state, setState] = useState<PortalState>(INITIAL_STATE)
   const lookupTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const generateTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Ref espejo del state para que los callbacks lean siempre el valor más reciente
+  // sin quedar atrapados en un closure obsoleto.
+  const stateRef = useRef<PortalState>(INITIAL_STATE)
+  useEffect(() => { stateRef.current = state }, [state])
 
   useEffect(() => () => {
     if (lookupTimer.current) clearTimeout(lookupTimer.current)
@@ -40,35 +44,62 @@ export function usePortal(flash: (msg: string) => void) {
     setState(prev => ({ ...prev, ...patch })), [])
 
   // ── Step 1: Ticket ──────────────────────────────────────
-  const setFolio = useCallback((v: string) => set({ folio: v, lookupError: '' }), [set])
-  const setTotal = useCallback((v: string) => set({ total: v, lookupError: '' }), [set])
+  // runLookup es la búsqueda EXPLÍCITA (Enter o botón "Buscar"): no se busca al
+  // escribir para evitar matches transitorios con folios de longitud variable
+  // (p.ej. A1522-1000 vs A1522-10000) y no golpear la API en cada tecla.
+  // No avanza de paso: al encontrar el ticket lo carga y muestra el monto;
+  // luego el usuario pulsa "Continuar".
+  const runLookup = useCallback((folioRaw: string) => {
+    const normalizedFolio = folioRaw.trim().toUpperCase()
+    if (lookupTimer.current) clearTimeout(lookupTimer.current)
+
+    if (!normalizedFolio) {
+      flash('Ingresa el folio de tu ticket')
+      set({ busy: false, ticket: null, lookupError: '' })
+      return
+    }
+
+    set({ busy: true, lookupError: '', folio: normalizedFolio, ticket: null })
+
+    lookupTimer.current = setTimeout(() => {
+      // TODO: en producción, llamar a POST /api/invoice/lookup
+      const t = DEMO_TICKETS[normalizedFolio]
+      if (!t) { set({ busy: false, ticket: null, lookupError: 'notfound' }); return }
+      if (t.status === 'invoiced') { set({ busy: false, ticket: t, lookupError: 'invoiced' }); return }
+      // Ticket válido: se carga y se queda en el paso Ticket para ver el monto.
+      set({ busy: false, ticket: t, lookupError: '' })
+    }, 600)
+  }, [set, flash])
+
+  // setFolio solo actualiza el campo. Editar el folio invalida el ticket cargado
+  // (oculta "Continuar") para que no quede un monto obsoleto de otra búsqueda.
+  const setFolio = useCallback((v: string) =>
+    set({ folio: v, lookupError: '', ticket: null, busy: false }), [set])
+
   const toggleFolioHelp = useCallback(() =>
     setState(prev => ({ ...prev, showFolioHelp: !prev.showFolioHelp })), [])
 
+  // lookup explícito (Enter / botón "Buscar ticket").
   const lookup = useCallback(() => {
-    const folio = state.folio.trim().toUpperCase()
-    if (!folio) { flash('Ingresa el folio de tu ticket'); return }
-    const totalNum = parseFloat(state.total)
-    set({ busy: true, lookupError: '' })
+    runLookup(stateRef.current.folio)
+  }, [runLookup])
 
-    if (lookupTimer.current) clearTimeout(lookupTimer.current)
-    lookupTimer.current = setTimeout(() => {
-      // TODO: en producción, llamar a POST /api/invoice/lookup
-      const t = DEMO_TICKETS[folio]
-      if (!t) { set({ busy: false, lookupError: 'notfound', ticket: null }); return }
-      if (state.total && !isNaN(totalNum) && Math.abs(t.total - totalNum) > 0.5) {
-        set({ busy: false, lookupError: 'mismatch', ticket: null }); return
-      }
-      if (t.status === 'invoiced') { set({ busy: false, lookupError: 'invoiced', ticket: t }); return }
-      set({ busy: false, lookupError: '', ticket: t, step: 'fiscal' })
-    }, 650)
-  }, [state.folio, state.total, set, flash])
+  // proceed: avanza a Datos fiscales solo si ya hay un ticket válido cargado.
+  const proceed = useCallback(() => {
+    const t = stateRef.current.ticket
+    if (!t || t.status !== 'ok') { flash('Busca tu ticket primero'); return }
+    set({ step: 'fiscal' })
+  }, [set, flash])
 
   const dismissError = useCallback(() =>
-    set({ lookupError: '', ticket: null, folio: '', total: '' }), [set])
+    set({ lookupError: '', ticket: null, folio: '' }), [set])
 
-  const fillDemo = useCallback((folio: string, total: string) =>
-    set({ folio, total, lookupError: '', ticket: null }), [set])
+  // fillDemo rellena el folio Y dispara el lookup (sin avanzar): el usuario ve
+  // el resultado (monto / alerta) y luego decide continuar.
+  const fillDemo = useCallback((folio: string) => {
+    set({ folio, lookupError: '', ticket: null })
+    runLookup(folio)
+  }, [set, runLookup])
 
   // ── Step 2: Fiscal ──────────────────────────────────────
   const setFiscal = useCallback(<K extends keyof FiscalData>(key: K, value: FiscalData[K]) =>
@@ -120,7 +151,7 @@ export function usePortal(flash: (msg: string) => void) {
   return {
     state,
     // Step 1
-    setFolio, setTotal, toggleFolioHelp, lookup, dismissError, fillDemo,
+    setFolio, toggleFolioHelp, lookup, proceed, dismissError, fillDemo,
     // Step 2
     setFiscal, setRfcRazon, goConfirm,
     // Step 3

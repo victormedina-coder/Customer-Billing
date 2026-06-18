@@ -1,6 +1,6 @@
 import type { ReactNode, CSSProperties } from 'react'
 
-type AlertVariant = 'error' | 'warning' | 'neutral'
+type AlertVariant = 'error' | 'warning' | 'neutral' | 'success'
 
 interface AlertBannerProps {
   variant: AlertVariant
@@ -13,19 +13,22 @@ interface AlertBannerProps {
 const VARIANT_STYLES: Record<AlertVariant, CSSProperties> = {
   error: { background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 12, padding: '13px 15px' },
   warning: { background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 12, padding: '13px 15px' },
-  neutral: { background: '#f5f8f7', border: '1.5px solid #d4dade', borderRadius: 14, padding: 16 },
+  neutral: { background: '#f5f5f5', border: '1.5px solid var(--border-default)', borderRadius: 14, padding: 16 },
+  success: { background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 12, padding: '13px 15px' },
 }
 
 const TITLE_COLOR: Record<AlertVariant, string> = {
   error: '#dc2626',
   warning: '#b45309',
   neutral: '#1a1a1a',
+  success: '#15803d',
 }
 
 const DESC_COLOR: Record<AlertVariant, string> = {
   error: '#991b1b',
   warning: '#92400e',
   neutral: '#6b7280',
+  success: '#166534',
 }
 
 export function AlertBanner({ variant, title, description, actions, icon }: AlertBannerProps) {

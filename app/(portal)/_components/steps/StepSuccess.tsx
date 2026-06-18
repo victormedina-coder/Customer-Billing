@@ -16,7 +16,7 @@ interface StepSuccessProps {
 
 const BTN_ACTION: React.CSSProperties = {
   flex: 1, minWidth: 130, height: 50,
-  background: '#fff', border: '1.5px solid #d4dade', borderRadius: 13,
+  background: '#fff', border: '1.5px solid var(--border-default)', borderRadius: 13,
   fontSize: 13, fontWeight: 700, color: '#1a1a1a',
   cursor: 'pointer', display: 'flex',
   alignItems: 'center', justifyContent: 'center', gap: 8,
@@ -37,11 +37,11 @@ export function StepSuccess({
       <div style={{ textAlign: 'center', marginBottom: 24 }}>
         <div style={{
           width: 64, height: 64, borderRadius: '50%',
-          background: 'linear-gradient(135deg, var(--brand-primary), #059669)',
+          background: 'var(--brand-primary)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          margin: '0 auto 14px', boxShadow: '0 8px 28px rgba(16,132,116,0.35)',
+          margin: '0 auto 14px', boxShadow: '0 8px 28px rgba(65,255,191,0.4)',
         }}>
-          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#000000" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="20 6 9 17 4 12"/>
           </svg>
         </div>
@@ -55,26 +55,26 @@ export function StepSuccess({
 
       {/* CFDI document */}
       <div style={{
-        background: '#fff', border: '1.5px solid #d4dade',
+        background: '#fff', border: '1.5px solid var(--border-default)',
         borderRadius: 18, overflow: 'hidden', marginBottom: 16,
       }}>
         {/* Document header */}
-        <div style={{ background: '#07211e', padding: '16px 20px' }}>
+        <div style={{ background: '#000000', padding: '16px 20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
             <div>
-              <div style={{ fontSize: 10, fontWeight: 700, color: '#6ee7b7', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 2 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--brand-primary)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 2 }}>
                 Comprobante Fiscal Digital (CFDI 4.0)
               </div>
-              <div style={{ fontSize: 15, fontWeight: 900, color: '#fff' }}>{storeName}</div>
+              <div style={{ fontSize: 15, fontWeight: 900, color: '#ffffff' }}>{storeName}</div>
             </div>
             <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: '#6ee7b7', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--brand-primary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>
                 Serie / Folio
               </div>
-              <div style={{ fontSize: 16, fontWeight: 900, color: '#fff' }}>{factura.serieFolio}</div>
+              <div style={{ fontSize: 16, fontWeight: 900, color: '#ffffff' }}>{factura.serieFolio}</div>
             </div>
           </div>
-          <div style={{ fontSize: 11, color: '#6ee7b7', fontWeight: 600 }}>
+          <div style={{ fontSize: 11, color: 'var(--brand-primary)', fontWeight: 600 }}>
             RFC Emisor: GRU1522000XXX · Reg: 601 · General de Ley
           </div>
         </div>
@@ -82,7 +82,7 @@ export function StepSuccess({
         {/* Document body */}
         <div style={{ padding: '16px 20px' }}>
           {/* UUID */}
-          <div style={{ background: '#f5f8f7', borderRadius: 10, padding: '10px 13px', marginBottom: 14 }}>
+          <div style={{ background: '#f5f5f5', borderRadius: 10, padding: '10px 13px', marginBottom: 14 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>
               UUID (Folio Fiscal SAT)
             </div>
@@ -121,7 +121,7 @@ export function StepSuccess({
           </div>
 
           {/* Concepts mini-table */}
-          <div style={{ borderTop: '1px solid #e2e7e6', paddingTop: 12, marginBottom: 12 }}>
+          <div style={{ borderTop: '1px solid var(--border-default)', paddingTop: 12, marginBottom: 12 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Conceptos</div>
             {ticket.items.map((item) => (
               <div key={item.sku} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
@@ -137,7 +137,7 @@ export function StepSuccess({
           </div>
 
           {/* Totals */}
-          <div style={{ borderTop: '1px solid #e2e7e6', paddingTop: 10 }}>
+          <div style={{ borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
               <span style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>Subtotal</span>
               <span style={{ fontSize: 12, fontWeight: 700 }}>{formatMXN(subtotal)}</span>
@@ -148,13 +148,13 @@ export function StepSuccess({
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 900 }}>
               <span style={{ fontSize: 15, color: '#1a1a1a' }}>Total</span>
-              <span style={{ fontSize: 16, color: 'var(--brand-primary)' }}>{formatMXN(ticket.total)}</span>
+              <span style={{ fontSize: 16, color: '#000000', fontWeight: 900 }}>{formatMXN(ticket.total)}</span>
             </div>
           </div>
         </div>
 
         {/* Sello footer */}
-        <div style={{ background: '#f5f8f7', borderTop: '1px solid #e2e7e6', padding: '10px 20px' }}>
+        <div style={{ background: '#f5f5f5', borderTop: '1px solid var(--border-default)', padding: '10px 20px' }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
             Sello digital SAT (extracto)
           </div>
@@ -180,7 +180,7 @@ export function StepSuccess({
           Descargar XML
         </button>
         <button type="button" onClick={onResendEmail} style={BTN_ACTION}>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#108474" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#000000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
             <polyline points="22,6 12,13 2,6"/>
           </svg>
@@ -189,9 +189,9 @@ export function StepSuccess({
         <button
           type="button"
           onClick={onNewInvoice}
-          style={{ ...BTN_ACTION, background: 'var(--brand-primary)', border: 'none', color: '#fff' }}
+          style={{ ...BTN_ACTION, background: 'var(--brand-primary)', border: 'none', color: '#000000' }}
         >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#000000" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
           </svg>
           Facturar otra compra

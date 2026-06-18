@@ -32,7 +32,7 @@ export function FormField({ label, error, hint, badge, ...inputProps }: FormFiel
         aria-describedby={error ? errorId : undefined}
         style={{
           width: '100%', height: 50,
-          border: `2px solid ${error ? '#fca5a5' : '#d4dade'}`,
+          border: `2px solid ${error ? '#fca5a5' : 'var(--border-default)'}`,
           borderRadius: 11, padding: '0 15px',
           fontSize: 15, fontWeight: 700, color: '#1a1a1a',
           outline: 'none', background: '#fff',
@@ -44,7 +44,7 @@ export function FormField({ label, error, hint, badge, ...inputProps }: FormFiel
           inputProps.onFocus?.(e)
         }}
         onBlur={(e) => {
-          e.target.style.borderColor = error ? '#fca5a5' : '#d4dade'
+          e.target.style.borderColor = error ? '#fca5a5' : 'var(--border-default)'
           inputProps.onBlur?.(e)
         }}
       />

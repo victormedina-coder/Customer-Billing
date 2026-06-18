@@ -21,7 +21,7 @@ interface StepFiscalProps {
 
 const CARD: React.CSSProperties = {
   background: '#fff',
-  border: '1.5px solid #d4dade',
+  border: '1.5px solid var(--border-default)',
   borderRadius: 18,
   padding: '22px 20px',
   marginBottom: 14,
@@ -29,7 +29,7 @@ const CARD: React.CSSProperties = {
 
 const BTN_PRIMARY: React.CSSProperties = {
   flex: 2, height: 52,
-  background: 'var(--brand-primary)', color: '#fff',
+  background: 'var(--brand-primary)', color: '#000000',
   border: 'none', borderRadius: 13,
   fontSize: 15, fontWeight: 800,
   cursor: 'pointer', display: 'flex',
@@ -39,18 +39,18 @@ const BTN_PRIMARY: React.CSSProperties = {
 
 function RfcBadge({ state }: { state: RfcValidationState }) {
   if (state === 'idle') return (
-    <span style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', background: '#f5f8f7', border: '1px solid #d4dade', borderRadius: 20, padding: '3px 9px' }}>
+    <span style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', background: '#f5f5f5', border: '1px solid var(--border-default)', borderRadius: 20, padding: '3px 9px' }}>
       Validación SAT
     </span>
   )
   if (state === 'checking') return (
-    <span style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', background: '#f5f8f7', border: '1px solid #d4dade', borderRadius: 20, padding: '3px 9px', display: 'flex', alignItems: 'center', gap: 5 }}>
-      <span style={{ width: 10, height: 10, border: '1.5px solid rgba(0,0,0,0.15)', borderTopColor: 'var(--brand-primary)', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
+    <span style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', background: '#f5f5f5', border: '1px solid var(--border-default)', borderRadius: 20, padding: '3px 9px', display: 'flex', alignItems: 'center', gap: 5 }}>
+      <span style={{ width: 10, height: 10, border: '1.5px solid rgba(0,0,0,0.15)', borderTopColor: '#000000', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
       Verificando…
     </span>
   )
   if (state === 'registered') return (
-    <span style={{ fontSize: 10, fontWeight: 700, color: '#0b6359', background: '#d1fae5', border: '1px solid #6ee7b7', borderRadius: 20, padding: '3px 9px' }}>
+    <span style={{ fontSize: 10, fontWeight: 700, color: '#000000', background: 'var(--brand-primary)', border: '1px solid var(--brand-primary)', borderRadius: 20, padding: '3px 9px' }}>
       ✓ Registrado en SAT
     </span>
   )
@@ -95,7 +95,7 @@ export function StepFiscal({
       {/* Fiscal form card */}
       <div style={CARD}>
         <div style={{ fontSize: 14, fontWeight: 800, color: '#1a1a1a', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#108474" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#000000" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/>
           </svg>
           Datos fiscales del receptor
@@ -115,7 +115,7 @@ export function StepFiscal({
             badge={<RfcBadge state={rfcValidation} />}
             hint={
               rfcValidation === 'registered' && rfcRazon ? (
-                <div style={{ fontSize: 11.5, color: '#0b6359', fontWeight: 700, marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ fontSize: 11.5, color: '#000000', fontWeight: 700, marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="20 6 9 17 4 12"/>
                   </svg>
@@ -176,7 +176,7 @@ export function StepFiscal({
           />
 
           {/* Separator */}
-          <div style={{ borderTop: '1px solid #e2e7e6', paddingTop: 16 }}>
+          <div style={{ borderTop: '1px solid var(--border-default)', paddingTop: 16 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               {/* Forma de pago (from ticket) */}
               <div>
@@ -184,7 +184,7 @@ export function StepFiscal({
                   Forma de pago
                 </div>
                 <div style={{
-                  height: 50, border: '2px solid #e2e7e6',
+                  height: 50, border: '2px solid var(--border-default)',
                   borderRadius: 11, padding: '0 15px',
                   fontSize: 13, fontWeight: 700, color: '#6b7280',
                   display: 'flex', alignItems: 'center',
@@ -203,7 +203,7 @@ export function StepFiscal({
                   </svg>
                 </div>
                 <div style={{
-                  height: 50, border: '2px solid #e2e7e6',
+                  height: 50, border: '2px solid var(--border-default)',
                   borderRadius: 11, padding: '0 15px',
                   fontSize: 13, fontWeight: 700, color: '#6b7280',
                   display: 'flex', alignItems: 'center',
@@ -214,8 +214,8 @@ export function StepFiscal({
               </div>
             </div>
 
-            <div style={{ fontSize: 11.5, color: '#0b6359', fontWeight: 700, marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#108474" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <div style={{ fontSize: 11.5, color: '#6b7280', fontWeight: 700, marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
               </svg>
               PUE es el único método disponible para compras en punto de venta. No es editable.
@@ -232,7 +232,7 @@ export function StepFiscal({
           style={{
             flex: 1, height: 52,
             background: '#fff', color: '#6b7280',
-            border: '1.5px solid #d4dade', borderRadius: 13,
+            border: '1.5px solid var(--border-default)', borderRadius: 13,
             fontSize: 14, fontWeight: 700,
             cursor: 'pointer',
           }}
@@ -241,7 +241,7 @@ export function StepFiscal({
         </button>
         <button type="button" onClick={onContinue} style={BTN_PRIMARY}>
           Continuar
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#000000" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
             <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
           </svg>
         </button>

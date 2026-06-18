@@ -1,6 +1,6 @@
 export type PortalStep = 'ticket' | 'fiscal' | 'confirm' | 'success'
 
-export type LookupError = '' | 'notfound' | 'mismatch' | 'invoiced'
+export type LookupError = '' | 'notfound' | 'invoiced'
 
 export type RfcValidationState = 'idle' | 'checking' | 'registered' | 'format' | 'invalid'
 
@@ -44,7 +44,6 @@ export interface GeneratedInvoice {
 export interface PortalState {
   step: PortalStep
   folio: string
-  total: string
   busy: boolean
   lookupError: LookupError
   ticket: Ticket | null

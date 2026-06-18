@@ -10,7 +10,7 @@ import { StepFiscal } from './_components/steps/StepFiscal'
 import { StepConfirm } from './_components/steps/StepConfirm'
 import { StepSuccess } from './_components/steps/StepSuccess'
 
-const STORE_NAME = 'Grupo1522'
+const STORE_NAME = 'Grupo Quince 22'
 const TAGLINE = 'Facturación electrónica'
 
 export default function PortalPage() {
@@ -38,15 +38,14 @@ export default function PortalPage() {
           {state.step === 'ticket' && (
             <StepTicket
               folio={state.folio}
-              total={state.total}
               busy={state.busy}
               lookupError={state.lookupError}
               ticket={state.ticket}
               showFolioHelp={state.showFolioHelp}
               onFolioChange={portal.setFolio}
-              onTotalChange={portal.setTotal}
               onToggleFolioHelp={portal.toggleFolioHelp}
               onLookup={portal.lookup}
+              onProceed={portal.proceed}
               onDismissError={portal.dismissError}
               onFillDemo={portal.fillDemo}
               onScanQR={() => toast.show('Cámara no disponible en el demo — captura el folio manualmente')}
