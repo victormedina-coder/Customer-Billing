@@ -1,6 +1,6 @@
 export type PortalStep = 'ticket' | 'fiscal' | 'confirm' | 'success'
 
-export type LookupError = '' | 'notfound' | 'invoiced'
+export type LookupError = '' | 'notfound' | 'invoiced' | 'deadline'
 
 export type RfcValidationState = 'idle' | 'checking' | 'registered' | 'format' | 'invalid'
 

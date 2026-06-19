@@ -1,6 +1,6 @@
 'use client'
 import { useState, useRef, useCallback, useEffect } from 'react'
-import type { PortalState, PortalStep, FiscalData } from '../_lib/types'
+import type { PortalState, PortalStep, FiscalData, Ticket } from '../_lib/types'
 import { validateFiscal } from '../_lib/validators'
 import { DEMO_TICKETS } from '../_lib/constants'
 
@@ -26,6 +26,47 @@ function randomUUID(): string {
   return `${randomHex(8)}-${randomHex(4)}-${randomHex(4)}-${randomHex(4)}-${randomHex(12)}`
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Lookup: real vs mock
+//
+// En producción (NEXT_PUBLIC_LOOKUP_MOCK !== 'true') se llama a la API real.
+// Con NEXT_PUBLIC_LOOKUP_MOCK=true se usa DEMO_TICKETS para navegar sin
+// credenciales de Shopify configuradas.
+// ─────────────────────────────────────────────────────────────────────────────
+const USE_MOCK = process.env.NEXT_PUBLIC_LOOKUP_MOCK === 'true'
+
+async function fetchTicket(folio: string): Promise<Ticket | null> {
+  if (USE_MOCK) {
+    // Fallback de mock: simula latencia y consulta DEMO_TICKETS
+    await new Promise<void>((resolve) => setTimeout(resolve, 600))
+    return DEMO_TICKETS[folio] ?? null
+  }
+
+  // Camino real: POST /api/invoice/lookup
+  const res = await fetch('/api/invoice/lookup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folio }),
+  })
+
+  if (res.status === 404) return null
+
+  if (!res.ok) {
+    let errorCode = 'SHOPIFY_ERROR'
+    try {
+      const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      errorCode = body?.error?.code ?? errorCode
+    } catch {
+      // ignore
+    }
+    // Propagar el código de error para que el caller lo maneje
+    throw new Error(errorCode)
+  }
+
+  const data = (await res.json()) as { ticket: Ticket }
+  return data.ticket
+}
+
 export function usePortal(flash: (msg: string) => void) {
   const [state, setState] = useState<PortalState>(INITIAL_STATE)
   const lookupTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -43,7 +84,7 @@ export function usePortal(flash: (msg: string) => void) {
   const set = useCallback((patch: Partial<PortalState>) =>
     setState(prev => ({ ...prev, ...patch })), [])
 
-  // ── Step 1: Ticket ──────────────────────────────────────
+  // ── Step 1: Ticket ──────────────────────────────────────────────────────
   // runLookup es la búsqueda EXPLÍCITA (Enter o botón "Buscar"): no se busca al
   // escribir para evitar matches transitorios con folios de longitud variable
   // (p.ej. A1522-1000 vs A1522-10000) y no golpear la API en cada tecla.
@@ -61,14 +102,34 @@ export function usePortal(flash: (msg: string) => void) {
 
     set({ busy: true, lookupError: '', folio: normalizedFolio, ticket: null })
 
+    // Pequeño debounce para evitar doble-click / submit accidental
     lookupTimer.current = setTimeout(() => {
-      // TODO: en producción, llamar a POST /api/invoice/lookup
-      const t = DEMO_TICKETS[normalizedFolio]
-      if (!t) { set({ busy: false, ticket: null, lookupError: 'notfound' }); return }
-      if (t.status === 'invoiced') { set({ busy: false, ticket: t, lookupError: 'invoiced' }); return }
-      // Ticket válido: se carga y se queda en el paso Ticket para ver el monto.
-      set({ busy: false, ticket: t, lookupError: '' })
-    }, 600)
+      fetchTicket(normalizedFolio)
+        .then((ticket) => {
+          if (!ticket) {
+            set({ busy: false, ticket: null, lookupError: 'notfound' })
+            return
+          }
+          if (ticket.status === 'invoiced') {
+            set({ busy: false, ticket, lookupError: 'invoiced' })
+            return
+          }
+          // Ticket válido: se carga y se queda en el paso Ticket para ver el monto.
+          set({ busy: false, ticket, lookupError: '' })
+        })
+        .catch((err: unknown) => {
+          if (err instanceof Error && err.message === 'DEADLINE_EXCEEDED') {
+            // Pedido encontrado pero fuera de la ventana de facturación del mes en curso.
+            // No se muestra flash genérico: el banner 'deadline' comunica el motivo.
+            set({ busy: false, ticket: null, lookupError: 'deadline' })
+            return
+          }
+          // Error de Shopify u otro error de servidor (todas las tiendas fallaron,
+          // sin marcas configuradas, etc.)
+          flash('Error al consultar el pedido. Intenta de nuevo.')
+          set({ busy: false, ticket: null, lookupError: '' })
+        })
+    }, 200)
   }, [set, flash])
 
   // setFolio solo actualiza el campo. Editar el folio invalida el ticket cargado
@@ -101,7 +162,7 @@ export function usePortal(flash: (msg: string) => void) {
     runLookup(folio)
   }, [set, runLookup])
 
-  // ── Step 2: Fiscal ──────────────────────────────────────
+  // ── Step 2: Fiscal ──────────────────────────────────────────────────────
   const setFiscal = useCallback(<K extends keyof FiscalData>(key: K, value: FiscalData[K]) =>
     setState(prev => ({ ...prev, fiscal: { ...prev.fiscal, [key]: value } })), [])
 
@@ -119,7 +180,7 @@ export function usePortal(flash: (msg: string) => void) {
     set({ step: 'confirm', touched: false })
   }, [state.ticket, state.fiscal, set, flash])
 
-  // ── Step 3: Confirm ──────────────────────────────────────
+  // ── Step 3: Confirm ──────────────────────────────────────────────────────
   const generate = useCallback(() => {
     set({ busy: true })
     if (generateTimer.current) clearTimeout(generateTimer.current)
@@ -138,12 +199,12 @@ export function usePortal(flash: (msg: string) => void) {
     }, 1100)
   }, [set])
 
-  // ── Navigation ───────────────────────────────────────────
+  // ── Navigation ───────────────────────────────────────────────────────────
   const goTo = useCallback((step: PortalStep) => set({ step }), [set])
 
   const reset = useCallback(() => setState(INITIAL_STATE), [])
 
-  // ── Download actions (stubs) ──────────────────────────────
+  // ── Download actions (stubs) ──────────────────────────────────────────────
   const downloadPdf = useCallback(() => flash('Descargando PDF de la factura…'), [flash])
   const downloadXml = useCallback(() => flash('Descargando XML (CFDI) …'), [flash])
   const resendEmail = useCallback(() => flash('Factura reenviada a tu correo'), [flash])

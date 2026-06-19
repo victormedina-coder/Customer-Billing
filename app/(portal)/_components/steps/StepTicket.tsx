@@ -159,7 +159,7 @@ export function StepTicket({
             value={folio}
             onChange={(e) => onFolioChange(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onLookup() } }}
-            placeholder="Ej. A1522-0847"
+            placeholder="Ej. 15-5333"
             autoComplete="off"
             badge={
               <button
@@ -188,37 +188,77 @@ export function StepTicket({
               <div style={{ fontSize: 12, fontWeight: 800, color: '#1a1a1a', marginBottom: 8 }}>
                 Ejemplo de ticket
               </div>
-              {/* Simulated ticket */}
+              {/* Simulated ticket — replica la estructura de un ticket real (tienda) */}
               <div style={{
                 background: '#fff', border: '1px solid var(--border-default)',
                 borderRadius: 10, padding: '12px 14px',
-                fontFamily: 'monospace', fontSize: 11,
+                fontFamily: 'monospace', fontSize: 11, color: '#1a1a1a',
               }}>
+                {/* Encabezado de tienda */}
                 <div style={{ textAlign: 'center', marginBottom: 8 }}>
-                  <div style={{ fontWeight: 900, fontSize: 12 }}>GRUPO 1522</div>
-                  <div style={{ color: '#6b7280', fontSize: 10 }}>Plaza Central · Sucursal 01</div>
+                  <div style={{ fontWeight: 900, fontSize: 13, letterSpacing: '0.18em' }}>ARIAT</div>
+                  <div style={{ color: '#6b7280', fontSize: 9.5, lineHeight: 1.45 }}>
+                    Ariat Ecuestre Nogales<br />Zapopan, Jalisco · México
+                  </div>
                 </div>
-                <div style={{ borderTop: '1px dashed var(--border-default)', margin: '8px 0' }} />
+
+                {/* Caja TOTAL */}
                 <div style={{
-                  display: 'flex', justifyContent: 'space-between',
-                  padding: '4px 0', color: '#000000', fontWeight: 900, fontSize: 12,
+                  border: '1.5px solid var(--border-default)', borderRadius: 8,
+                  padding: '6px 8px', textAlign: 'center', margin: '8px 0',
                 }}>
-                  <span>FOLIO:</span>
-                  <span style={{
-                    background: 'var(--brand-primary)', border: '2px solid var(--brand-primary)',
-                    color: '#000000', borderRadius: 4, padding: '1px 6px',
-                  }}>A1522-0847</span>
+                  <div style={{ fontSize: 9, color: '#6b7280', letterSpacing: '0.12em' }}>TOTAL</div>
+                  <div style={{ fontWeight: 900, fontSize: 14 }}>1,898.00 $</div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: 10, color: '#6b7280' }}>
-                  <span>Fecha:</span><span>14/06/2026 18:42</span>
+
+                {/* Artículos */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#6b7280', fontSize: 9.5, marginBottom: 3 }}>
+                  <span>Artículos</span><span>Precio</span>
                 </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0' }}>
+                  <span>Playera Ariat Snake M</span><span>899.00 $</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0' }}>
+                  <span>Gorra Ariat Arena</span><span>999.00 $</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0' }}>
+                  <span>Bolsa de pellón</span><span>0.00 $</span>
+                </div>
+
                 <div style={{ borderTop: '1px dashed var(--border-default)', margin: '8px 0' }} />
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 900, fontSize: 12 }}>
-                  <span>TOTAL:</span><span>$2,499.00</span>
+
+                {/* Totales */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0', fontSize: 10, color: '#6b7280' }}>
+                  <span>Subtotal</span><span>1,898.00 $</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0', fontSize: 10, color: '#6b7280' }}>
+                  <span>IVA (16%)</span><span>261.79 $</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0', fontWeight: 900 }}>
+                  <span>Total</span><span>1,898.00 $</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0', fontSize: 10, color: '#6b7280' }}>
+                  <span>Tarjeta</span><span>1,898.00 $</span>
+                </div>
+
+                <div style={{ borderTop: '1px dashed var(--border-default)', margin: '8px 0' }} />
+
+                {/* Fecha + Recibo (= FOLIO) */}
+                <div style={{ textAlign: 'center', color: '#6b7280', fontSize: 9.5, marginBottom: 6 }}>
+                  17 jun 2026, 16:57
+                </div>
+                <div style={{
+                  background: 'var(--brand-primary)', borderRadius: 6,
+                  padding: '5px 8px', textAlign: 'center',
+                }}>
+                  <span style={{ fontWeight: 900, fontSize: 12, color: '#000000' }}>Recibo #15-5333</span>
+                </div>
+                <div style={{ textAlign: 'center', fontSize: 9, fontWeight: 800, color: '#000000', marginTop: 4, letterSpacing: '0.04em' }}>
+                  ↑ ESTE ES TU FOLIO
                 </div>
               </div>
               <p style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, marginTop: 8 }}>
-                El folio aparece en la parte superior de tu ticket impreso.
+                Tu folio es el número de <strong>Recibo</strong> (ej. <strong>15-5333</strong>) que aparece al final de tu ticket.
               </p>
             </div>
           )}
@@ -327,6 +367,30 @@ export function StepTicket({
         </div>
       )}
 
+      {lookupError === 'deadline' && (
+        <div style={{ marginBottom: 14 }}>
+          <AlertBanner
+            variant="warning"
+            icon={
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#b45309" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+            }
+            title="Periodo de facturación vencido"
+            description="Este ticket ya no puede facturarse en línea: solo se puede facturar dentro del mes de la compra."
+            actions={
+              <button type="button" onClick={onDismissError} style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                fontSize: 12, fontWeight: 800, color: '#b45309', padding: 0,
+                textDecoration: 'underline',
+              }}>
+                Usar otro ticket
+              </button>
+            }
+          />
+        </div>
+      )}
+
       {/* CTAs separados: Continuar (solo con ticket válido) + Buscar ticket (siempre) */}
       {hasOkTicket && (
         <button
@@ -380,7 +444,7 @@ export function StepTicket({
       </div>
 
       {/* Demo helper */}
-      <div style={{
+      {/* <div style={{
         background: '#f0f9ff', border: '1px solid #bae6fd',
         borderRadius: 13, padding: '14px 16px',
       }}>
@@ -390,10 +454,10 @@ export function StepTicket({
         <div style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', marginBottom: 10 }}>
           Haz clic en cualquier escenario para ver el flujo completo.
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+        {/* <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
 
           {/* Escenario OK */}
-          <button
+          {/* <button
             type="button"
             onClick={() => onFillDemo('A1522-0847')}
             style={{
@@ -408,9 +472,9 @@ export function StepTicket({
             <span style={{ fontFamily: 'monospace', fontSize: 11 }}>A1522-0847</span>
             <span style={{ color: '#9ca3af', fontWeight: 400 }}>·</span>
             <span>Ticket OK — avanza al formulario fiscal</span>
-          </button>
+          </button> */}
 
-          {/* Escenario Ya facturado */}
+          {/* Escenario Ya facturado
           <button
             type="button"
             onClick={() => onFillDemo('A1522-1203')}
@@ -426,10 +490,10 @@ export function StepTicket({
             <span style={{ fontFamily: 'monospace', fontSize: 11 }}>A1522-1203</span>
             <span style={{ color: '#9ca3af', fontWeight: 400 }}>·</span>
             <span>Ya facturado — muestra alerta + descarga</span>
-          </button>
+          </button> */}
 
           {/* Escenario No encontrado */}
-          <button
+          {/* <button
             type="button"
             onClick={() => onFillDemo('A1522-9999')}
             style={{
@@ -444,10 +508,10 @@ export function StepTicket({
             <span style={{ fontFamily: 'monospace', fontSize: 11 }}>A1522-9999</span>
             <span style={{ color: '#9ca3af', fontWeight: 400 }}>·</span>
             <span>No encontrado — muestra error de folio</span>
-          </button>
+          </button> 
 
         </div>
-      </div>
+      </div> */}
     </div>
   )
 }
