@@ -17,10 +17,6 @@
  * Nota: BRAND_NOT_IDENTIFIED fue eliminado. La búsqueda usa fan-out paralelo
  * sobre todas las marcas configuradas; no se necesita identificar la marca
  * por el prefijo del folio.
- *
- * TODO: validación Zod completa del body (CRÍTICO-2 diferido).
- *       Agregar z.object({ folio: z.string().min(1) }).parse(body)
- *       cuando se defina el schema de validación global de la API.
  */
 
 export const runtime = 'nodejs'
@@ -29,6 +25,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getOrderSource } from '@/lib/order-source'
 import { normalizedOrderToTicket } from '@/lib/shopify/mapper'
 import { isWithinInvoiceWindow } from '@/lib/invoice-window'
+import { LookupSchema } from '@/lib/api/schemas'
 
 /** Forma canónica de error de la API */
 function errorResponse(
@@ -48,19 +45,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return errorResponse('INVALID_BODY', 'El cuerpo de la petición no es JSON válido.', 400)
   }
 
-  if (
-    typeof body !== 'object' ||
-    body === null ||
-    !('folio' in body) ||
-    typeof (body as Record<string, unknown>).folio !== 'string'
-  ) {
-    return errorResponse('INVALID_FOLIO', 'El campo "folio" es requerido y debe ser texto.', 400)
+  // ── 2. Validación Zod ─────────────────────────────────────────────────────
+  const result = LookupSchema.safeParse(body)
+  if (!result.success) {
+    const msg = result.error.issues.map(i => i.message).join('; ')
+    return errorResponse('INVALID_FOLIO', msg, 400)
   }
-
-  const folio = ((body as Record<string, unknown>).folio as string).trim()
-
-  // ── 2. Validación básica ──────────────────────────────────────────────────
-  // TODO: validación Zod completa diferida (CRÍTICO-2).
+  const folio = result.data.folio.trim()
   if (!folio) {
     return errorResponse('INVALID_FOLIO', 'El folio no puede estar vacío.', 400)
   }

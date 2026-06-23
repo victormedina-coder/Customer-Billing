@@ -1,6 +1,6 @@
 'use client'
 import { useState, useRef, useCallback, useEffect } from 'react'
-import type { PortalState, PortalStep, FiscalData, Ticket } from '../_lib/types'
+import type { PortalState, PortalStep, FiscalData, Ticket, GeneratedInvoice } from '../_lib/types'
 import { validateFiscal } from '../_lib/validators'
 import { DEMO_TICKETS } from '../_lib/constants'
 
@@ -17,13 +17,6 @@ const INITIAL_STATE: PortalState = {
   rfcRazon: '',
   showFolioHelp: false,
   factura: null,
-}
-
-function randomHex(n: number): string {
-  return Array.from({ length: n }, () => '0123456789ABCDEF'[Math.floor(Math.random() * 16)]).join('')
-}
-function randomUUID(): string {
-  return `${randomHex(8)}-${randomHex(4)}-${randomHex(4)}-${randomHex(4)}-${randomHex(12)}`
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -70,7 +63,6 @@ async function fetchTicket(folio: string): Promise<Ticket | null> {
 export function usePortal(flash: (msg: string) => void) {
   const [state, setState] = useState<PortalState>(INITIAL_STATE)
   const lookupTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const generateTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Ref espejo del state para que los callbacks lean siempre el valor más reciente
   // sin quedar atrapados en un closure obsoleto.
   const stateRef = useRef<PortalState>(INITIAL_STATE)
@@ -78,7 +70,6 @@ export function usePortal(flash: (msg: string) => void) {
 
   useEffect(() => () => {
     if (lookupTimer.current) clearTimeout(lookupTimer.current)
-    if (generateTimer.current) clearTimeout(generateTimer.current)
   }, [])
 
   const set = useCallback((patch: Partial<PortalState>) =>
@@ -166,55 +157,134 @@ export function usePortal(flash: (msg: string) => void) {
   const setFiscal = useCallback(<K extends keyof FiscalData>(key: K, value: FiscalData[K]) =>
     setState(prev => ({ ...prev, fiscal: { ...prev.fiscal, [key]: value } })), [])
 
-  const setRfcRazon = useCallback((razon: string) => set({ rfcRazon: razon }), [set])
-
-  const goConfirm = useCallback((rfcValidState: string) => {
-    if (!state.ticket) { flash('Verifica tu ticket primero'); return }
-    const errors = validateFiscal(state.fiscal)
+  /**
+   * goConfirm: valida solo los campos locales (formato).
+   * La validación de coherencia con el SAT (validarReceptor) ocurre en page.tsx
+   * antes de llamar a esta función.
+   */
+  const goConfirm = useCallback(() => {
+    if (!stateRef.current.ticket) { flash('Verifica tu ticket primero'); return }
+    const errors = validateFiscal(stateRef.current.fiscal)
     if (Object.keys(errors).length) {
       set({ touched: true })
       flash('Revisa los campos marcados')
       return
     }
-    void rfcValidState
     set({ step: 'confirm', touched: false })
-  }, [state.ticket, state.fiscal, set, flash])
+  }, [set, flash])
 
   // ── Step 3: Confirm ──────────────────────────────────────────────────────
-  const generate = useCallback(() => {
+  const generate = useCallback(async () => {
+    const current = stateRef.current
+    if (!current.ticket) { flash('Verifica tu ticket primero'); return }
     set({ busy: true })
-    if (generateTimer.current) clearTimeout(generateTimer.current)
-    generateTimer.current = setTimeout(() => {
-      // TODO: en producción, llamar a POST /api/invoice/emit
-      const now = new Date()
-      const p = (x: number) => String(x).padStart(2, '0')
-      const fecha = `${p(now.getDate())}/${p(now.getMonth() + 1)}/${now.getFullYear()} ${p(now.getHours())}:${p(now.getMinutes())}`
-      const folioNum = Math.floor(100000 + Math.random() * 899999)
-      const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/'
-      const sello = Array.from({ length: 48 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
-      set({
-        busy: false, step: 'success',
-        factura: { uuid: randomUUID(), serieFolio: `GR-${folioNum}`, fecha, sello },
+
+    try {
+      const res = await fetch('/api/invoice/emit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folio: current.ticket.folio, fiscal: current.fiscal }),
       })
-    }, 1100)
-  }, [set])
+
+      if (!res.ok) {
+        let code = 'EMIT_ERROR'
+        try {
+          const b = (await res.json()) as { error?: { code?: string } }
+          code = b?.error?.code ?? code
+        } catch { /* ignore */ }
+
+        if (code === 'ALREADY_INVOICED') {
+          set({ busy: false, step: 'ticket', ticket: null, folio: '', lookupError: 'invoiced' })
+        } else if (code === 'DEADLINE_EXCEEDED') {
+          flash('El periodo de facturación de este ticket ya venció')
+          set({ busy: false })
+        } else if (code === 'FISCAL_INVALID') {
+          flash('Datos fiscales inválidos — regresa y verifica los campos')
+          set({ busy: false })
+        } else {
+          flash('Error al generar la factura. Intenta de nuevo más tarde.')
+          set({ busy: false })
+        }
+        return
+      }
+
+      const data = (await res.json()) as { factura: GeneratedInvoice }
+      set({ busy: false, step: 'success', factura: data.factura })
+    } catch {
+      flash('Error de conexión. Verifica tu internet e intenta de nuevo.')
+      set({ busy: false })
+    }
+  }, [set, flash])
 
   // ── Navigation ───────────────────────────────────────────────────────────
   const goTo = useCallback((step: PortalStep) => set({ step }), [set])
 
   const reset = useCallback(() => setState(INITIAL_STATE), [])
 
-  // ── Download actions (stubs) ──────────────────────────────────────────────
-  const downloadPdf = useCallback(() => flash('Descargando PDF de la factura…'), [flash])
-  const downloadXml = useCallback(() => flash('Descargando XML (CFDI) …'), [flash])
-  const resendEmail = useCallback(() => flash('Factura reenviada a tu correo'), [flash])
+  // ── Download helpers ─────────────────────────────────────────────────────
+  /**
+   * Dispara la descarga de un archivo desde la ruta same-origin usando un
+   * anchor programático. La ruta ya envía Content-Disposition: attachment,
+   * por lo que el navegador descarga sin navegar fuera de la página.
+   */
+  const triggerDownload = useCallback((facturamaId: string, format: 'pdf' | 'xml') => {
+    const url = `/api/invoice/download/${encodeURIComponent(facturamaId)}/${format}`
+    const a = document.createElement('a')
+    a.href = url
+    a.download = ''
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }, [])
+
+  const downloadPdf = useCallback(() => {
+    const facturamaId = stateRef.current.factura?.facturamaId
+    if (!facturamaId) { flash('No hay factura para descargar'); return }
+    flash('Descargando PDF…')
+    triggerDownload(facturamaId, 'pdf')
+  }, [flash, triggerDownload])
+
+  const downloadXml = useCallback(() => {
+    const facturamaId = stateRef.current.factura?.facturamaId
+    if (!facturamaId) { flash('No hay factura para descargar'); return }
+    flash('Descargando XML…')
+    triggerDownload(facturamaId, 'xml')
+  }, [flash, triggerDownload])
+
+  const resendEmail = useCallback(async () => {
+    const factura = stateRef.current.factura
+    const email   = stateRef.current.fiscal.email
+    if (!factura?.facturamaId) { flash('No hay factura para reenviar'); return }
+
+    flash('Enviando factura por correo…')
+    try {
+      const res = await fetch('/api/invoice/resend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          facturamaId: factura.facturamaId,
+          email,
+          serieFolio: factura.serieFolio,
+        }),
+      })
+      if (res.ok) {
+        flash('Factura enviada a ' + email)
+      } else {
+        flash('No se pudo enviar el correo. Intenta de nuevo.')
+      }
+    } catch {
+      flash('No se pudo enviar el correo. Intenta de nuevo.')
+    }
+  }, [flash])
+
+  const setTouched = useCallback((touched: boolean) => set({ touched }), [set])
 
   return {
     state,
     // Step 1
     setFolio, toggleFolioHelp, lookup, proceed, dismissError, fillDemo,
     // Step 2
-    setFiscal, setRfcRazon, goConfirm,
+    setFiscal, setTouched, goConfirm,
     // Step 3
     generate,
     // Navigation

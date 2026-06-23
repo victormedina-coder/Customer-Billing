@@ -12,7 +12,8 @@ interface StepFiscalProps {
   fiscal: FiscalData
   touched: boolean
   rfcValidation: RfcValidationState
-  rfcRazon: string
+  satErrors?: Partial<Record<'rfc' | 'razon' | 'regimen' | 'cp', string>>
+  validating?: boolean
   onBack: () => void
   onFiscalChange: <K extends keyof FiscalData>(key: K, value: FiscalData[K]) => void
   onRfcBlur: (rfc: string) => void
@@ -68,10 +69,11 @@ function RfcBadge({ state }: { state: RfcValidationState }) {
 }
 
 export function StepFiscal({
-  ticket, fiscal, touched, rfcValidation, rfcRazon,
+  ticket, fiscal, touched, rfcValidation, satErrors = {}, validating = false,
   onBack, onFiscalChange, onRfcBlur, onContinue,
 }: StepFiscalProps) {
-  const errors = touched ? validateFiscal(fiscal) : {}
+  // Fusión: errores locales de formato primero, luego errores SAT (coherencia con el servidor).
+  const errors = { ...(touched ? validateFiscal(fiscal) : {}), ...satErrors }
 
   return (
     <div style={{ width: '100%', maxWidth: 520, animation: 'fadeIn 0.3s ease both' }}>
@@ -113,16 +115,6 @@ export function StepFiscal({
             maxLength={13}
             error={errors.rfc}
             badge={<RfcBadge state={rfcValidation} />}
-            hint={
-              rfcValidation === 'registered' && rfcRazon ? (
-                <div style={{ fontSize: 11.5, color: '#000000', fontWeight: 700, marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="20 6 9 17 4 12"/>
-                  </svg>
-                  {rfcRazon}
-                </div>
-              ) : null
-            }
           />
 
           {/* Razón social */}
@@ -239,11 +231,22 @@ export function StepFiscal({
         >
           Atrás
         </button>
-        <button type="button" onClick={onContinue} style={BTN_PRIMARY}>
-          Continuar
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#000000" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
-          </svg>
+        <button
+          type="button"
+          onClick={onContinue}
+          disabled={validating}
+          style={{
+            ...BTN_PRIMARY,
+            opacity: validating ? 0.6 : 1,
+            cursor: validating ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {validating ? 'Verificando…' : 'Continuar'}
+          {!validating && (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#000000" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+            </svg>
+          )}
         </button>
       </div>
     </div>
