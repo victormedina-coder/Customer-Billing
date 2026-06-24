@@ -1,6 +1,6 @@
 'use client'
 import type { Ticket, FiscalData } from '../../_lib/types'
-import { formatMXN, calcSubtotal, calcIva } from '../../_lib/formatters'
+import { formatMXN, calcInvoiceBreakdown } from '../../_lib/formatters'
 import { METODO_PAGO_LABEL, REGIMENES, USOS_CFDI } from '../../_lib/constants'
 import { BackButton } from '../ui/BackButton'
 import { LoadingSpinner } from '../ui/LoadingSpinner'
@@ -22,7 +22,7 @@ const CARD: React.CSSProperties = {
 }
 
 const LABEL: React.CSSProperties = {
-  fontSize: 11, fontWeight: 700, color: '#9ca3af',
+  fontSize: 11, fontWeight: 700, color: '#6b7280',
   textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3,
 }
 
@@ -42,8 +42,7 @@ function DataRow({ label, value }: { label: string; value: string }) {
 export function StepConfirm({ ticket, fiscal, busy, onBack, onGenerate }: StepConfirmProps) {
   const regimenLabel = REGIMENES.find(r => r.code === fiscal.regimen)?.label ?? fiscal.regimen
   const usoLabel = USOS_CFDI.find(u => u.code === fiscal.uso)?.label ?? fiscal.uso
-  const subtotal = calcSubtotal(ticket.total)
-  const iva = calcIva(ticket.total)
+  const b = calcInvoiceBreakdown(ticket)
 
   return (
     <div style={{ width: '100%', maxWidth: 520, animation: 'fadeIn 0.3s ease both' }}>
@@ -71,6 +70,7 @@ export function StepConfirm({ ticket, fiscal, busy, onBack, onGenerate }: StepCo
           <button
             type="button"
             onClick={onBack}
+            className="btn-press"
             style={{
               background: 'none', border: 'none', cursor: 'pointer',
               fontSize: 12, fontWeight: 800, color: '#000000',
@@ -114,14 +114,14 @@ export function StepConfirm({ ticket, fiscal, busy, onBack, onGenerate }: StepCo
 
         {/* Items */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
-          {ticket.items.map((item) => (
-            <div key={item.sku} style={{
+          {ticket.items.map((item, i) => (
+            <div key={`${item.sku}-${i}`} style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               background: '#f9fafb', borderRadius: 10, padding: '10px 13px',
             }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a', marginBottom: 2 }}>{item.desc}</div>
-                <div style={{ fontSize: 11, color: '#9ca3af', fontWeight: 600 }}>
+                <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>
                   SKU: {item.sku} · Cant: {item.qty}
                 </div>
               </div>
@@ -135,11 +135,11 @@ export function StepConfirm({ ticket, fiscal, busy, onBack, onGenerate }: StepCo
         {/* Payments */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
           <div style={{ background: '#f5f5f5', borderRadius: 10, padding: '10px 12px' }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Forma de pago</div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Forma de pago</div>
             <div style={{ fontSize: 12, fontWeight: 700, color: '#1a1a1a' }}>{ticket.formaPago}</div>
           </div>
           <div style={{ background: '#f5f5f5', borderRadius: 10, padding: '10px 12px' }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Método de pago</div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Método de pago</div>
             <div style={{ fontSize: 12, fontWeight: 700, color: '#1a1a1a' }}>{METODO_PAGO_LABEL}</div>
           </div>
         </div>
@@ -148,15 +148,21 @@ export function StepConfirm({ ticket, fiscal, busy, onBack, onGenerate }: StepCo
         <div style={{ borderTop: '1px solid var(--border-default)', paddingTop: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: '#6b7280' }}>Subtotal (sin IVA)</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a' }}>{formatMXN(subtotal)}</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a' }}>{formatMXN(b.subtotalSinIVA)}</span>
           </div>
+          {b.descuento > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#6b7280' }}>Descuento</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a' }}>−{formatMXN(b.descuento)}</span>
+            </div>
+          )}
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
             <span style={{ fontSize: 13, fontWeight: 600, color: '#6b7280' }}>IVA 16%</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a' }}>{formatMXN(iva)}</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#1a1a1a' }}>{formatMXN(b.iva)}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', background: 'var(--brand-primary)', borderRadius: 11, padding: '11px 14px' }}>
             <span style={{ fontSize: 15, fontWeight: 800, color: '#000000' }}>Total</span>
-            <span style={{ fontSize: 16, fontWeight: 900, color: '#000000' }}>{formatMXN(ticket.total)}</span>
+            <span style={{ fontSize: 16, fontWeight: 900, color: '#000000' }}>{formatMXN(b.total)}</span>
           </div>
         </div>
       </div>
@@ -166,6 +172,7 @@ export function StepConfirm({ ticket, fiscal, busy, onBack, onGenerate }: StepCo
         <button
           type="button"
           onClick={onBack}
+          className="btn-press"
           style={{
             flex: 1, height: 52,
             background: '#fff', color: '#6b7280',
@@ -179,6 +186,7 @@ export function StepConfirm({ ticket, fiscal, busy, onBack, onGenerate }: StepCo
           type="button"
           onClick={onGenerate}
           disabled={busy}
+          className="btn-press"
           style={{
             flex: 2, height: 52,
             background: 'var(--brand-primary)', color: '#000000',

@@ -51,6 +51,7 @@ function mockCfdi(folio: string) {
     serieFolio: `GR-${folioNum}`,
     fecha,
     sello,
+    emisor: { rfc: 'XAXX010101000', nombre: 'EMISOR DEMO (MOCK)', regimen: '601' },
   }
 }
 
@@ -119,6 +120,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const invoiceService = getInvoiceService()
     const emitResult = await invoiceService.emitir({ order, fiscal })
 
+    // Enviar el CFDI al correo del cliente (best-effort). El CFDI ya quedó
+    // timbrado, por lo que un fallo de correo NO debe tumbar la respuesta:
+    // el cliente siempre puede reenviar desde la pantalla de éxito o descargar.
+    try {
+      await invoiceService.enviarCorreo(emitResult.facturamaId, fiscal.email, {
+        serieFolio: emitResult.serieFolio,
+      })
+    } catch (mailErr: unknown) {
+      const mailMsg = mailErr instanceof Error ? mailErr.message : String(mailErr)
+      console.error('[emit] Correo automático falló (CFDI ya timbrado):', {
+        facturamaId: emitResult.facturamaId, email: fiscal.email, error: mailMsg,
+      })
+    }
+
     // La respuesta al cliente incluye los campos de GeneratedInvoice
     // más facturamaId por si el front necesita hacer descargas.
     const factura = {
@@ -127,6 +142,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       serieFolio:  emitResult.serieFolio,
       fecha:       emitResult.fecha,
       sello:       emitResult.sello,
+      emisor:      emitResult.emisor,
     }
     return NextResponse.json({ factura }, { status: 200 })
   } catch (err: unknown) {

@@ -146,13 +146,6 @@ export function usePortal(flash: (msg: string) => void) {
   const dismissError = useCallback(() =>
     set({ lookupError: '', ticket: null, folio: '' }), [set])
 
-  // fillDemo rellena el folio Y dispara el lookup (sin avanzar): el usuario ve
-  // el resultado (monto / alerta) y luego decide continuar.
-  const fillDemo = useCallback((folio: string) => {
-    set({ folio, lookupError: '', ticket: null })
-    runLookup(folio)
-  }, [set, runLookup])
-
   // ── Step 2: Fiscal ──────────────────────────────────────────────────────
   const setFiscal = useCallback(<K extends keyof FiscalData>(key: K, value: FiscalData[K]) =>
     setState(prev => ({ ...prev, fiscal: { ...prev.fiscal, [key]: value } })), [])
@@ -223,32 +216,58 @@ export function usePortal(flash: (msg: string) => void) {
 
   // ── Download helpers ─────────────────────────────────────────────────────
   /**
-   * Dispara la descarga de un archivo desde la ruta same-origin usando un
-   * anchor programático. La ruta ya envía Content-Disposition: attachment,
-   * por lo que el navegador descarga sin navegar fuera de la página.
+   * Sanitiza una cadena para usarla como nombre de archivo:
+   * conserva [A-Za-z0-9-_], reemplaza todo lo demás por "_".
+   * Si el resultado está vacío devuelve "factura".
    */
-  const triggerDownload = useCallback((facturamaId: string, format: 'pdf' | 'xml') => {
+  const sanitizeFilename = (raw: string): string => {
+    const clean = raw.replace(/[^A-Za-z0-9\-_]/g, '_')
+    return clean.length > 0 ? clean : 'factura'
+  }
+
+  /**
+   * Descarga un archivo via fetch → Blob → object URL para que el navegador
+   * no lo marque como descarga sospechosa y el nombre de archivo sea legible.
+   */
+  const triggerDownload = useCallback(async (
+    facturamaId: string,
+    format: 'pdf' | 'xml',
+    filenameBase: string,
+  ): Promise<void> => {
     const url = `/api/invoice/download/${encodeURIComponent(facturamaId)}/${format}`
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const blob = await res.blob()
+    const objectUrl = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = url
-    a.download = ''
+    a.href = objectUrl
+    a.download = `Factura_${sanitizeFilename(filenameBase)}.${format}`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
   }, [])
 
-  const downloadPdf = useCallback(() => {
-    const facturamaId = stateRef.current.factura?.facturamaId
-    if (!facturamaId) { flash('No hay factura para descargar'); return }
+  const downloadPdf = useCallback(async () => {
+    const factura = stateRef.current.factura
+    if (!factura?.facturamaId) { flash('No hay factura para descargar'); return }
     flash('Descargando PDF…')
-    triggerDownload(facturamaId, 'pdf')
+    try {
+      await triggerDownload(factura.facturamaId, 'pdf', factura.serieFolio)
+    } catch {
+      flash('No se pudo descargar el archivo. Intenta de nuevo.')
+    }
   }, [flash, triggerDownload])
 
-  const downloadXml = useCallback(() => {
-    const facturamaId = stateRef.current.factura?.facturamaId
-    if (!facturamaId) { flash('No hay factura para descargar'); return }
+  const downloadXml = useCallback(async () => {
+    const factura = stateRef.current.factura
+    if (!factura?.facturamaId) { flash('No hay factura para descargar'); return }
     flash('Descargando XML…')
-    triggerDownload(facturamaId, 'xml')
+    try {
+      await triggerDownload(factura.facturamaId, 'xml', factura.serieFolio)
+    } catch {
+      flash('No se pudo descargar el archivo. Intenta de nuevo.')
+    }
   }, [flash, triggerDownload])
 
   const resendEmail = useCallback(async () => {
@@ -282,7 +301,7 @@ export function usePortal(flash: (msg: string) => void) {
   return {
     state,
     // Step 1
-    setFolio, toggleFolioHelp, lookup, proceed, dismissError, fillDemo,
+    setFolio, toggleFolioHelp, lookup, proceed, dismissError,
     // Step 2
     setFiscal, setTouched, goConfirm,
     // Step 3

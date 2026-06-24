@@ -20,6 +20,9 @@ export interface Ticket {
   status: 'ok' | 'invoiced'
   formaPago: string
   items: TicketItem[]
+  // Montos autoritativos de Shopify para el desglose fiscal B1
+  tax?: number      // IVA real (order.taxAmount)
+  discount?: number // Descuento a nivel pedido con IVA incluido (order.discountAmount)
   // Solo si status === 'invoiced'
   facturaFolio?: string
   fechaTimbrado?: string
@@ -40,6 +43,7 @@ export interface GeneratedInvoice {
   serieFolio: string
   fecha: string
   sello: string
+  emisor: { rfc: string; nombre: string; regimen: string }
 }
 
 export interface PortalState {

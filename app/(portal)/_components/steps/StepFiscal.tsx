@@ -40,7 +40,7 @@ const BTN_PRIMARY: React.CSSProperties = {
 
 function RfcBadge({ state }: { state: RfcValidationState }) {
   if (state === 'idle') return (
-    <span style={{ fontSize: 10, fontWeight: 700, color: '#9ca3af', background: '#f5f5f5', border: '1px solid var(--border-default)', borderRadius: 20, padding: '3px 9px' }}>
+    <span style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', background: '#f5f5f5', border: '1px solid var(--border-default)', borderRadius: 20, padding: '3px 9px' }}>
       Validación SAT
     </span>
   )
@@ -115,6 +115,9 @@ export function StepFiscal({
             maxLength={13}
             error={errors.rfc}
             badge={<RfcBadge state={rfcValidation} />}
+            autoCapitalize="characters"
+            spellCheck={false}
+            autoComplete="off"
           />
 
           {/* Razón social */}
@@ -122,8 +125,13 @@ export function StepFiscal({
             label="Nombre o razón social"
             value={fiscal.razon}
             onChange={(e) => onFiscalChange('razon', e.target.value)}
-            placeholder="Como aparece en tu constancia de situación fiscal"
+            placeholder="Nombre completo o razón social"
             error={errors.razon}
+            hint={
+              <div style={{ fontSize: 11.5, color: '#6b7280', fontWeight: 600, marginTop: 5 }}>
+                Como aparece en tu Constancia de Situación Fiscal.
+              </div>
+            }
           />
 
           {/* Régimen fiscal */}
@@ -137,7 +145,7 @@ export function StepFiscal({
           />
 
           {/* CP + Uso CFDI row */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr', gap: 12 }}>
+          <div className="fiscal-cp-uso-grid">
             <FormField
               label="Código postal"
               value={fiscal.cp}
@@ -164,12 +172,14 @@ export function StepFiscal({
             onChange={(e) => onFiscalChange('email', e.target.value)}
             placeholder="tu@correo.com"
             type="email"
+            inputMode="email"
+            autoComplete="email"
             error={errors.email}
           />
 
           {/* Separator */}
           <div style={{ borderTop: '1px solid var(--border-default)', paddingTop: 16 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div className="fiscal-payment-grid">
               {/* Forma de pago (from ticket) */}
               <div>
                 <div style={{ fontSize: 11, fontWeight: 800, color: '#6b7280', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: 7 }}>
@@ -213,6 +223,16 @@ export function StepFiscal({
               PUE es el único método disponible para compras en punto de venta. No es editable.
             </div>
           </div>
+
+          {/* Privacy signal */}
+          <div style={{ borderTop: '1px solid var(--border-default)', paddingTop: 12, marginTop: 4, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>
+            </svg>
+            <span style={{ fontSize: 11.5, color: '#6b7280', fontWeight: 700 }}>
+              Tus datos solo se usan para generar tu factura.
+            </span>
+          </div>
         </div>
       </div>
 
@@ -221,6 +241,7 @@ export function StepFiscal({
         <button
           type="button"
           onClick={onBack}
+          className="btn-press"
           style={{
             flex: 1, height: 52,
             background: '#fff', color: '#6b7280',
@@ -235,6 +256,7 @@ export function StepFiscal({
           type="button"
           onClick={onContinue}
           disabled={validating}
+          className="btn-press"
           style={{
             ...BTN_PRIMARY,
             opacity: validating ? 0.6 : 1,

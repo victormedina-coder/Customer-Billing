@@ -83,6 +83,8 @@ export function normalizedOrderToTicket(
     hora,
     sucursal: order.storeName,
     total: order.total,
+    tax: order.taxAmount,
+    discount: order.discountAmount,
     // status siempre 'ok' por ahora — alreadyInvoiced es Etapa 3
     status: 'ok',
     formaPago: mapFormaPago(order.paymentGatewayNames),

@@ -27,6 +27,12 @@ export interface FacturamaCfdiResponse {
   }
   /** Algunos endpoints ponen el UUID directamente en la raíz */
   Uuid?: string
+  /** Datos del emisor que Facturama llena desde el CSD de la cuenta */
+  Issuer?: {
+    Rfc?: string
+    Name?: string
+    FiscalRegime?: string
+  }
   [k: string]: unknown
 }
 

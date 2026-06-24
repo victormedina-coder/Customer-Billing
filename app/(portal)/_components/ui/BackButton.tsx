@@ -9,6 +9,7 @@ export function BackButton({ onClick, label = 'Regresar' }: BackButtonProps) {
   return (
     <button
       onClick={onClick}
+      className="btn-press"
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 6,
         background: 'none', border: 'none', cursor: 'pointer',

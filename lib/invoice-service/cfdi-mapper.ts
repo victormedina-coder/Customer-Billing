@@ -6,6 +6,7 @@
  *   - Los precios de POS en México normalmente INCLUYEN IVA; se usa unitPriceIncludesTax
  *   - Todos los valores numéricos van como STRING en el JSON de Facturama
  *   - El total del CFDI debe coincidir EXACTAMENTE con lo que pagó el cliente
+ *   - El descuento se aplica por concepto usando el campo Discount (CFDI 4.0 / Facturama)
  *
  * Mapeo de forma de pago (pendiente confirmación del contador):
  *   El mapa es orientativo; el contador debe validar las claves SAT definitivas.
@@ -34,6 +35,7 @@ export interface CfdiItem {
   UnitPrice: string
   Quantity: string
   Subtotal: string
+  Discount?: string
   TaxObject: string
   Taxes: CfdiTax[]
   Total: string
@@ -91,6 +93,17 @@ function mapPaymentForm(gateways?: string[]): string {
   return defaultForm
 }
 
+// ─── Estructura intermedia de cálculo por línea ───────────────────────────────
+
+interface LineCalc {
+  /** Importe lista con IVA (bruto) */
+  listGross: number
+  /** Descuento de línea con IVA (bruto) */
+  discGross: number
+  /** Importe neto con IVA (lo pagado por esa línea) */
+  netGross: number
+}
+
 // ─── Builder principal ────────────────────────────────────────────────────────
 
 export function buildCfdiPayload(
@@ -108,31 +121,74 @@ export function buildCfdiPayload(
 
   const paymentForm = mapPaymentForm(order.paymentGatewayNames)
 
-  // ── Construir items ────────────────────────────────────────────────────────
+  // ── Paso 1: calcular montos brutos (con IVA) por línea ────────────────────
+  const lineCalcs: LineCalc[] = order.lines.map((line) => {
+    const { quantity, unitPrice, discount } = line
+    const listGross = round2(quantity * unitPrice)
+    const discGross = round2(quantity * discount)
+    const netGross  = round2(listGross - discGross)
+    return { listGross, discGross, netGross }
+  })
+
+  // ── Paso 2: reconciliar contra el total de la orden ───────────────────────
+  // goodsTarget = lo que pagó el cliente por los productos (sin envío).
+  // Si hay descuentos a nivel pedido que no están distribuidos por línea,
+  // los escalamos proporcionalmente entre todas las líneas.
+  const goodsTarget = round2(order.total - order.shippingAmount)
+  const sumNet      = round2(lineCalcs.reduce((acc, lc) => acc + lc.netGross, 0))
+
+  if (order.shippingAmount > 0) {
+    console.warn(
+      `[cfdi-mapper] el pedido incluye envío ($${order.shippingAmount}). ` +
+      `El envío NO se factura como concepto; consulta con el contador. ` +
+      `goodsTarget=${goodsTarget}`
+    )
+  }
+
+  if (sumNet !== goodsTarget && sumNet > 0) {
+    const factor = goodsTarget / sumNet
+    for (const lc of lineCalcs) {
+      lc.netGross  = round2(lc.listGross * factor)
+      lc.discGross = round2(lc.listGross - lc.netGross)
+    }
+  }
+
+  // ── Paso 3: convertir a campos CFDI (sin IVA) y construir items ───────────
   const items: CfdiItem[] = order.lines.map((line, index) => {
-    const qty       = line.quantity
-    const unitPrice = line.unitPrice
+    const lc       = lineCalcs[index]
+    const qty      = line.quantity
+    const inclsTax = line.unitPriceIncludesTax
 
-    let base: number
+    let subtotal: number  // Importe lista SIN IVA
+    let discount: number  // Descuento SIN IVA
+    let base: number      // Base gravable (subtotal - descuento)
     let iva: number
-    let unitPriceSinIva: number
+    let total: number
 
-    if (line.unitPriceIncludesTax) {
-      // El precio de línea YA incluye IVA; hay que separar la base
-      const bruto     = round2(qty * unitPrice)
-      base            = round2(bruto / 1.16)
-      iva             = round2(bruto - base)
-      unitPriceSinIva = round2(base / qty)
+    if (inclsTax) {
+      // Derivar subtotal y base desde los brutos para evitar acumulación de
+      // errores de redondeo: si se divide listGross y discGross por separado y
+      // luego se restan, el resultado difiere en ±0.01 del valor correcto.
+      // La fuente de verdad es netGross (ya reconciliado contra order.total).
+      subtotal = round2(lc.listGross / 1.16)
+      base     = round2(lc.netGross  / 1.16)   // más preciso que subtotal - discount
+      discount = round2(subtotal - base)         // derivado, no dividido
+      iva      = round2(base * 0.16)
+      total    = round2(base + iva)
     } else {
-      // El precio de línea es sin IVA
-      base            = round2(qty * unitPrice)
-      iva             = round2(base * 0.16)
-      unitPriceSinIva = round2(unitPrice)
+      subtotal = lc.listGross
+      base     = lc.netGross
+      discount = round2(subtotal - base)
+      iva      = round2(base * 0.16)
+      total    = round2(base + iva)
     }
 
-    const total = round2(base + iva)
+    // UnitPrice con 6 decimales para que round2(UnitPrice * qty) === subtotal
+    const unitPriceSinIva = qty > 0
+      ? Math.round((subtotal / qty) * 1_000_000) / 1_000_000
+      : 0
 
-    return {
+    const item: CfdiItem = {
       ProductCode:          defaultProdCode,
       IdentificationNumber: line.productCode || String(index + 1).padStart(3, '0'),
       Description:          line.description,
@@ -140,7 +196,7 @@ export function buildCfdiPayload(
       UnitCode:             defaultUnitCode,
       UnitPrice:            String(unitPriceSinIva),
       Quantity:             String(qty),
-      Subtotal:             String(base),
+      Subtotal:             String(subtotal),
       TaxObject:            '02',
       Taxes: [
         {
@@ -154,43 +210,57 @@ export function buildCfdiPayload(
       ],
       Total: String(total),
     }
+
+    // Solo incluir Discount cuando es > 0 (Facturama lo omite si no aplica)
+    if (discount > 0) {
+      item.Discount = String(discount)
+    }
+
+    return item
   })
 
-  // ── Reconciliación de redondeo ────────────────────────────────────────────
-  // El total de la orden (lo que pagó el cliente) debe ser EXACTAMENTE igual
-  // a la suma de los totales del CFDI. Corregimos el último item si hay drift.
-  const sumaItems  = round2(items.reduce((acc, it) => acc + parseFloat(it.Total), 0))
-  const totalOrden = round2(order.total)
-  const tolerancia = round2(0.05 * items.length)   // 5 ctvs por item como máximo
+  // ── Paso 4: cent-fix final ────────────────────────────────────────────────
+  // Asegura que Σ Total de items === goodsTarget exactamente.
+  // El ajuste solo toca el último item para no alterar los demás.
+  const sumTotals  = round2(items.reduce((acc, it) => acc + parseFloat(it.Total), 0))
+  const centDiff   = round2(goodsTarget - sumTotals)
+  const MAX_CENTS  = round2(0.05 * items.length)   // 5 ctvs por item como tolerancia
 
-  const diferencia = round2(totalOrden - sumaItems)
-
-  if (diferencia !== 0) {
-    if (Math.abs(diferencia) <= tolerancia) {
-      // Ajuste menor: corregir el último item
+  if (centDiff !== 0) {
+    if (Math.abs(centDiff) > MAX_CENTS) {
       console.warn(
-        `[cfdi-mapper] ajuste de redondeo aplicado: suma items=${sumaItems}, ` +
-        `total orden=${totalOrden}, diferencia=${diferencia}. ` +
-        `Se corrige el último item.`
-      )
-      const last = items[items.length - 1]
-      const lastTotal    = round2(parseFloat(last.Total) + diferencia)
-      const lastBase     = round2(lastTotal / 1.16)
-      const lastIva      = round2(lastTotal - lastBase)
-
-      last.Total   = String(lastTotal)
-      last.Subtotal = String(lastBase)
-      last.Taxes[0].Base  = String(lastBase)
-      last.Taxes[0].Total = String(lastIva)
-    } else {
-      // Diferencia fuera de tolerancia: advertir pero NO ajustar (puede ser
-      // una discrepancia real que el contador debe revisar)
-      console.warn(
-        `[cfdi-mapper] diferencia de redondeo FUERA de tolerancia: ` +
-        `suma items=${sumaItems}, total orden=${totalOrden}, diferencia=${diferencia}. ` +
+        `[cfdi-mapper] diferencia de cent-fix FUERA de tolerancia: ` +
+        `sumTotals=${sumTotals}, goodsTarget=${goodsTarget}, diff=${centDiff}. ` +
         `Verifica los precios y descuentos del pedido.`
       )
+    } else {
+      console.warn(
+        `[cfdi-mapper] cent-fix aplicado al último item: ` +
+        `sumTotals=${sumTotals}, goodsTarget=${goodsTarget}, ajuste=${centDiff}`
+      )
     }
+
+    // Aplicar siempre (dentro o fuera de tolerancia) para que el CFDI cierre;
+    // el warn de arriba ya alerta si la magnitud es sospechosa.
+    const last          = items[items.length - 1]
+    const lastTotal     = round2(parseFloat(last.Total) + centDiff)
+    const hasDiscount   = last.Discount !== undefined
+    const lastSubtotal  = parseFloat(last.Subtotal)
+    const lastBase      = round2(lastTotal / 1.16)
+    const lastIva       = round2(lastTotal - lastBase)
+
+    // Distribuir el ajuste al campo correcto: si hay descuento, lo absorbemos ahí;
+    // si no hay descuento, ajustamos el subtotal.
+    if (hasDiscount) {
+      const newDiscount = round2(lastSubtotal - lastBase)
+      last.Discount            = String(Math.max(0, newDiscount))
+    } else {
+      last.Subtotal            = String(lastBase)
+    }
+
+    last.Total                 = String(lastTotal)
+    last.Taxes[0].Base         = String(lastBase)
+    last.Taxes[0].Total        = String(lastIva)
   }
 
   return {

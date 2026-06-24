@@ -117,8 +117,6 @@ export default function PortalPage() {
               onLookup={portal.lookup}
               onProceed={portal.proceed}
               onDismissError={portal.dismissError}
-              onFillDemo={portal.fillDemo}
-              onScanQR={() => toast.show('Cámara no disponible en el demo — captura el folio manualmente')}
               onDownloadPdf={portal.downloadPdf}
             />
           )}

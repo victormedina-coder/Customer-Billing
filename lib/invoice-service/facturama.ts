@@ -29,8 +29,13 @@ export class FacturamaInvoiceService implements InvoiceService {
     const fecha = resp.Date ?? ''
     const sello =
       resp.Complement?.TaxStamp?.SatSign ?? resp.Complement?.TaxStamp?.CfdiSign ?? ''
+    const emisor = {
+      rfc:     resp.Issuer?.Rfc ?? '',
+      nombre:  resp.Issuer?.Name ?? '',
+      regimen: resp.Issuer?.FiscalRegime ?? '',
+    }
 
-    return { facturamaId, uuid, serieFolio, fecha, sello }
+    return { facturamaId, uuid, serieFolio, fecha, sello, emisor }
   }
 
   /** Obtiene el detalle de un CFDI emitido por su ID de Facturama */

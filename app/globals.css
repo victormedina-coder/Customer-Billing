@@ -386,6 +386,94 @@
   }
 }
 
+/* ── Button microinteractions ──────────────────────────────── */
+/*
+  .btn-press: capa de interacción que se aplica encima de los estilos
+  inline existentes. Solo toca filter/transform; layout y color quedan
+  en el style={} del elemento para conservar la arquitectura actual.
+*/
+.btn-press {
+  transition: filter 0.15s ease, transform 0.08s ease;
+}
+/* Pressed feedback: aplica en TODOS los dispositivos (táctil + mouse) */
+.btn-press:active {
+  transform: scale(0.98);
+  filter: brightness(0.93);
+}
+/* Hover solo en dispositivos con puntero fino (mouse/trackpad).
+   En touch (tablet/celular) esta regla no aplica nunca, evitando
+   el "hover pegado" tras tap. */
+@media (hover: hover) and (pointer: fine) {
+  .btn-press:hover {
+    filter: brightness(0.96);
+  }
+}
+
+/* ── Keyboard focus ring ───────────────────────────────────── */
+/*
+  Usamos un anillo oscuro (#1a1a1a) porque el mint #41FFBF da poco
+  contraste sobre fondos blancos. El outline-offset separa el anillo
+  del borde nativo del elemento para que no se superpongan.
+  Se usa :focus-visible para que solo aparezca con teclado/asistivos,
+  no al hacer clic con mouse.
+*/
+.btn-press:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #1a1a1a;
+  outline-offset: 2px;
+}
+
+/* ── CFDI info grid (StepSuccess) ─────────────────────────── */
+/*
+  Por defecto 2 columnas (escritorio + tablet).
+  En pantallas muy angostas (≤380px) colapsa a 1 columna para evitar
+  que los 6 campos del CFDI queden apretados.
+*/
+.cfdi-info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+@media (max-width: 380px) {
+  .cfdi-info-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── StepFiscal grids (responsive) ────────────────────────── */
+/*
+  fiscal-cp-uso-grid: CP (1fr) + Uso CFDI (1.6fr).
+  En ≤380px el select de Uso CFDI queda muy angosto → colapsa a 1 col.
+
+  fiscal-payment-grid: Forma de pago + Método de pago (1fr 1fr).
+  En ≤380px los valores como "Tarjeta de crédito" o "PUE - Pago en una
+  sola exhibición" pueden desbordar el contenedor → colapsa a 1 col.
+*/
+.fiscal-cp-uso-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.6fr;
+  gap: 12px;
+}
+@media (max-width: 380px) {
+  .fiscal-cp-uso-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.fiscal-payment-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 380px) {
+  .fiscal-payment-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }

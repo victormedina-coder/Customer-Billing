@@ -21,6 +21,7 @@ export interface EmitResult {
   serieFolio: string
   fecha: string
   sello: string
+  emisor: { rfc: string; nombre: string; regimen: string }
 }
 
 export interface InvoiceService {
