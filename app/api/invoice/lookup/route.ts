@@ -10,6 +10,7 @@
  * Errores:
  *   400 INVALID_FOLIO   → folio vacío o malformado
  *   404 ORDER_NOT_FOUND → pedido no encontrado en ninguna tienda Shopify
+ *   409 FULLY_REFUNDED  → pedido reembolsado en su totalidad (neto = 0)
  *   422 DEADLINE_EXCEEDED → pedido encontrado pero fuera de la ventana de facturación
  *   502 SHOPIFY_ERROR   → todas las tiendas fallaron, sin marcas configuradas,
  *                         o error de conexión / respuesta inesperada
@@ -25,6 +26,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getOrderSource } from '@/lib/order-source'
 import { normalizedOrderToTicket } from '@/lib/shopify/mapper'
 import { isWithinInvoiceWindow } from '@/lib/invoice-window'
+import { isFullyRefunded } from '@/lib/refund'
 import { LookupSchema } from '@/lib/api/schemas'
 
 /** Forma canónica de error de la API */
@@ -67,6 +69,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         'ORDER_NOT_FOUND',
         `No se encontró ningún pedido con el folio "${folio}".`,
         404
+      )
+    }
+
+    if (isFullyRefunded(order)) {
+      return errorResponse(
+        'FULLY_REFUNDED',
+        'Este pedido fue reembolsado en su totalidad y no puede facturarse.',
+        409
       )
     }
 

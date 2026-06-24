@@ -59,6 +59,10 @@ const ORDER_BY_FOLIO_QUERY = /* graphql */ `
           email
           sourceName
           sourceIdentifier
+          displayFinancialStatus
+          totalRefundedSet {
+            shopMoney { amount currencyCode }
+          }
           subtotalPriceSet {
             shopMoney { amount currencyCode }
           }
@@ -132,6 +136,8 @@ interface ShopifyOrder {
   email: string | null
   sourceName: string | null
   sourceIdentifier: string | null
+  displayFinancialStatus: string | null
+  totalRefundedSet: ShopifyMoneySet
   subtotalPriceSet: ShopifyMoneySet
   totalTaxSet: ShopifyMoneySet
   totalPriceSet: ShopifyMoneySet
@@ -207,6 +213,8 @@ function normalizeOrder(
     // Si es null, se cae al label de la marca configurada.
     storeName: order.physicalLocation?.name ?? storeName,
     paymentGatewayNames: order.paymentGatewayNames,
+    refundedAmount: parseAmount(order.totalRefundedSet),
+    financialStatus: order.displayFinancialStatus ?? '',
   }
 }
 

@@ -21,6 +21,8 @@ export interface NormalizedOrder {
   customerEmail: string
   alreadyInvoiced: boolean
   storeName: string
+  refundedAmount: number
+  financialStatus: string
 }
 
 export interface OrderSource {

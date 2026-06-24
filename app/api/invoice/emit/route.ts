@@ -12,6 +12,7 @@
  *   400 INVALID_FOLIO     → folio vacío tras trim
  *   404 ORDER_NOT_FOUND   → Shopify no encuentra el pedido
  *   409 ALREADY_INVOICED  → el pedido ya tiene CFDI (activado en Etapa 3)
+ *   409 FULLY_REFUNDED    → pedido reembolsado en su totalidad (neto = 0)
  *   422 DEADLINE_EXCEEDED → fuera de la ventana de facturación
  *   502 SHOPIFY_ERROR     → todas las tiendas fallaron / error de conexión
  *   503 FACTURAMA_ERROR   → Facturama lanza error al timbrar
@@ -23,6 +24,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { EmitSchema } from '@/lib/api/schemas'
 import { getOrderSource } from '@/lib/order-source'
 import { isWithinInvoiceWindow } from '@/lib/invoice-window'
+import { isFullyRefunded } from '@/lib/refund'
 import { getInvoiceService } from '@/lib/invoice-service'
 import type { NormalizedOrderWithPayment } from '@/lib/shopify/mapper'
 
@@ -104,6 +106,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const alreadyInvoiced = false
   if (alreadyInvoiced) {
     return errorResponse('ALREADY_INVOICED', 'Este pedido ya cuenta con un CFDI emitido.', 409)
+  }
+
+  if (isFullyRefunded(order)) {
+    return errorResponse(
+      'FULLY_REFUNDED',
+      'Este pedido fue reembolsado en su totalidad y no puede facturarse.',
+      409
+    )
   }
 
   // ── 5. Validar ventana de facturación ─────────────────────────────────────

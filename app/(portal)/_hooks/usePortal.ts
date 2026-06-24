@@ -109,6 +109,12 @@ export function usePortal(flash: (msg: string) => void) {
           set({ busy: false, ticket, lookupError: '' })
         })
         .catch((err: unknown) => {
+          if (err instanceof Error && err.message === 'FULLY_REFUNDED') {
+            // Pedido reembolsado en su totalidad — no se puede facturar.
+            // No se muestra flash genérico: el banner 'refunded' comunica el motivo.
+            set({ busy: false, ticket: null, lookupError: 'refunded' })
+            return
+          }
           if (err instanceof Error && err.message === 'DEADLINE_EXCEEDED') {
             // Pedido encontrado pero fuera de la ventana de facturación del mes en curso.
             // No se muestra flash genérico: el banner 'deadline' comunica el motivo.
@@ -188,6 +194,8 @@ export function usePortal(flash: (msg: string) => void) {
 
         if (code === 'ALREADY_INVOICED') {
           set({ busy: false, step: 'ticket', ticket: null, folio: '', lookupError: 'invoiced' })
+        } else if (code === 'FULLY_REFUNDED') {
+          set({ busy: false, step: 'ticket', ticket: null, folio: '', lookupError: 'refunded' })
         } else if (code === 'DEADLINE_EXCEEDED') {
           flash('El periodo de facturación de este ticket ya venció')
           set({ busy: false })
