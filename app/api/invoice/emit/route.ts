@@ -29,7 +29,7 @@ import { isFullyRefunded } from '@/lib/refund'
 import { getInvoiceService } from '@/lib/invoice-service'
 import type { NormalizedOrderWithPayment } from '@/lib/shopify/mapper'
 import { isAlreadyInvoiced, createInvoice, updateInvoiceStamp, deleteById } from '@/lib/db/invoice-repository'
-import { maskEmail, maskRfc } from '@/lib/log-redact'
+import { maskEmail } from '@/lib/log-redact'
 
 /** Forma canónica de error de la API */
 function errorResponse(

@@ -30,18 +30,24 @@ export interface NormalizedOrderWithPayment extends NormalizedOrder {
 
 /**
  * Formatea un string ISO 8601 a fecha y hora legibles en zona de México.
+ * Usa Intl.DateTimeFormat con timeZone 'America/Mexico_City' para que la
+ * hora sea correcta independientemente de la zona del servidor (ej. Railway UTC).
  * Si el parse falla, devuelve strings vacíos para no reventar la UI.
  */
 function formatDateTimeMX(iso: string): { fecha: string; hora: string } {
-  try {
-    const d = new Date(iso)
-    const p = (n: number) => String(n).padStart(2, '0')
-    const fecha = `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`
-    const hora = `${p(d.getHours())}:${p(d.getMinutes())}`
-    return { fecha, hora }
-  } catch {
-    return { fecha: '', hora: '' }
-  }
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return { fecha: '', hora: '' }
+  const parts = new Intl.DateTimeFormat('es-MX', {
+    timeZone: 'America/Mexico_City',
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(d)
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? ''
+  const fecha = `${get('day')}/${get('month')}/${get('year')}`
+  let hora = `${get('hour')}:${get('minute')}`
+  // Algunos motores emiten '24' para medianoche con hour12:false
+  if (hora === '24:00') hora = '00:00'
+  return { fecha, hora }
 }
 
 /**

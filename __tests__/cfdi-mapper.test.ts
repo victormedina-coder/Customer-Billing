@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildCfdiPayload } from '../lib/invoice-service/cfdi-mapper'
+import type { CfdiItem } from '../lib/invoice-service/cfdi-mapper'
 import type { NormalizedOrderWithPayment } from '../lib/shopify/mapper'
 import type { FiscalInput } from '../lib/invoice-service/types'
 
@@ -36,6 +37,30 @@ function makeOrder(overrides: Partial<NormalizedOrderWithPayment> = {}): Normali
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100
+}
+
+/**
+ * Verifica las 3 invariantes fiscales en TODOS los items del payload.
+ *   1. Subtotal === UnitPrice × Quantity  (redondeado a 2)
+ *   2. Base    === Subtotal − Discount    (Discount = 0 si no existe)
+ *   3. Total   === Base + IVA
+ */
+function assertItemIdentities(items: CfdiItem[]): void {
+  for (const it of items) {
+    const qty  = parseFloat(it.Quantity)
+    const unit = parseFloat(it.UnitPrice)
+    const sub  = parseFloat(it.Subtotal)
+    const disc = it.Discount !== undefined ? parseFloat(it.Discount) : 0
+    const base = parseFloat(it.Taxes[0].Base)
+    const iva  = parseFloat(it.Taxes[0].Total)
+    const total = parseFloat(it.Total)
+    // 1. Subtotal === UnitPrice × Quantity
+    expect(Math.round(unit * qty * 100) / 100).toBeCloseTo(sub, 2)
+    // 2. Base === Subtotal − Discount
+    expect(Math.round((sub - disc) * 100) / 100).toBeCloseTo(base, 2)
+    // 3. Total === Base + IVA
+    expect(Math.round((base + iva) * 100) / 100).toBeCloseTo(total, 2)
+  }
 }
 
 // ── Test 1: línea única sin descuento, IVA inclusivo ─────────────────────────
@@ -133,6 +158,10 @@ describe('buildCfdiPayload — multi-línea sin descuento', () => {
     const sum = parseFloat(items[0].Total) + parseFloat(items[1].Total)
     expect(sum).toBeCloseTo(232, 1)
   })
+
+  it('assertItemIdentities: las 3 invariantes en todos los items', () => {
+    assertItemIdentities(items)
+  })
 })
 
 // ── Test 4: multi-línea con descuento a nivel pedido ─────────────────────────
@@ -160,6 +189,10 @@ describe('buildCfdiPayload — multi-línea con descuento a nivel pedido', () =>
       const computed = round2(parseFloat(item.UnitPrice) * parseFloat(item.Quantity))
       expect(computed).toBeCloseTo(parseFloat(item.Subtotal), 2)
     }
+  })
+
+  it('assertItemIdentities: las 3 invariantes en todos los items', () => {
+    assertItemIdentities(items)
   })
 })
 
@@ -190,6 +223,49 @@ describe('mapPaymentForm — via buildCfdiPayload', () => {
   it('undefined → mismo default', () => {
     const p = buildCfdiPayload(makeOrder({ total: 116, taxAmount: 16, lines: baseLine, paymentGatewayNames: undefined }), fiscal)
     expect(p.PaymentForm).toBe('03')
+  })
+})
+
+// ── Test 7: cent-fix con descuento — verifica las 3 invariantes ───────────────
+// Diseño para disparar el cent-fix sobre el último item con descuento:
+//   Línea 1: qty=3  × $99.99  con IVA → listGross = 299.97
+//   Línea 2: qty=7  × $31.43  con IVA → listGross = 220.01
+//   Línea 3: qty=4  × $74.95  con IVA → listGross = 299.80
+// total lista bruto = 819.78; descuentoANivPedido = $57.78 con IVA
+// total final = 819.78 − 57.78 = 762.00
+// Las divisiones por 1.16 y el escalado proporcional generan residuos de
+// centavos que activan el cent-fix en la línea 3, que ahora lleva descuento.
+describe('buildCfdiPayload — cent-fix en último item CON descuento (C1 regression)', () => {
+  const order = makeOrder({
+    total: 762.00,
+    discountAmount: 57.78,
+    taxAmount: 0,   // no lo usa buildCfdiPayload directamente
+    shippingAmount: 0,
+    lines: [
+      { description: 'Producto A', quantity: 3,  unitPrice: 99.99, unitPriceIncludesTax: true, discount: 0, productCode: 'A001' },
+      { description: 'Producto B', quantity: 7,  unitPrice: 31.43, unitPriceIncludesTax: true, discount: 0, productCode: 'B001' },
+      { description: 'Producto C', quantity: 4,  unitPrice: 74.95, unitPriceIncludesTax: true, discount: 0, productCode: 'C001' },
+    ],
+  })
+  const payload = buildCfdiPayload(order, fiscal)
+  const items = payload.Items
+
+  it('retorna 3 items', () => expect(items).toHaveLength(3))
+
+  it('Σ Total === order.total (±0.02)', () => {
+    const sum = items.reduce((acc, it) => acc + parseFloat(it.Total), 0)
+    expect(Math.abs(sum - 762.00)).toBeLessThanOrEqual(0.02)
+  })
+
+  it('el último item tiene Discount definido (el cent-fix lo conservó)', () => {
+    // Si el cent-fix se activó, el último item debe conservar su descuento
+    const last = items[items.length - 1]
+    expect(last.Discount).toBeDefined()
+    expect(parseFloat(last.Discount!)).toBeGreaterThan(0)
+  })
+
+  it('assertItemIdentities: las 3 invariantes en TODOS los items', () => {
+    assertItemIdentities(items)
   })
 })
 

@@ -242,29 +242,31 @@ export function buildCfdiPayload(
 
     // Aplicar siempre (dentro o fuera de tolerancia) para que el CFDI cierre;
     // el warn de arriba ya alerta si la magnitud es sospechosa.
-    const last          = items[items.length - 1]
-    const lastTotal     = round2(parseFloat(last.Total) + centDiff)
-    const hasDiscount   = last.Discount !== undefined
-    const lastSubtotal  = parseFloat(last.Subtotal)
-    const lastBase      = round2(lastTotal / 1.16)
-    const lastIva       = round2(lastTotal - lastBase)
+    //
+    // Invariantes por concepto que DEBEN conservarse:
+    //   1. Subtotal === UnitPrice × Quantity  (redondeado a 2)
+    //   2. Base === Subtotal − Discount        (Discount fijo; si no hay, 0)
+    //   3. Total === Base + IVA
+    //
+    // Estrategia: derivar Base desde el nuevo Total, mantener Discount intacto
+    // y recalcular Subtotal = Base + Discount.  Así nunca hay descuento negativo
+    // ni se rompe la identidad que valida el SAT/Facturama.
+    const last      = items[items.length - 1]
+    const qty       = parseFloat(last.Quantity)
+    const lastTotal = round2(parseFloat(last.Total) + centDiff)
+    const lastDisc  = last.Discount !== undefined ? parseFloat(last.Discount) : 0
+    const lastBase  = round2(lastTotal / 1.16)
+    const lastIva   = round2(lastTotal - lastBase)
+    const lastSub   = round2(lastBase + lastDisc)  // garantiza Subtotal − Discount === Base
 
-    // Distribuir el ajuste al campo correcto: si hay descuento, lo absorbemos ahí;
-    // si no hay descuento, ajustamos el subtotal.
-    if (hasDiscount) {
-      const newDiscount = round2(lastSubtotal - lastBase)
-      last.Discount            = String(Math.max(0, newDiscount))
-    } else {
-      last.Subtotal            = String(lastBase)
-      const qty = parseFloat(last.Quantity)
-      last.UnitPrice           = qty > 0
-        ? String(Math.round((lastBase / qty) * 1_000_000) / 1_000_000)
-        : last.UnitPrice
-    }
-
-    last.Total                 = String(lastTotal)
-    last.Taxes[0].Base         = String(lastBase)
-    last.Taxes[0].Total        = String(lastIva)
+    last.Subtotal         = String(lastSub)
+    last.UnitPrice        = qty > 0
+      ? String(Math.round((lastSub / qty) * 1_000_000) / 1_000_000)
+      : last.UnitPrice
+    if (lastDisc > 0) last.Discount = String(lastDisc)  // se mantiene el descuento original
+    last.Total            = String(lastTotal)
+    last.Taxes[0].Base    = String(lastBase)
+    last.Taxes[0].Total   = String(lastIva)
   }
 
   return {
