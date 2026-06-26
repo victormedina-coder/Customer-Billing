@@ -12,6 +12,7 @@ import { StepTicket } from './_components/steps/StepTicket'
 import { StepFiscal } from './_components/steps/StepFiscal'
 import { StepConfirm } from './_components/steps/StepConfirm'
 import { StepSuccess } from './_components/steps/StepSuccess'
+import { SkeletonPortal } from './_components/SkeletonPortal'
 
 const STORE_NAME = 'Grupo Quince 22'
 const TAGLINE = 'Facturación electrónica CFDI 4.0'
@@ -20,7 +21,7 @@ export default function PortalPage() {
   const toast = useToast()
   const portal = usePortal(toast.show)
   const rfcVal = useRfcValidation()
-  const { state } = portal
+  const { state, hydrated } = portal
   const { fiscal } = state
 
   // Errores SAT del último validateReceptor (se limpian por campo al editar).
@@ -100,6 +101,11 @@ export default function PortalPage() {
   return (
     <>
       <BrandHeader storeName={STORE_NAME} tagline={TAGLINE} />
+
+      {!hydrated ? (
+        <SkeletonPortal />
+      ) : (
+      <>
       <Stepper current={state.step} />
 
       <main style={{ flex: 1, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px 72px' }}>
@@ -126,12 +132,14 @@ export default function PortalPage() {
               ticket={state.ticket}
               fiscal={state.fiscal}
               touched={state.touched}
+              privacyAccepted={state.privacyAccepted}
               rfcValidation={rfcVal.state}
               satErrors={satErrors}
               validating={validating}
               onBack={() => { portal.goTo('ticket'); rfcVal.reset(); setSatErrors({}) }}
               onFiscalChange={handleFiscalChange}
               onRfcBlur={handleRfcBlur}
+              onPrivacyAcceptedChange={portal.setPrivacyAccepted}
               onContinue={() => { void handleContinue() }}
             />
           )}
@@ -160,6 +168,8 @@ export default function PortalPage() {
           )}
         </div>
       </main>
+      </>
+      )}
 
       <Toast message={toast.message} visible={toast.visible} />
     </>

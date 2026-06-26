@@ -17,6 +17,61 @@ const INITIAL_STATE: PortalState = {
   rfcRazon: '',
   showFolioHelp: false,
   factura: null,
+  privacyAccepted: false,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// sessionStorage persistence
+//
+// Usamos sessionStorage (y NO localStorage) deliberadamente:
+//   - Su alcance es la pestaña/sesión. Al cerrar la pestaña los datos fiscales
+//     (RFC, correo, etc.) desaparecen automáticamente, sin acumulación entre
+//     sesiones de distintos usuarios en el mismo dispositivo.
+//   - Es ideal para el round-trip "portal → aviso de privacidad → portal":
+//     la página se remonta pero la sesión de pestaña sigue activa.
+// ─────────────────────────────────────────────────────────────────────────────
+const SESSION_KEY = 'portal:state'
+
+/** Campos que se persisten. busy, touched y showFolioHelp son UI-transient. */
+type PersistedSnapshot = Pick<
+  PortalState,
+  'step' | 'folio' | 'ticket' | 'fiscal' | 'factura' | 'privacyAccepted' | 'rfcRazon' | 'lookupError'
+>
+
+function readSnapshot(): PersistedSnapshot | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY)
+    return raw ? (JSON.parse(raw) as PersistedSnapshot) : null
+  } catch {
+    return null
+  }
+}
+
+function writeSnapshot(s: PortalState): void {
+  if (typeof window === 'undefined') return
+  try {
+    const snapshot: PersistedSnapshot = {
+      step: s.step,
+      folio: s.folio,
+      ticket: s.ticket,
+      fiscal: s.fiscal,
+      factura: s.factura,
+      privacyAccepted: s.privacyAccepted,
+      rfcRazon: s.rfcRazon,
+      lookupError: s.lookupError,
+    }
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(snapshot))
+  } catch {
+    // quota exceeded o modo privado muy restrictivo — no fatal
+  }
+}
+
+function clearSnapshot(): void {
+  if (typeof window === 'undefined') return
+  try {
+    sessionStorage.removeItem(SESSION_KEY)
+  } catch { /* ignore */ }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,12 +116,58 @@ async function fetchTicket(folio: string): Promise<Ticket | null> {
 }
 
 export function usePortal(flash: (msg: string) => void) {
+  // IMPORTANTE (hydration): el primer render —tanto en SSR como en el primer
+  // render del cliente— SIEMPRE usa INITIAL_STATE para que el HTML del servidor
+  // coincida con el del cliente. Leer sessionStorage en el valor inicial (incluso
+  // con lazy initializer) provoca hydration mismatch, porque el initializer SÍ
+  // corre en el servidor (devuelve INITIAL) y en el cliente (devuelve el snapshot).
+  // La restauración del snapshot ocurre DESPUÉS del montaje (useEffect de abajo).
   const [state, setState] = useState<PortalState>(INITIAL_STATE)
+  // hydrated=false hasta restaurar el snapshot tras el montaje. La UI muestra un
+  // spinner mientras tanto para NO parpadear el paso 1 antes de saltar al paso
+  // restaurado (mejor UX que pintar la pantalla equivocada y luego redirigir).
+  const [hydrated, setHydrated] = useState(false)
   const lookupTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Ref espejo del state para que los callbacks lean siempre el valor más reciente
   // sin quedar atrapados en un closure obsoleto.
   const stateRef = useRef<PortalState>(INITIAL_STATE)
+  // Salta la PRIMERA escritura (la del montaje) para no pisar el snapshot guardado
+  // con INITIAL_STATE antes de alcanzar a hidratarlo.
+  const skipFirstPersist = useRef(true)
   useEffect(() => { stateRef.current = state }, [state])
+
+  // ── Hidratación desde sessionStorage (post-montaje, evita hydration mismatch) ─
+  useEffect(() => {
+    const snap = readSnapshot()
+    if (snap) {
+      // Hidratación post-montaje desde sessionStorage: caso legítimo de setState en
+      // un effect — leer el storage en el render provocaría hydration mismatch.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setState(prev => ({
+        ...prev,
+        step: snap.step,
+        folio: snap.folio,
+        ticket: snap.ticket,
+        fiscal: snap.fiscal,
+        factura: snap.factura,
+        privacyAccepted: snap.privacyAccepted,
+        rfcRazon: snap.rfcRazon,
+        lookupError: snap.lookupError,
+      }))
+    }
+    // Listo para pintar el paso correcto: el restore (si lo hubo) y este flag se
+    // baten en el mismo render, así no se ve el paso 1 antes de saltar al restaurado.
+    setHydrated(true)
+  }, [])
+
+  // ── Persistencia reactiva: escribe en sessionStorage cuando cambia el estado ─
+  useEffect(() => {
+    if (skipFirstPersist.current) {
+      skipFirstPersist.current = false
+      return
+    }
+    writeSnapshot(state)
+  }, [state])
 
   useEffect(() => () => {
     if (lookupTimer.current) clearTimeout(lookupTimer.current)
@@ -156,6 +257,9 @@ export function usePortal(flash: (msg: string) => void) {
   const setFiscal = useCallback(<K extends keyof FiscalData>(key: K, value: FiscalData[K]) =>
     setState(prev => ({ ...prev, fiscal: { ...prev.fiscal, [key]: value } })), [])
 
+  const setPrivacyAccepted = useCallback((accepted: boolean) =>
+    set({ privacyAccepted: accepted }), [set])
+
   /**
    * goConfirm: valida solo los campos locales (formato).
    * La validación de coherencia con el SAT (validarReceptor) ocurre en page.tsx
@@ -210,6 +314,9 @@ export function usePortal(flash: (msg: string) => void) {
       }
 
       const data = (await res.json()) as { factura: GeneratedInvoice }
+      // Factura generada con éxito: limpiar snapshot para no dejar datos pegados
+      // si otro usuario usa el mismo navegador/dispositivo más tarde.
+      clearSnapshot()
       set({ busy: false, step: 'success', factura: data.factura })
     } catch {
       flash('Error de conexión. Verifica tu internet e intenta de nuevo.')
@@ -220,7 +327,12 @@ export function usePortal(flash: (msg: string) => void) {
   // ── Navigation ───────────────────────────────────────────────────────────
   const goTo = useCallback((step: PortalStep) => set({ step }), [set])
 
-  const reset = useCallback(() => setState(INITIAL_STATE), [])
+  const reset = useCallback(() => {
+    // Inicio de un ticket nuevo: limpiar snapshot para que los datos fiscales
+    // del flujo anterior no reaparezcan en una facturación distinta.
+    clearSnapshot()
+    setState(INITIAL_STATE)
+  }, [])
 
   // ── Download helpers ─────────────────────────────────────────────────────
   /**
@@ -308,10 +420,11 @@ export function usePortal(flash: (msg: string) => void) {
 
   return {
     state,
+    hydrated,
     // Step 1
     setFolio, toggleFolioHelp, lookup, proceed, dismissError,
     // Step 2
-    setFiscal, setTouched, goConfirm,
+    setFiscal, setPrivacyAccepted, setTouched, goConfirm,
     // Step 3
     generate,
     // Navigation

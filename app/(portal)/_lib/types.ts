@@ -57,6 +57,8 @@ export interface PortalState {
   rfcRazon: string
   showFolioHelp: boolean
   factura: GeneratedInvoice | null
+  /** Si el usuario aceptó el Aviso de Privacidad en StepFiscal. */
+  privacyAccepted: boolean
 }
 
 export interface SelectOption {

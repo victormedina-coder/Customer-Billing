@@ -1,22 +1,28 @@
 'use client'
+import { useState } from 'react'
 import type { Ticket, FiscalData, RfcValidationState } from '../../_lib/types'
+// privacyAccepted se maneja en usePortal y se persiste en sessionStorage para
+// sobrevivir el round-trip portal → aviso de privacidad → portal.
 import { formatMXN } from '../../_lib/formatters'
 import { validateFiscal } from '../../_lib/validators'
 import { REGIMENES, USOS_CFDI, METODO_PAGO_LABEL } from '../../_lib/constants'
 import { FormField } from '../ui/FormField'
 import { FormSelect } from '../ui/FormSelect'
 import { BackButton } from '../ui/BackButton'
+import { AvisoPrivacidadContent } from '../legal/AvisoPrivacidadContent'
 
 interface StepFiscalProps {
   ticket: Ticket
   fiscal: FiscalData
   touched: boolean
+  privacyAccepted: boolean
   rfcValidation: RfcValidationState
   satErrors?: Partial<Record<'rfc' | 'razon' | 'regimen' | 'cp', string>>
   validating?: boolean
   onBack: () => void
   onFiscalChange: <K extends keyof FiscalData>(key: K, value: FiscalData[K]) => void
   onRfcBlur: (rfc: string) => void
+  onPrivacyAcceptedChange: (accepted: boolean) => void
   onContinue: () => void
 }
 
@@ -69,11 +75,14 @@ function RfcBadge({ state }: { state: RfcValidationState }) {
 }
 
 export function StepFiscal({
-  ticket, fiscal, touched, rfcValidation, satErrors = {}, validating = false,
-  onBack, onFiscalChange, onRfcBlur, onContinue,
+  ticket, fiscal, touched, privacyAccepted, rfcValidation, satErrors = {}, validating = false,
+  onBack, onFiscalChange, onRfcBlur, onPrivacyAcceptedChange, onContinue,
 }: StepFiscalProps) {
   // Fusión: errores locales de formato primero, luego errores SAT (coherencia con el servidor).
   const errors = { ...(touched ? validateFiscal(fiscal) : {}), ...satErrors }
+
+  // accordionOpen es UI-transient: no necesita sobrevivir el round-trip.
+  const [accordionOpen, setAccordionOpen] = useState(false)
 
   return (
     <div style={{ width: '100%', maxWidth: 520, animation: 'fadeIn 0.3s ease both' }}>
@@ -236,6 +245,134 @@ export function StepFiscal({
         </div>
       </div>
 
+      {/* ── Aviso de Privacidad — acordeón + checkbox ──────────────────────── */}
+      <div style={{
+        background: '#fff',
+        border: '1.5px solid var(--brand-primary)',
+        borderRadius: 14,
+        marginBottom: 14,
+        overflow: 'hidden',
+      }}>
+        {/* Trigger del acordeón */}
+        <button
+          type="button"
+          aria-expanded={accordionOpen}
+          aria-controls="aviso-privacidad-content"
+          onClick={() => setAccordionOpen(prev => !prev)}
+          className="btn-press"
+          style={{
+            width: '100%',
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            padding: '14px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+          }}
+        >
+          <span style={{ fontSize: 13.5, fontWeight: 800, color: '#1a1a1a', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--brand-primary)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>
+            </svg>
+            Aviso de Privacidad
+          </span>
+          {/* Chevron rotatorio */}
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#6b7280"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            style={{
+              flexShrink: 0,
+              transition: 'transform 0.2s ease',
+              transform: accordionOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+            }}
+          >
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+
+        {/* Contenido expandible */}
+        <div
+          id="aviso-privacidad-content"
+          role="region"
+          aria-label="Aviso de Privacidad"
+          style={{
+            maxHeight: accordionOpen ? '280px' : '0px',
+            overflowY: accordionOpen ? 'auto' : 'hidden',
+            opacity: accordionOpen ? 1 : 0,
+            visibility: accordionOpen ? 'visible' : 'hidden',
+            transition: 'max-height 0.25s ease, opacity 0.2s ease',
+            borderTop: accordionOpen ? '1px solid var(--border-light)' : 'none',
+            padding: accordionOpen ? '16px' : '0 16px',
+          }}
+        >
+          <AvisoPrivacidadContent />
+        </div>
+
+        {/* Checkbox de aceptación */}
+        <div style={{
+          borderTop: '1px solid var(--border-light)',
+          padding: '12px 16px',
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 10,
+        }}>
+          <input
+            type="checkbox"
+            id="privacy-accepted"
+            checked={privacyAccepted}
+            onChange={(e) => onPrivacyAcceptedChange(e.target.checked)}
+            style={{
+              marginTop: 2,
+              width: 16,
+              height: 16,
+              cursor: 'pointer',
+              accentColor: 'var(--brand-primary)',
+              flexShrink: 0,
+            }}
+          />
+          <label
+            htmlFor="privacy-accepted"
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: '#374151',
+              lineHeight: 1.5,
+              cursor: 'pointer',
+              userSelect: 'none',
+            }}
+          >
+            He leído y acepto el{' '}
+            <a
+              href="/aviso-privacidad"
+              style={{ color: '#000000', fontWeight: 700, textDecoration: 'underline' }}
+            >
+              Aviso de Privacidad
+            </a>
+          </label>
+        </div>
+
+        {/* TODO: Términos y Condiciones — descomentar cuando llegue el texto
+        <div style={{ borderTop: '1px solid var(--border-light)', padding: '12px 16px', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <input type="checkbox" id="terms-accepted" style={{ marginTop: 2, width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--brand-primary)', flexShrink: 0 }} />
+          <label htmlFor="terms-accepted" style={{ fontSize: 13, fontWeight: 600, color: '#374151', lineHeight: 1.5, cursor: 'pointer', userSelect: 'none' }}>
+            He leído y acepto los{' '}
+            <a href="/terminos-condiciones" target="_blank" rel="noopener noreferrer" style={{ color: '#000000', fontWeight: 700, textDecoration: 'underline' }}>
+              Términos y Condiciones
+            </a>
+          </label>
+        </div>
+        */}
+      </div>
+
       {/* Navigation buttons */}
       <div style={{ display: 'flex', gap: 10 }}>
         <button
@@ -255,12 +392,12 @@ export function StepFiscal({
         <button
           type="button"
           onClick={onContinue}
-          disabled={validating}
+          disabled={validating || !privacyAccepted}
           className="btn-press"
           style={{
             ...BTN_PRIMARY,
-            opacity: validating ? 0.6 : 1,
-            cursor: validating ? 'not-allowed' : 'pointer',
+            opacity: (validating || !privacyAccepted) ? 0.5 : 1,
+            cursor: (validating || !privacyAccepted) ? 'not-allowed' : 'pointer',
           }}
         >
           {validating ? 'Verificando…' : 'Continuar'}

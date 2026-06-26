@@ -474,6 +474,84 @@ textarea:focus-visible {
   }
 }
 
+/* ── Portal footer (responsive) ───────────────────────────── */
+/*
+  Fondo negro de marca (--brand-dark) con texto blanco para contraste AA.
+  Los tres elementos (enlaces legales, copyright, powered by) se apilan en
+  columna en móvil y se distribuyen en fila en escritorio/tablet.
+  El enlace hereda el focus ring oscuro (#1a1a1a) coherente con el resto.
+*/
+.portal-footer {
+  background: var(--brand-dark);
+  border-top: 2px solid var(--brand-primary);
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.portal-footer__links {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.portal-footer__link {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand-primary);
+  text-decoration: none;
+  letter-spacing: 0.01em;
+  transition: opacity 0.15s ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .portal-footer__link:hover {
+    opacity: 0.75;
+  }
+}
+
+.portal-footer__link:focus-visible {
+  outline: 2px solid #1a1a1a;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.portal-footer__copy {
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+  white-space: nowrap;
+}
+
+.portal-footer__powered {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .portal-footer {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 16px;
+    gap: 8px;
+  }
+  .portal-footer__copy,
+  .portal-footer__powered {
+    white-space: normal;
+  }
+}
+
+@media (max-width: 380px) {
+  .portal-footer {
+    padding: 14px 12px;
+  }
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
@@ -484,4 +562,19 @@ textarea:focus-visible {
 @keyframes toastIn {
   from { opacity: 0; transform: translate(-50%, 16px); }
   to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* ── Skeleton de carga (gate de hidratación del portal) ───────────────────── */
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #ededed 25%, #f7f7f7 50%, #ededed 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  border-radius: 8px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
 }
