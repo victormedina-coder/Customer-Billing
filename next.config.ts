@@ -67,6 +67,9 @@ const securityHeaders = [
 ]
 
 const nextConfig: NextConfig = {
+  // Oculta el header "X-Powered-By: Next.js" para no revelar el stack al atacante.
+  poweredByHeader: false,
+
   // Permite que el HMR del dev server acepte peticiones desde la red local
   // (p.ej. probar el responsive en el celular vía la IP LAN). Solo afecta
   // a `next dev`; en producción no tiene efecto. El comodín cubre la subred
