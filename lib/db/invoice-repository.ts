@@ -67,10 +67,14 @@ const PG_UNIQUE_VIOLATION = '23505'
  * la unique constraint `unique_order_store`.
  */
 function isUniqueViolation(err: unknown): boolean {
-  if (err && typeof err === 'object') {
-    // pg devuelve el código en `code`; el driver neon-http lo propaga igual.
-    const code = (err as Record<string, unknown>)['code']
-    return code === PG_UNIQUE_VIOLATION
+  if (!err || typeof err !== 'object') return false
+  const e = err as Record<string, unknown>
+  // postgres-js expone el código directamente en el error
+  if (e['code'] === PG_UNIQUE_VIOLATION) return true
+  // Drizzle con postgres-js envuelve el PostgresError en err.cause
+  const cause = e['cause']
+  if (cause && typeof cause === 'object') {
+    return (cause as Record<string, unknown>)['code'] === PG_UNIQUE_VIOLATION
   }
   return false
 }

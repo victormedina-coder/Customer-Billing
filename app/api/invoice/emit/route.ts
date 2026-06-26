@@ -27,6 +27,7 @@ import { isWithinInvoiceWindow } from '@/lib/invoice-window'
 import { isFullyRefunded } from '@/lib/refund'
 import { getInvoiceService } from '@/lib/invoice-service'
 import type { NormalizedOrderWithPayment } from '@/lib/shopify/mapper'
+import { isAlreadyInvoiced, createInvoice } from '@/lib/db/invoice-repository'
 
 /** Forma canónica de error de la API */
 function errorResponse(
@@ -102,8 +103,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return errorResponse('ORDER_NOT_FOUND', `No se encontró ningún pedido con el folio "${folio}".`, 404)
   }
 
-  // alreadyInvoiced siempre false por ahora — Etapa 3 activará la verificación
-  const alreadyInvoiced = false
+  // ── Etapa 3: verificación real de doble-facturación ───────────────────────
+  const alreadyInvoiced = await isAlreadyInvoiced(order.id, order.storeName)
   if (alreadyInvoiced) {
     return errorResponse('ALREADY_INVOICED', 'Este pedido ya cuenta con un CFDI emitido.', 409)
   }
@@ -129,6 +130,30 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     const invoiceService = getInvoiceService()
     const emitResult = await invoiceService.emitir({ order, fiscal })
+
+    // Persistir en DB (cerrojo anti-doble-facturación). Best-effort: si falla,
+    // el CFDI ya fue timbrado en Facturama — se puede conciliar manualmente.
+    // Un error aquí NO debe tumbar la respuesta al cliente.
+    try {
+      await createInvoice({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        storeName: order.storeName,
+        facturamaId: emitResult.facturamaId,
+        uuidCfdi: emitResult.uuid,
+        rfcReceptor: fiscal.rfc,
+        razonSocial: fiscal.razon,
+        status: 'emitted',
+        invoiceType: 'individual',
+      })
+    } catch (dbErr: unknown) {
+      const dbMsg = dbErr instanceof Error ? dbErr.message : String(dbErr)
+      console.error('[emit] Error al persistir factura en DB (CFDI ya timbrado):', {
+        facturamaId: emitResult.facturamaId,
+        orderId: order.id,
+        error: dbMsg,
+      })
+    }
 
     // Enviar el CFDI al correo del cliente (best-effort). El CFDI ya quedó
     // timbrado, por lo que un fallo de correo NO debe tumbar la respuesta:

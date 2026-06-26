@@ -256,6 +256,10 @@ export function buildCfdiPayload(
       last.Discount            = String(Math.max(0, newDiscount))
     } else {
       last.Subtotal            = String(lastBase)
+      const qty = parseFloat(last.Quantity)
+      last.UnitPrice           = qty > 0
+        ? String(Math.round((lastBase / qty) * 1_000_000) / 1_000_000)
+        : last.UnitPrice
     }
 
     last.Total                 = String(lastTotal)

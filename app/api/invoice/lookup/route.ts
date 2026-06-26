@@ -28,6 +28,7 @@ import { normalizedOrderToTicket } from '@/lib/shopify/mapper'
 import { isWithinInvoiceWindow } from '@/lib/invoice-window'
 import { isFullyRefunded } from '@/lib/refund'
 import { LookupSchema } from '@/lib/api/schemas'
+import { isAlreadyInvoiced } from '@/lib/db/invoice-repository'
 
 /** Forma canónica de error de la API */
 function errorResponse(
@@ -92,7 +93,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       )
     }
 
-    // ── 5. Mapear a Ticket para la UI ─────────────────────────────────────
+    // ── 5. Verificar doble-facturación (Etapa 3) ─────────────────────────────
+    const invoiced = await isAlreadyInvoiced(order.id, order.storeName)
+    if (invoiced) {
+      return errorResponse(
+        'ALREADY_INVOICED',
+        'Este pedido ya cuenta con un CFDI emitido.',
+        409
+      )
+    }
+
+    // ── 6. Mapear a Ticket para la UI ─────────────────────────────────────────
     // Se muestra el folio que tecleó el cliente (recibo POS, ej. "15-5333"),
     // no el `name` interno de Shopify (ej. "#45371").
     const ticket = normalizedOrderToTicket(order, folio)

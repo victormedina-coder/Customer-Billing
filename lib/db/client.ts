@@ -1,21 +1,21 @@
-import { neon } from '@neondatabase/serverless'
-import { drizzle } from 'drizzle-orm/neon-http'
-import type { NeonHttpDatabase } from 'drizzle-orm/neon-http'
+import { drizzle } from 'drizzle-orm/postgres-js'
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
+import postgresJs from 'postgres'
 import * as schema from './schema'
 
 type Schema = typeof schema
 
-let _db: NeonHttpDatabase<Schema> | null = null
+let _db: PostgresJsDatabase<Schema> | null = null
 
 /**
  * Returns the shared Drizzle client, creating it on first call.
- * The DATABASE_URL env var is read lazily so that importing this
- * module at the top level does not throw during build/test.
+ * DATABASE_URL is read lazily so importing this module at the top level
+ * does not throw during build/test when the env var is absent.
  */
-export function getDb(): NeonHttpDatabase<Schema> {
+export function getDb(): PostgresJsDatabase<Schema> {
   if (!_db) {
-    const sql = neon(process.env.DATABASE_URL!)
-    _db = drizzle(sql, { schema })
+    const client = postgresJs(process.env.DATABASE_URL!, { max: 1 })
+    _db = drizzle(client, { schema })
   }
   return _db
 }
