@@ -350,11 +350,11 @@ export function usePortal(flash: (msg: string) => void) {
    * no lo marque como descarga sospechosa y el nombre de archivo sea legible.
    */
   const triggerDownload = useCallback(async (
-    facturamaId: string,
+    invoiceId: string,
     format: 'pdf' | 'xml',
     filenameBase: string,
   ): Promise<void> => {
-    const url = `/api/invoice/download/${encodeURIComponent(facturamaId)}/${format}`
+    const url = `/api/invoice/download/${encodeURIComponent(invoiceId)}/${format}`
     const res = await fetch(url)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const blob = await res.blob()
@@ -370,10 +370,10 @@ export function usePortal(flash: (msg: string) => void) {
 
   const downloadPdf = useCallback(async () => {
     const factura = stateRef.current.factura
-    if (!factura?.facturamaId) { flash('No hay factura para descargar'); return }
+    if (!factura?.invoiceId) { flash('No hay factura para descargar'); return }
     flash('Descargando PDF…')
     try {
-      await triggerDownload(factura.facturamaId, 'pdf', factura.serieFolio)
+      await triggerDownload(factura.invoiceId, 'pdf', factura.serieFolio)
     } catch {
       flash('No se pudo descargar el archivo. Intenta de nuevo.')
     }
@@ -381,10 +381,10 @@ export function usePortal(flash: (msg: string) => void) {
 
   const downloadXml = useCallback(async () => {
     const factura = stateRef.current.factura
-    if (!factura?.facturamaId) { flash('No hay factura para descargar'); return }
+    if (!factura?.invoiceId) { flash('No hay factura para descargar'); return }
     flash('Descargando XML…')
     try {
-      await triggerDownload(factura.facturamaId, 'xml', factura.serieFolio)
+      await triggerDownload(factura.invoiceId, 'xml', factura.serieFolio)
     } catch {
       flash('No se pudo descargar el archivo. Intenta de nuevo.')
     }
@@ -393,7 +393,7 @@ export function usePortal(flash: (msg: string) => void) {
   const resendEmail = useCallback(async () => {
     const factura = stateRef.current.factura
     const email   = stateRef.current.fiscal.email
-    if (!factura?.facturamaId) { flash('No hay factura para reenviar'); return }
+    if (!factura?.invoiceId) { flash('No hay factura para reenviar'); return }
 
     flash('Enviando factura por correo…')
     try {
@@ -401,9 +401,7 @@ export function usePortal(flash: (msg: string) => void) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          facturamaId: factura.facturamaId,
-          email,
-          serieFolio: factura.serieFolio,
+          invoiceId: factura.invoiceId,
         }),
       })
       if (res.ok) {

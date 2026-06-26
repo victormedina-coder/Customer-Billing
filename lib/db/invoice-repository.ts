@@ -33,6 +33,7 @@ export interface CreateInvoiceData {
   uuidCfdi?: string | null
   rfcReceptor?: string | null
   razonSocial?: string | null
+  email?: string | null
   status?: string
   invoiceType?: 'individual' | 'global'
   paymentType?: 'credito' | 'debito' | 'efectivo' | null
@@ -160,6 +161,7 @@ export async function createInvoice(
         uuidCfdi: data.uuidCfdi ?? null,
         rfcReceptor: data.rfcReceptor ?? null,
         razonSocial: data.razonSocial ?? null,
+        email: data.email ?? null,
         status: data.status ?? 'pending',
         invoiceType: data.invoiceType ?? 'individual',
         paymentType: data.paymentType ?? null,
@@ -174,6 +176,47 @@ export async function createInvoice(
     // Error inesperado de BD — propágalo sin swallow silencioso.
     throw err
   }
+}
+
+/**
+ * Devuelve la fila completa por su id (UUID), o null si no existe.
+ * El id de la fila funciona como token de capacidad para descarga/reenvío:
+ * es un UUID aleatorio no enumerable, a diferencia del facturamaId.
+ */
+export async function findById(id: string): Promise<InvoiceRow | null> {
+  const db = getDb()
+  const rows = await db.select().from(invoices).where(eq(invoices.id, id)).limit(1)
+  return rows[0] ?? null
+}
+
+/**
+ * Actualiza una fila de factura con los datos del CFDI tras un timbrado exitoso.
+ * Devuelve la fila actualizada o null si no existe.
+ */
+export async function updateInvoiceStamp(
+  id: string,
+  data: { facturamaId: string; uuidCfdi: string; status?: string },
+): Promise<InvoiceRow | null> {
+  const db = getDb()
+  const rows = await db
+    .update(invoices)
+    .set({
+      facturamaId: data.facturamaId,
+      uuidCfdi: data.uuidCfdi,
+      status: data.status ?? 'emitted',
+    })
+    .where(eq(invoices.id, id))
+    .returning()
+  return rows[0] ?? null
+}
+
+/**
+ * Elimina una fila por id. Se usa para liberar el cerrojo UNIQUE cuando el
+ * timbrado en Facturama falla tras haber insertado la fila 'pending'.
+ */
+export async function deleteById(id: string): Promise<void> {
+  const db = getDb()
+  await db.delete(invoices).where(eq(invoices.id, id))
 }
 
 /**

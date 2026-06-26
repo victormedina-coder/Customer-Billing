@@ -6,7 +6,10 @@ import * as schema from '../lib/db/schema'
 import {
   isAlreadyInvoiced,
   findByOrder,
+  findById,
   createInvoice,
+  updateInvoiceStamp,
+  deleteById,
   listInvoicedOrderIds,
   type CreateInvoiceData,
 } from '../lib/db/invoice-repository'
@@ -134,5 +137,136 @@ describe.skipIf(skip)('invoice-repository (integration, Railway test DB)', () =>
     const to   = new Date(Date.now() + 60_000)
     const result = await listInvoicedOrderIds('tienda-stetson', from, to)
     expect(result).not.toContain('order-D')
+  })
+
+  // ── findById ───────────────────────────────────────────────────────────────
+
+  it('findById devuelve null para un id inexistente', async () => {
+    const result = await findById(crypto.randomUUID())
+    expect(result).toBeNull()
+  })
+
+  it('findById devuelve la fila completa tras createInvoice', async () => {
+    const data: CreateInvoiceData = {
+      orderId: 'order-006',
+      orderNumber: '#1006',
+      storeName: 'tienda-ariat',
+      facturamaId: 'F-XYZ789',
+      uuidCfdi: crypto.randomUUID(),
+      rfcReceptor: 'EKU9003173C9',
+      razonSocial: 'ESCUELA KEMPER URGATE',
+      email: 'receptor@example.com',
+      status: 'emitted',
+      invoiceType: 'individual',
+    }
+    const created = await createInvoice(data)
+    expect(created.created).toBe(true)
+    if (!created.created) return
+
+    const row = await findById(created.invoice.id)
+    expect(row).not.toBeNull()
+    expect(row?.facturamaId).toBe('F-XYZ789')
+    expect(row?.email).toBe('receptor@example.com')
+    expect(row?.id).toBe(created.invoice.id)
+  })
+
+  // ── updateInvoiceStamp ─────────────────────────────────────────────────────
+
+  it('updateInvoiceStamp actualiza facturamaId, uuidCfdi y status', async () => {
+    const created = await createInvoice({
+      orderId: 'order-008',
+      orderNumber: '#1008',
+      storeName: 'tienda-ariat',
+      status: 'pending',
+    })
+    expect(created.created).toBe(true)
+    if (!created.created) return
+
+    const uuid = crypto.randomUUID()
+    const updated = await updateInvoiceStamp(created.invoice.id, {
+      facturamaId: 'F-STAMP01',
+      uuidCfdi: uuid,
+      status: 'emitted',
+    })
+    expect(updated).not.toBeNull()
+    expect(updated?.facturamaId).toBe('F-STAMP01')
+    expect(updated?.uuidCfdi).toBe(uuid)
+    expect(updated?.status).toBe('emitted')
+  })
+
+  it('updateInvoiceStamp sobre id inexistente devuelve null', async () => {
+    const result = await updateInvoiceStamp(crypto.randomUUID(), {
+      facturamaId: 'F-NOEXIST',
+      uuidCfdi: crypto.randomUUID(),
+    })
+    expect(result).toBeNull()
+  })
+
+  // ── deleteById ─────────────────────────────────────────────────────────────
+
+  it('deleteById borra la fila; findById devuelve null tras el borrado', async () => {
+    const created = await createInvoice({
+      orderId: 'order-009',
+      orderNumber: '#1009',
+      storeName: 'tienda-ariat',
+      status: 'pending',
+    })
+    expect(created.created).toBe(true)
+    if (!created.created) return
+
+    await deleteById(created.invoice.id)
+    expect(await findById(created.invoice.id)).toBeNull()
+  })
+
+  it('deleteById sobre id inexistente no lanza', async () => {
+    await expect(deleteById(crypto.randomUUID())).resolves.toBeUndefined()
+  })
+
+  // ── Flujo insert-first ─────────────────────────────────────────────────────
+
+  it('flujo insert-first: pending → updateInvoiceStamp → emitted', async () => {
+    // 1. Insertar fila pending (cerrojo adquirido)
+    const created = await createInvoice({
+      orderId: 'order-010',
+      orderNumber: '#1010',
+      storeName: 'tienda-ariat',
+      status: 'pending',
+      facturamaId: null,
+      uuidCfdi: null,
+    })
+    expect(created.created).toBe(true)
+    if (!created.created) return
+    const id = created.invoice.id
+
+    // 2. Verificar que la fila está en pending y sin datos de CFDI
+    const pending = await findById(id)
+    expect(pending?.status).toBe('pending')
+    expect(pending?.facturamaId).toBeNull()
+
+    // 3. Simular timbrado exitoso: actualizar con datos del CFDI
+    const uuid = crypto.randomUUID()
+    await updateInvoiceStamp(id, { facturamaId: 'F-INSERTFIRST', uuidCfdi: uuid, status: 'emitted' })
+
+    // 4. Verificar estado final
+    const emitted = await findById(id)
+    expect(emitted?.status).toBe('emitted')
+    expect(emitted?.facturamaId).toBe('F-INSERTFIRST')
+    expect(emitted?.uuidCfdi).toBe(uuid)
+  })
+
+  it('createInvoice persiste el email cuando se proporciona', async () => {
+    const data: CreateInvoiceData = {
+      orderId: 'order-007',
+      orderNumber: '#1007',
+      storeName: 'tienda-ariat',
+      email: 'test@example.com',
+      status: 'emitted',
+    }
+    const created = await createInvoice(data)
+    expect(created.created).toBe(true)
+    if (!created.created) return
+
+    const row = await findById(created.invoice.id)
+    expect(row?.email).toBe('test@example.com')
   })
 })

@@ -38,7 +38,7 @@ export interface FiscalData {
 }
 
 export interface GeneratedInvoice {
-  facturamaId: string
+  invoiceId: string | null
   uuid: string
   serieFolio: string
   fecha: string

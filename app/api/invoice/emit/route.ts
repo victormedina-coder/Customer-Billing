@@ -21,13 +21,15 @@
 export const runtime = 'nodejs'
 
 import { NextRequest, NextResponse } from 'next/server'
+import { rateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit'
 import { EmitSchema } from '@/lib/api/schemas'
 import { getOrderSource } from '@/lib/order-source'
 import { isWithinInvoiceWindow } from '@/lib/invoice-window'
 import { isFullyRefunded } from '@/lib/refund'
 import { getInvoiceService } from '@/lib/invoice-service'
 import type { NormalizedOrderWithPayment } from '@/lib/shopify/mapper'
-import { isAlreadyInvoiced, createInvoice } from '@/lib/db/invoice-repository'
+import { isAlreadyInvoiced, createInvoice, updateInvoiceStamp, deleteById } from '@/lib/db/invoice-repository'
+import { maskEmail, maskRfc } from '@/lib/log-redact'
 
 /** Forma canónica de error de la API */
 function errorResponse(
@@ -49,7 +51,7 @@ function mockCfdi(folio: string) {
   const sello = Array.from({ length: 48 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
   const uuid = crypto.randomUUID()
   return {
-    facturamaId: `MOCK-${folioNum}`,
+    invoiceId: crypto.randomUUID(),
     uuid,
     serieFolio: `GR-${folioNum}`,
     fecha,
@@ -59,6 +61,16 @@ function mockCfdi(folio: string) {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  // ── 0. Rate limiting ──────────────────────────────────────────────────────
+  const ip = getClientIp(req)
+  const rl = await rateLimit(`emit:${ip}`, RATE_LIMITS.emit.max, RATE_LIMITS.emit.windowSec)
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: { code: 'RATE_LIMITED', message: 'Demasiadas solicitudes. Intenta de nuevo en un momento.' } },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } }
+    )
+  }
+
   // ── 1. Parsear body ───────────────────────────────────────────────────────
   let body: unknown
   try {
@@ -81,7 +93,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // ── 3. Mock de emit (desarrollo sin credenciales) ─────────────────────────
   if (process.env.EMIT_MOCK === 'true') {
-    const factura = mockCfdi(folio)
+    const { invoiceId, uuid, serieFolio, fecha, sello, emisor } = mockCfdi(folio)
+    const factura = { invoiceId, uuid, serieFolio, fecha, sello, emisor }
     return NextResponse.json({ factura }, { status: 200 })
   }
 
@@ -126,63 +139,86 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     )
   }
 
-  // ── 6. Emitir CFDI via Facturama ──────────────────────────────────────────
+  // ── 6. Insert-first: adquirir el cerrojo UNIQUE antes de timbrar ───────────
+  // Insertamos una fila 'pending' que adquiere el cerrojo UNIQUE(order_id, store_name).
+  // Si otro request ya lo tiene (carrera), createInvoice devuelve already_invoiced.
+  // Esto serializa el timbrado: solo quien gana el INSERT gasta dinero en Facturama.
+  // NOTA: una fila 'pending' también hará que isAlreadyInvoiced (paso anterior) devuelva
+  // true — comportamiento conservador correcto. Un job de conciliación futuro deberá
+  // limpiar filas 'pending' viejas (timbrados iniciados pero nunca completados).
+  let invoiceId: string
+  const pending = await createInvoice({
+    orderId: order.id,
+    orderNumber: order.orderNumber,
+    storeName: order.storeName,
+    rfcReceptor: fiscal.rfc,
+    razonSocial: fiscal.razon,
+    email: fiscal.email,
+    status: 'pending',
+    invoiceType: 'individual',
+  })
+  if (!pending.created) {
+    return errorResponse('ALREADY_INVOICED', 'Este pedido ya cuenta con un CFDI emitido.', 409)
+  }
+  invoiceId = pending.invoice.id
+
+  // ── 7. Timbrar en Facturama ───────────────────────────────────────────────
+  let emitResult
   try {
-    const invoiceService = getInvoiceService()
-    const emitResult = await invoiceService.emitir({ order, fiscal })
-
-    // Persistir en DB (cerrojo anti-doble-facturación). Best-effort: si falla,
-    // el CFDI ya fue timbrado en Facturama — se puede conciliar manualmente.
-    // Un error aquí NO debe tumbar la respuesta al cliente.
-    try {
-      await createInvoice({
-        orderId: order.id,
-        orderNumber: order.orderNumber,
-        storeName: order.storeName,
-        facturamaId: emitResult.facturamaId,
-        uuidCfdi: emitResult.uuid,
-        rfcReceptor: fiscal.rfc,
-        razonSocial: fiscal.razon,
-        status: 'emitted',
-        invoiceType: 'individual',
-      })
-    } catch (dbErr: unknown) {
-      const dbMsg = dbErr instanceof Error ? dbErr.message : String(dbErr)
-      console.error('[emit] Error al persistir factura en DB (CFDI ya timbrado):', {
-        facturamaId: emitResult.facturamaId,
-        orderId: order.id,
-        error: dbMsg,
-      })
-    }
-
-    // Enviar el CFDI al correo del cliente (best-effort). El CFDI ya quedó
-    // timbrado, por lo que un fallo de correo NO debe tumbar la respuesta:
-    // el cliente siempre puede reenviar desde la pantalla de éxito o descargar.
-    try {
-      await invoiceService.enviarCorreo(emitResult.facturamaId, fiscal.email, {
-        serieFolio: emitResult.serieFolio,
-      })
-    } catch (mailErr: unknown) {
-      const mailMsg = mailErr instanceof Error ? mailErr.message : String(mailErr)
-      console.error('[emit] Correo automático falló (CFDI ya timbrado):', {
-        facturamaId: emitResult.facturamaId, email: fiscal.email, error: mailMsg,
-      })
-    }
-
-    // La respuesta al cliente incluye los campos de GeneratedInvoice
-    // más facturamaId por si el front necesita hacer descargas.
-    const factura = {
-      facturamaId: emitResult.facturamaId,
-      uuid:        emitResult.uuid,
-      serieFolio:  emitResult.serieFolio,
-      fecha:       emitResult.fecha,
-      sello:       emitResult.sello,
-      emisor:      emitResult.emisor,
-    }
-    return NextResponse.json({ factura }, { status: 200 })
+    emitResult = await getInvoiceService().emitir({ order, fiscal })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
     console.error('[emit] Facturama:', message)
+    // El timbrado falló: liberamos el cerrojo borrando la fila pendiente para
+    // permitir que el cliente reintente.
+    try {
+      await deleteById(invoiceId)
+    } catch (delErr: unknown) {
+      const delMsg = delErr instanceof Error ? delErr.message : String(delErr)
+      console.error('[emit] No se pudo limpiar la fila pendiente tras fallo de timbrado:', {
+        invoiceId, error: delMsg,
+      })
+    }
     return errorResponse('FACTURAMA_ERROR', 'Error al generar la factura. Intenta de nuevo más tarde.', 503)
   }
+
+  // ── 8. Persistir los datos del CFDI en la fila ya bloqueada ────────────────
+  // El cerrojo ya está tomado; este UPDATE no puede fallar por carrera.
+  // Si la DB falla aquí (raro), el CFDI YA está timbrado y el pedido sigue
+  // bloqueado contra doble-timbre — se concilia manualmente. No tumbamos la respuesta.
+  try {
+    await updateInvoiceStamp(invoiceId, {
+      facturamaId: emitResult.facturamaId,
+      uuidCfdi: emitResult.uuid,
+      status: 'emitted',
+    })
+  } catch (dbErr: unknown) {
+    const dbMsg = dbErr instanceof Error ? dbErr.message : String(dbErr)
+    console.error('[emit] CFDI timbrado pero no se pudo actualizar la fila (conciliar):', {
+      invoiceId, error: dbMsg,
+    })
+  }
+
+  // ── 9. Enviar el CFDI por correo (best-effort) ────────────────────────────
+  try {
+    await getInvoiceService().enviarCorreo(emitResult.facturamaId, fiscal.email, {
+      serieFolio: emitResult.serieFolio,
+    })
+  } catch (mailErr: unknown) {
+    const mailMsg = mailErr instanceof Error ? mailErr.message : String(mailErr)
+    console.error('[emit] Correo automático falló (CFDI ya timbrado):', {
+      facturamaId: emitResult.facturamaId, email: maskEmail(fiscal.email), error: mailMsg,
+    })
+  }
+
+  // ── 10. Responder al cliente con el invoiceId como token ──────────────────
+  const factura = {
+    invoiceId,
+    uuid:        emitResult.uuid,
+    serieFolio:  emitResult.serieFolio,
+    fecha:       emitResult.fecha,
+    sello:       emitResult.sello,
+    emisor:      emitResult.emisor,
+  }
+  return NextResponse.json({ factura }, { status: 200 })
 }

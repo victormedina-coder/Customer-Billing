@@ -23,6 +23,7 @@
 export const runtime = 'nodejs'
 
 import { NextRequest, NextResponse } from 'next/server'
+import { rateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit'
 import { getOrderSource } from '@/lib/order-source'
 import { normalizedOrderToTicket } from '@/lib/shopify/mapper'
 import { isWithinInvoiceWindow } from '@/lib/invoice-window'
@@ -40,6 +41,16 @@ function errorResponse(
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  // ── 0. Rate limiting ──────────────────────────────────────────────────────
+  const ip = getClientIp(req)
+  const rl = await rateLimit(`lookup:${ip}`, RATE_LIMITS.lookup.max, RATE_LIMITS.lookup.windowSec)
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: { code: 'RATE_LIMITED', message: 'Demasiadas solicitudes. Intenta de nuevo en un momento.' } },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } }
+    )
+  }
+
   // ── 1. Parsear body ───────────────────────────────────────────────────────
   let body: unknown
   try {

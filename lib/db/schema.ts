@@ -9,6 +9,7 @@ export const invoices = pgTable('invoices', {
   uuidCfdi: text('uuid_cfdi').unique(),
   rfcReceptor: text('rfc_receptor'),
   razonSocial: text('razon_social'),
+  email: text('email'),
   status: text('status').notNull().default('pending'),
   /**
    * Tipo de CFDI emitido.

@@ -16,14 +16,26 @@
 export const runtime = 'nodejs'
 
 import { NextRequest, NextResponse } from 'next/server'
+import { rateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit'
 import { FiscalValidateSchema } from '@/lib/api/schemas'
 import { validarRfc, validarReceptor } from '@/lib/invoice-service/facturama-client'
+import { maskRfc } from '@/lib/log-redact'
 
 function errorResponse(code: string, message: string, status: number): NextResponse {
   return NextResponse.json({ error: { code, message } }, { status })
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  // ── 0. Rate limiting ──────────────────────────────────────────────────────
+  const ip = getClientIp(req)
+  const rl = await rateLimit(`fiscal-validate:${ip}`, RATE_LIMITS.fiscal.max, RATE_LIMITS.fiscal.windowSec)
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: { code: 'RATE_LIMITED', message: 'Demasiadas solicitudes. Intenta de nuevo en un momento.' } },
+      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } }
+    )
+  }
+
   // ── 1. Parsear body ───────────────────────────────────────────────────────
   let body: unknown
   try {
@@ -60,7 +72,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       })
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err)
-      console.error('[fiscal/validate] Error en validarReceptor:', { rfc, error: message })
+      console.error('[fiscal/validate] Error en validarReceptor:', { rfc: maskRfc(rfc), error: message })
       return errorResponse(
         'FACTURAMA_ERROR',
         'No se pudo verificar con el SAT en este momento. Intenta de nuevo más tarde.',
@@ -78,7 +90,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // 404 de la ruta o 5xx de Facturama: degradamos con gracia.
     // En modo existencia (blur) no bloqueamos al cliente — devolvemos existsRfc: null
     // para que el hook trate el resultado como "no se pudo verificar".
-    console.error('[fiscal/validate] Error en validarRfc:', { rfc, error: message })
+    console.error('[fiscal/validate] Error en validarRfc:', { rfc: maskRfc(rfc), error: message })
     return errorResponse(
       'FACTURAMA_ERROR',
       'No se pudo verificar con el SAT en este momento.',

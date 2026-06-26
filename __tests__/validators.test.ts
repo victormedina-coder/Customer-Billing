@@ -104,4 +104,26 @@ describe('validateFiscal', () => {
     const errors = validateFiscal({ ...validData, regimen: '' })
     expect(errors.regimen).toBeDefined()
   })
+
+  // ── charset de razon ───────────────────────────────────────────────────────
+
+  it('razón social válida con acentos y & → sin error en razon', () => {
+    const errors = validateFiscal({ ...validData, razon: 'TIENDAS SOLÍS & ASOCIADOS, S.A. DE C.V.' })
+    expect(errors.razon).toBeUndefined()
+  })
+
+  it('razón social con <script> → errors.razon definido', () => {
+    const errors = validateFiscal({ ...validData, razon: '<script>alert(1)</script>' })
+    expect(errors.razon).toBeDefined()
+  })
+
+  it('razón social con < → errors.razon definido', () => {
+    const errors = validateFiscal({ ...validData, razon: 'EMPRESA <X>' })
+    expect(errors.razon).toBeDefined()
+  })
+
+  it('razón social con símbolo ™ → errors.razon definido', () => {
+    const errors = validateFiscal({ ...validData, razon: 'EMPRESA ™ X' })
+    expect(errors.razon).toBeDefined()
+  })
 })

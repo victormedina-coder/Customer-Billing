@@ -8,7 +8,13 @@ export const LookupSchema = z.object({
 
 export const FiscalDataSchema = z.object({
   rfc: z.string().regex(RFC_RE, 'RFC inválido (formato requerido: 12-13 caracteres)'),
-  razon: z.string().min(3, 'Nombre o razón social requerido (mín. 3 caracteres)').max(300),
+  razon: z.string()
+    .min(3, 'Nombre o razón social requerido (mín. 3 caracteres)')
+    .max(300)
+    .regex(
+      /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,&'/()\-]+$/,
+      'La razón social contiene caracteres no permitidos'
+    ),
   regimen: z.string().min(2, 'Régimen fiscal requerido').max(10),
   cp: z.string().regex(/^[0-9]{5}$/, 'Código postal inválido (5 dígitos)'),
   uso: z.string().min(2, 'Uso del CFDI requerido').max(10),
@@ -29,7 +35,7 @@ export const EmitSchema = z.object({
 })
 
 export const ResendSchema = z.object({
-  facturamaId: z.string().min(1, 'facturamaId requerido'),
-  email:       z.string().email('Correo inválido'),
-  serieFolio:  z.string().optional(),
+  invoiceId: z.string().uuid('invoiceId inválido'),
 })
+
+export const InvoiceIdParamSchema = z.string().uuid()
