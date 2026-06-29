@@ -30,6 +30,7 @@ import { getInvoiceService } from '@/lib/invoice-service'
 import type { NormalizedOrderWithPayment } from '@/lib/shopify/mapper'
 import { isAlreadyInvoiced, createInvoice, updateInvoiceStamp, deleteById } from '@/lib/db/invoice-repository'
 import { maskEmail } from '@/lib/log-redact'
+import { amountMatches } from '@/lib/amount-match'
 
 /** Forma canónica de error de la API */
 function errorResponse(
@@ -85,7 +86,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const msg = result.error.issues.map(i => i.message).join('; ')
     return errorResponse('FISCAL_INVALID', msg, 400)
   }
-  const { folio: rawFolio, fiscal } = result.data
+  const { folio: rawFolio, amount, fiscal } = result.data
   const folio = rawFolio.trim()
   if (!folio) {
     return errorResponse('INVALID_FOLIO', 'El folio no puede estar vacío.', 400)
@@ -114,6 +115,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   if (!order) {
     return errorResponse('ORDER_NOT_FOUND', `No se encontró ningún pedido con el folio "${folio}".`, 404)
+  }
+
+  // ── Segunda barrera de monto ───────────────────────────────────────────────
+  // Aunque el lookup ya validó el monto, un atacante puede llamar a emit
+  // directamente sin pasar por lookup. La re-validación aquí es obligatoria:
+  // si el monto no coincide → mismo error genérico que en lookup (VALIDATION_FAILED)
+  // para no revelar que el folio sí existe.
+  if (!amountMatches(amount, order.total)) {
+    return NextResponse.json(
+      {
+        error: {
+          code: 'VALIDATION_FAILED',
+          message: 'El folio o el monto no coinciden con un ticket facturable. Verifica los datos de tu ticket e intenta de nuevo.',
+        },
+      },
+      { status: 422 }
+    )
   }
 
   // ── Etapa 3: verificación real de doble-facturación ───────────────────────

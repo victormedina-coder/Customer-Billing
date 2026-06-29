@@ -113,6 +113,16 @@ export const RATE_LIMITS = {
     max: Number(process.env.RATE_LIMIT_DOWNLOAD_MAX ?? 40),
     windowSec: Number(process.env.RATE_LIMIT_DOWNLOAD_WINDOW_SEC ?? 60),
   },
+  /**
+   * Rate limit POR FOLIO para la compuerta de validación de monto.
+   * Por qué por folio y no por IP: un atacante puede rotar IPs, pero el folio
+   * es el recurso que está atacando. Con 5 intentos / 15 min un usuario legítimo
+   * nunca llega al límite (hace 1 intento); solo la fuerza bruta de montos lo activa.
+   */
+  validate: {
+    max: Number(process.env.RATE_LIMIT_VALIDATE_MAX ?? 5),
+    windowSec: Number(process.env.RATE_LIMIT_VALIDATE_WINDOW_SEC ?? 900),
+  },
 } as const
 
 // ── Resultado de rate limiting ───────────────────────────────────────────────

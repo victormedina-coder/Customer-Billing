@@ -9,6 +9,7 @@ import { REGIMENES, USOS_CFDI, METODO_PAGO_LABEL } from '../../_lib/constants'
 import { FormField } from '../ui/FormField'
 import { FormSelect } from '../ui/FormSelect'
 import { BackButton } from '../ui/BackButton'
+import { AlertBanner } from '../ui/AlertBanner'
 import { AvisoPrivacidadContent } from '../legal/AvisoPrivacidadContent'
 
 interface StepFiscalProps {
@@ -17,7 +18,8 @@ interface StepFiscalProps {
   touched: boolean
   privacyAccepted: boolean
   rfcValidation: RfcValidationState
-  satErrors?: Partial<Record<'rfc' | 'razon' | 'regimen' | 'cp', string>>
+  /** true cuando la validación de identidad SAT (Continuar) falló. Anti-oráculo: no indica qué campo. */
+  satError?: boolean
   validating?: boolean
   onBack: () => void
   onFiscalChange: <K extends keyof FiscalData>(key: K, value: FiscalData[K]) => void
@@ -44,42 +46,30 @@ const BTN_PRIMARY: React.CSSProperties = {
   transition: 'background 0.15s',
 }
 
+// Anti-oráculo: el badge SOLO refleja el formato local del RFC, nunca su
+// existencia o registro en el SAT. La verificación real ocurre al pulsar
+// Continuar y se colapsa en un error genérico (ver banner satError abajo).
 function RfcBadge({ state }: { state: RfcValidationState }) {
-  if (state === 'idle') return (
+  if (state === 'valid-format') return (
     <span style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', background: '#f5f5f5', border: '1px solid var(--border-default)', borderRadius: 20, padding: '3px 9px' }}>
-      Validación SAT
-    </span>
-  )
-  if (state === 'checking') return (
-    <span style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', background: '#f5f5f5', border: '1px solid var(--border-default)', borderRadius: 20, padding: '3px 9px', display: 'flex', alignItems: 'center', gap: 5 }}>
-      <span style={{ width: 10, height: 10, border: '1.5px solid rgba(0,0,0,0.15)', borderTopColor: '#000000', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
-      Verificando…
-    </span>
-  )
-  if (state === 'registered') return (
-    <span style={{ fontSize: 10, fontWeight: 700, color: '#000000', background: 'var(--brand-primary)', border: '1px solid var(--brand-primary)', borderRadius: 20, padding: '3px 9px' }}>
-      ✓ Registrado en SAT
-    </span>
-  )
-  if (state === 'format') return (
-    <span style={{ fontSize: 10, fontWeight: 700, color: '#b45309', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 20, padding: '3px 9px' }}>
-      RFC válido · No registrado
+      Formato válido
     </span>
   )
   if (state === 'invalid') return (
     <span style={{ fontSize: 10, fontWeight: 700, color: '#dc2626', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 20, padding: '3px 9px' }}>
-      Formato inválido
+      Formato de RFC inválido
     </span>
   )
   return null
 }
 
 export function StepFiscal({
-  ticket, fiscal, touched, privacyAccepted, rfcValidation, satErrors = {}, validating = false,
+  ticket, fiscal, touched, privacyAccepted, rfcValidation, satError = false, validating = false,
   onBack, onFiscalChange, onRfcBlur, onPrivacyAcceptedChange, onContinue,
 }: StepFiscalProps) {
-  // Fusión: errores locales de formato primero, luego errores SAT (coherencia con el servidor).
-  const errors = { ...(touched ? validateFiscal(fiscal) : {}), ...satErrors }
+  // Errores de FORMATO local por campo (de validateFiscal). Anti-oráculo: satError
+  // NO se mezcla aquí — se muestra como banner genérico, sin marcar campos individuales.
+  const errors = touched ? validateFiscal(fiscal) : {}
 
   // accordionOpen es UI-transient: no necesita sobrevivir el round-trip.
   const [accordionOpen, setAccordionOpen] = useState(false)
@@ -102,6 +92,18 @@ export function StepFiscal({
           <span style={{ color: '#047857', fontWeight: 600 }}> · {ticket.sucursal} · {formatMXN(ticket.total)}</span>
         </div>
       </div>
+
+      {/* Error genérico de identidad SAT — anti-oráculo: nunca señala qué campo falló,
+          solo recuerda la lista de datos a revisar. */}
+      {satError && (
+        <div style={{ marginBottom: 14 }}>
+          <AlertBanner
+            variant="error"
+            title="No pudimos validar tus datos fiscales con el SAT"
+            description="Verifica que tu RFC, nombre o razón social, código postal y régimen fiscal sean correctos e inténtalo de nuevo."
+          />
+        </div>
+      )}
 
       {/* Fiscal form card */}
       <div style={CARD}>

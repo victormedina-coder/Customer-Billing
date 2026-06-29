@@ -8,11 +8,14 @@ import Image from 'next/image'
 
 interface StepTicketProps {
   folio: string
+  /** String crudo que teclea el usuario, ej. "8,900.00" o "$1899" */
+  amount: string
   busy: boolean
   lookupError: LookupError
   ticket: Ticket | null
   showFolioHelp: boolean
   onFolioChange: (v: string) => void
+  onAmountChange: (v: string) => void
   onToggleFolioHelp: () => void
   onLookup: () => void
   onProceed: () => void
@@ -59,12 +62,18 @@ const BTN_GHOST: React.CSSProperties = {
 }
 
 export function StepTicket({
-  folio, busy, lookupError, ticket, showFolioHelp,
-  onFolioChange, onToggleFolioHelp,
+  folio, amount, busy, lookupError, ticket, showFolioHelp,
+  onFolioChange, onAmountChange, onToggleFolioHelp,
   onLookup, onProceed, onDismissError, onDownloadPdf,
 }: StepTicketProps) {
-  // Ticket válido cargado (sin error) → el botón pasa de "Buscar" a "Continuar".
+  // Ticket válido cargado (sin error) — puede ocurrir al hidratarse desde sessionStorage.
   const hasOkTicket = !!ticket && ticket.status === 'ok' && lookupError === ''
+
+  // Enter en cualquiera de los dos campos dispara la validación.
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') { e.preventDefault(); onLookup() }
+  }
+
   return (
     <div style={{ width: '100%', maxWidth: 480, animation: 'fadeIn 0.3s ease both' }}>
 
@@ -75,34 +84,34 @@ export function StepTicket({
         <div className="brand-logos" role="list" aria-label="Marcas disponibles">
           {/* Stetson: 1500×500 → ratio 3:1, wordmark horizontal */}
           <div className="brand-logos-item" role="listitem">
-            <div className="brand-logos-img-wrap">
+            <div className="brand-logos-img-wrap brand-logos-img-wrap--stetson">
               <Image
-                src="/assets/logo_Stetson_Brown.png"
+                src="/assets/Stetson_logo.png"
                 alt="Stetson"
                 fill
-                sizes="(max-width: 380px) 64px, (max-width: 640px) 80px, 96px"
+                sizes="(max-width: 380px) 108px, (max-width: 640px) 144px, 192px"
               />
             </div>
           </div>
           {/* Ariat: 801×801 → ratio 1:1, cuadrado */}
           <div className="brand-logos-item" role="listitem">
-            <div className="brand-logos-img-wrap">
+            <div className="brand-logos-img-wrap brand-logos-img-wrap--ariat">
               <Image
-                src="/assets/logo_ariat_degradado.png"
+                src="/assets/Ariat_logo.png"
                 alt="Ariat"
                 fill
-                sizes="(max-width: 380px) 24px, (max-width: 640px) 28px, 36px"
+                sizes="(max-width: 380px) 36px, (max-width: 640px) 48px, 64px"
               />
             </div>
           </div>
           {/* Western Brothers: 4000×2250 → ratio ~1.78:1 */}
           <div className="brand-logos-item" role="listitem">
-            <div className="brand-logos-img-wrap">
+            <div className="brand-logos-img-wrap brand-logos-img-wrap--wb">
               <Image
-                src="/assets/logo_wb_color.png"
+                src="/assets/logo_wb_Negro.png"
                 alt="Western Brothers"
                 fill
-                sizes="(max-width: 380px) 64px, (max-width: 640px) 80px, 96px"
+                sizes="(max-width: 380px) 64px, (max-width: 640px) 85px, 114px"
               />
             </div>
           </div>
@@ -130,7 +139,7 @@ export function StepTicket({
         </p>
       </div>
 
-      {/* QR / Folio card */}
+      {/* QR / Folio card — folio + importe en un solo formulario */}
       <div style={CARD}>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -139,7 +148,7 @@ export function StepTicket({
             label="Folio del ticket"
             value={folio}
             onChange={(e) => onFolioChange(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onLookup() } }}
+            onKeyDown={handleKeyDown}
             placeholder="Ej. 15-5333"
             autoComplete="off"
             badge={
@@ -245,33 +254,27 @@ export function StepTicket({
             </div>
           )}
 
-          {/* Importe field — solo lectura: se obtiene del ticket al buscar el folio */}
+          {/* Importe total — ahora EDITABLE: el usuario lo teclea tal como aparece en su ticket.
+              El error es genérico (no se revela si fue el folio o el monto el que falló). */}
           <FormField
-            label="Importe total"
-            value={ticket ? formatMXN(ticket.total) : ''}
-            placeholder="0.00"
+            label="Importe total del ticket"
+            value={amount}
+            onChange={(e) => onAmountChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ej. 1,898.00"
             type="text"
-            readOnly
-            inputMode="none"
-            style={{ background: '#f5f5f5', color: '#6b7280', cursor: 'not-allowed' }}
-            badge={
-              <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700, color: '#6b7280' }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0110 0v4" />
-                </svg>
-                Automático
-              </span>
-            }
+            inputMode="decimal"
+            autoComplete="off"
             hint={
               <div style={{ fontSize: 11.5, color: '#6b7280', fontWeight: 600, marginTop: 5 }}>
-                Se obtiene automáticamente al buscar tu folio.
+                Tal como aparece como Total en tu ticket.
               </div>
             }
           />
         </div>
       </div>
 
-      {/* Ticket encontrado (válido) */}
+      {/* Ticket OK (hidratado desde sessionStorage): banner informativo antes de avanzar */}
       {hasOkTicket && ticket && (
         <div style={{ marginBottom: 14 }}>
           <AlertBanner
@@ -281,7 +284,7 @@ export function StepTicket({
                 <path d="M22 11.08V12a10 10 0 11-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
               </svg>
             }
-            title="Ticket encontrado"
+            title="Ticket validado"
             description={
               <>
                 {ticket.sucursal} · {ticket.fecha} · Total <strong>{formatMXN(ticket.total)}</strong>
@@ -291,7 +294,32 @@ export function StepTicket({
         </div>
       )}
 
-      {/* Error states */}
+      {/* Error: folio o monto incorrecto (VALIDATION_FAILED — genérico a propósito) */}
+      {lookupError === 'invalid' && (
+        <div style={{ marginBottom: 14 }}>
+          <AlertBanner
+            variant="error"
+            icon={
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+            }
+            title="No pudimos validar tu ticket"
+            description="El folio o el monto no coinciden con un ticket facturable. Verifica los datos de tu ticket e intenta de nuevo."
+            actions={
+              <button type="button" onClick={onDismissError} className="btn-press" style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                fontSize: 12, fontWeight: 800, color: '#dc2626', padding: 0,
+                textDecoration: 'underline',
+              }}>
+                Intentar de nuevo
+              </button>
+            }
+          />
+        </div>
+      )}
+
+      {/* Error legado notfound — conservado por si algún estado viejo está en sessionStorage */}
       {lookupError === 'notfound' && (
         <div style={{ marginBottom: 14 }}>
           <AlertBanner
@@ -301,15 +329,40 @@ export function StepTicket({
                 <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
               </svg>
             }
-            title="Ticket no encontrado"
-            description="Verifica el folio. Es el número de Recibo de tu ticket (por ejemplo, 15-5333)."
+            title="No pudimos validar tu ticket"
+            description="El folio o el monto no coinciden con un ticket facturable. Verifica los datos de tu ticket e intenta de nuevo."
             actions={
               <button type="button" onClick={onDismissError} className="btn-press" style={{
                 background: 'none', border: 'none', cursor: 'pointer',
                 fontSize: 12, fontWeight: 800, color: '#dc2626', padding: 0,
                 textDecoration: 'underline',
               }}>
-                Intentar con otro folio
+                Intentar de nuevo
+              </button>
+            }
+          />
+        </div>
+      )}
+
+      {/* Error: demasiados intentos (RATE_LIMITED) */}
+      {lookupError === 'ratelimited' && (
+        <div style={{ marginBottom: 14 }}>
+          <AlertBanner
+            variant="warning"
+            icon={
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#b45309" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+            }
+            title="Demasiados intentos"
+            description="Espera unos minutos e inténtalo de nuevo."
+            actions={
+              <button type="button" onClick={onDismissError} className="btn-press" style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                fontSize: 12, fontWeight: 800, color: '#b45309', padding: 0,
+                textDecoration: 'underline',
+              }}>
+                Entendido
               </button>
             }
           />
@@ -397,51 +450,27 @@ export function StepTicket({
         </div>
       )}
 
-      {/* CTAs separados: Continuar (solo con ticket válido) + Buscar ticket (siempre) */}
-      {hasOkTicket && (
-        <button
-          type="button"
-          onClick={onProceed}
-          className="btn-press"
-          style={{ ...BTN_PRIMARY, marginBottom: 10 }}
-        >
-          Continuar
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#000000" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
-          </svg>
-        </button>
-      )}
-
+      {/* CTA único: "Continuar" dispara la validación folio+monto en un solo paso.
+          Si hay un ticket OK hidratado (sessionStorage), el botón avanza directamente. */}
       <button
         type="button"
-        onClick={onLookup}
+        onClick={hasOkTicket ? onProceed : onLookup}
         disabled={busy}
         className="btn-press"
-        style={
-          hasOkTicket
-            ? {
-                width: '100%', height: 48,
-                background: '#fff', color: '#000000',
-                border: '1.5px solid var(--border-default)', borderRadius: 13,
-                fontSize: 14, fontWeight: 800,
-                cursor: 'pointer', display: 'flex',
-                alignItems: 'center', justifyContent: 'center',
-                gap: 9, marginBottom: 14, opacity: busy ? 0.85 : 1,
-              }
-            : { ...BTN_PRIMARY, opacity: busy ? 0.85 : 1, marginBottom: 14 }
-        }
+        style={{ ...BTN_PRIMARY, opacity: busy ? 0.85 : 1, marginBottom: 14 }}
+        aria-busy={busy}
       >
         {busy ? (
           <>
             <LoadingSpinner size={17} />
-            Buscando ticket…
+            Validando…
           </>
         ) : (
           <>
+            {hasOkTicket ? 'Continuar' : 'Continuar'}
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#000000" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
             </svg>
-            {hasOkTicket ? 'Buscar otro ticket' : 'Buscar ticket'}
           </>
         )}
       </button>

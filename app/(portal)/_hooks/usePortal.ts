@@ -9,6 +9,7 @@ const INITIAL_FISCAL: FiscalData = { rfc: '', razon: '', regimen: '', cp: '', us
 const INITIAL_STATE: PortalState = {
   step: 'ticket',
   folio: '',
+  amount: '',
   busy: false,
   lookupError: '',
   ticket: null,
@@ -35,7 +36,7 @@ const SESSION_KEY = 'portal:state'
 /** Campos que se persisten. busy, touched y showFolioHelp son UI-transient. */
 type PersistedSnapshot = Pick<
   PortalState,
-  'step' | 'folio' | 'ticket' | 'fiscal' | 'factura' | 'privacyAccepted' | 'rfcRazon' | 'lookupError'
+  'step' | 'folio' | 'amount' | 'ticket' | 'fiscal' | 'factura' | 'privacyAccepted' | 'rfcRazon' | 'lookupError'
 >
 
 function readSnapshot(): PersistedSnapshot | null {
@@ -54,6 +55,7 @@ function writeSnapshot(s: PortalState): void {
     const snapshot: PersistedSnapshot = {
       step: s.step,
       folio: s.folio,
+      amount: s.amount,
       ticket: s.ticket,
       fiscal: s.fiscal,
       factura: s.factura,
@@ -83,21 +85,23 @@ function clearSnapshot(): void {
 // ─────────────────────────────────────────────────────────────────────────────
 const USE_MOCK = process.env.NEXT_PUBLIC_LOOKUP_MOCK === 'true'
 
-async function fetchTicket(folio: string): Promise<Ticket | null> {
+async function fetchTicket(folio: string, amount: number): Promise<Ticket | null> {
   if (USE_MOCK) {
-    // Fallback de mock: simula latencia y consulta DEMO_TICKETS
+    // Fallback de mock: simula latencia y valida folio + monto exacto contra DEMO_TICKETS.
+    // El error es genérico (VALIDATION_FAILED) sin importar cuál de los dos falló,
+    // igual que el backend real — para que el flujo de un solo paso sea coherente en dev.
     await new Promise<void>((resolve) => setTimeout(resolve, 600))
-    return DEMO_TICKETS[folio] ?? null
+    const demo = DEMO_TICKETS[folio]
+    if (!demo || demo.total !== amount) throw new Error('VALIDATION_FAILED')
+    return demo
   }
 
-  // Camino real: POST /api/invoice/lookup
+  // Camino real: POST /api/invoice/lookup — segundo factor: folio + monto
   const res = await fetch('/api/invoice/lookup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ folio }),
+    body: JSON.stringify({ folio, amount }),
   })
-
-  if (res.status === 404) return null
 
   if (!res.ok) {
     let errorCode = 'SHOPIFY_ERROR'
@@ -107,7 +111,7 @@ async function fetchTicket(folio: string): Promise<Ticket | null> {
     } catch {
       // ignore
     }
-    // Propagar el código de error para que el caller lo maneje
+    // Propagar el código para que el caller lo clasifique
     throw new Error(errorCode)
   }
 
@@ -147,6 +151,7 @@ export function usePortal(flash: (msg: string) => void) {
         ...prev,
         step: snap.step,
         folio: snap.folio,
+        amount: snap.amount ?? '',
         ticket: snap.ticket,
         fiscal: snap.fiscal,
         factura: snap.factura,
@@ -177,12 +182,13 @@ export function usePortal(flash: (msg: string) => void) {
     setState(prev => ({ ...prev, ...patch })), [])
 
   // ── Step 1: Ticket ──────────────────────────────────────────────────────
-  // runLookup es la búsqueda EXPLÍCITA (Enter o botón "Buscar"): no se busca al
-  // escribir para evitar matches transitorios con folios de longitud variable
-  // (p.ej. A1522-1000 vs A1522-10000) y no golpear la API en cada tecla.
-  // No avanza de paso: al encontrar el ticket lo carga y muestra el monto;
-  // luego el usuario pulsa "Continuar".
-  const runLookup = useCallback((folioRaw: string) => {
+  // runLookup es la validación EXPLÍCITA (Enter o botón "Continuar"): envía folio +
+  // monto juntos. El backend valida ambos en un solo paso y devuelve un error GENÉRICO
+  // si cualquiera de los dos no coincide (VALIDATION_FAILED) — a propósito, para no
+  // revelar cuál campo falló (prevención de enumeración de folios por terceros).
+  // Si la validación es exitosa, se avanza DIRECTO al paso fiscal (no hay "ver monto
+  // primero" porque el usuario ya lo ingresó).
+  const runLookup = useCallback((folioRaw: string, amountRaw: string) => {
     const normalizedFolio = folioRaw.trim().toUpperCase()
     if (lookupTimer.current) clearTimeout(lookupTimer.current)
 
@@ -192,61 +198,87 @@ export function usePortal(flash: (msg: string) => void) {
       return
     }
 
+    // Parseo del monto: quitar $, comas y espacios; aceptar "8900", "8,900.00", "$8,900.00"
+    const parsedAmount = parseFloat(amountRaw.replace(/[$,\s]/g, ''))
+    if (!amountRaw.trim() || isNaN(parsedAmount) || parsedAmount <= 0) {
+      flash('Ingresa el importe total de tu ticket')
+      set({ busy: false, ticket: null, lookupError: '' })
+      return
+    }
+
     set({ busy: true, lookupError: '', folio: normalizedFolio, ticket: null })
 
     // Pequeño debounce para evitar doble-click / submit accidental
     lookupTimer.current = setTimeout(() => {
-      fetchTicket(normalizedFolio)
+      fetchTicket(normalizedFolio, parsedAmount)
         .then((ticket) => {
-          if (!ticket) {
-            set({ busy: false, ticket: null, lookupError: 'notfound' })
+          if (ticket === null) {
+            // No debería ocurrir con el nuevo contrato (200 siempre trae ticket),
+            // pero lo dejamos como fallback defensivo.
+            set({ busy: false, ticket: null, lookupError: 'invalid' })
             return
           }
           if (ticket.status === 'invoiced') {
             set({ busy: false, ticket, lookupError: 'invoiced' })
             return
           }
-          // Ticket válido: se carga y se queda en el paso Ticket para ver el monto.
-          set({ busy: false, ticket, lookupError: '' })
+          // Ticket válido + monto correcto: avanzar directo a datos fiscales.
+          // No hay paso intermedio "ver monto" porque el usuario ya lo ingresó.
+          set({ busy: false, ticket, lookupError: '', step: 'fiscal' })
         })
         .catch((err: unknown) => {
-          if (err instanceof Error && err.message === 'FULLY_REFUNDED') {
+          const code = err instanceof Error ? err.message : ''
+
+          if (code === 'VALIDATION_FAILED') {
+            // Error genérico: folio O monto incorrecto — el backend no distingue
+            // cuál falló a propósito (anti-enumeración). El banner tampoco lo insinúa.
+            set({ busy: false, ticket: null, lookupError: 'invalid' })
+            return
+          }
+          if (code === 'RATE_LIMITED') {
+            // Demasiados intentos — el banner lo indica, no el flash.
+            set({ busy: false, ticket: null, lookupError: 'ratelimited' })
+            return
+          }
+          if (code === 'FULLY_REFUNDED') {
             // Pedido reembolsado en su totalidad — no se puede facturar.
-            // No se muestra flash genérico: el banner 'refunded' comunica el motivo.
             set({ busy: false, ticket: null, lookupError: 'refunded' })
             return
           }
-          if (err instanceof Error && err.message === 'DEADLINE_EXCEEDED') {
+          if (code === 'DEADLINE_EXCEEDED') {
             // Pedido encontrado pero fuera de la ventana de facturación del mes en curso.
-            // No se muestra flash genérico: el banner 'deadline' comunica el motivo.
             set({ busy: false, ticket: null, lookupError: 'deadline' })
             return
           }
-          // Error de Shopify u otro error de servidor (todas las tiendas fallaron,
-          // sin marcas configuradas, etc.)
+          // Error de Shopify u otro error de servidor
           flash('Error al consultar el pedido. Intenta de nuevo.')
           set({ busy: false, ticket: null, lookupError: '' })
         })
     }, 200)
   }, [set, flash])
 
-  // setFolio solo actualiza el campo. Editar el folio invalida el ticket cargado
-  // (oculta "Continuar") para que no quede un monto obsoleto de otra búsqueda.
+  // setFolio: editar el folio invalida el ticket cargado y limpia el error,
+  // para que no quede un resultado obsoleto de una búsqueda anterior.
   const setFolio = useCallback((v: string) =>
     set({ folio: v, lookupError: '', ticket: null, busy: false }), [set])
+
+  // setAmount: editar el importe también invalida el ticket cargado por la misma razón.
+  const setAmount = useCallback((v: string) =>
+    set({ amount: v, lookupError: '', ticket: null, busy: false }), [set])
 
   const toggleFolioHelp = useCallback(() =>
     setState(prev => ({ ...prev, showFolioHelp: !prev.showFolioHelp })), [])
 
-  // lookup explícito (Enter / botón "Buscar ticket").
+  // lookup explícito (Enter / botón "Continuar"): toma folio y amount del estado actual.
   const lookup = useCallback(() => {
-    runLookup(stateRef.current.folio)
+    runLookup(stateRef.current.folio, stateRef.current.amount)
   }, [runLookup])
 
-  // proceed: avanza a Datos fiscales solo si ya hay un ticket válido cargado.
+  // proceed ya no es necesario como acción separada (la validación exitosa avanza sola),
+  // pero se conserva para no romper la firma pública del hook; no hace nada nuevo.
   const proceed = useCallback(() => {
     const t = stateRef.current.ticket
-    if (!t || t.status !== 'ok') { flash('Busca tu ticket primero'); return }
+    if (!t || t.status !== 'ok') { flash('Valida tu ticket primero'); return }
     set({ step: 'fiscal' })
   }, [set, flash])
 
@@ -282,11 +314,18 @@ export function usePortal(flash: (msg: string) => void) {
     if (!current.ticket) { flash('Verifica tu ticket primero'); return }
     set({ busy: true })
 
+    // Parseo del monto igual que en runLookup: el backend de emit también requiere amount.
+    const parsedAmount = parseFloat(current.amount.replace(/[$,\s]/g, ''))
+
     try {
       const res = await fetch('/api/invoice/emit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folio: current.ticket.folio, fiscal: current.fiscal }),
+        body: JSON.stringify({
+          folio: current.ticket.folio,
+          amount: parsedAmount,
+          fiscal: current.fiscal,
+        }),
       })
 
       if (!res.ok) {
@@ -420,7 +459,7 @@ export function usePortal(flash: (msg: string) => void) {
     state,
     hydrated,
     // Step 1
-    setFolio, toggleFolioHelp, lookup, proceed, dismissError,
+    setFolio, setAmount, toggleFolioHelp, lookup, proceed, dismissError,
     // Step 2
     setFiscal, setPrivacyAccepted, setTouched, goConfirm,
     // Step 3

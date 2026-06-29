@@ -4,13 +4,23 @@
  * Proxy servidor para la validación de datos fiscales contra el SAT vía Facturama.
  * Nunca se llama a Facturama desde el cliente — todo pasa por aquí.
  *
- * Modos:
- *   - "status"  (solo rfc)              → llama validarRfc()
- *   - "full"    (rfc+name+zipCode+fiscalRegime) → llama validarReceptor()
+ * Contrato (único modo soportado):
+ *   Body requerido: { rfc, name, zipCode, fiscalRegime }
+ *   200 → { valid: boolean }
+ *     true  = RFC existe en el SAT Y los 3 campos coinciden exactamente.
+ *     false = alguno de los 4 criterios no coincidió.
+ *
+ * El resultado se COLAPSA a un booleano en el servidor a propósito:
+ *   - No se revelan qué campos fallaron (MatchName, MatchZipCode, etc.).
+ *   - No se revela si el RFC existe por separado del conjunto.
+ *   Esto impide usar el endpoint como oráculo de enumeración de datos fiscales
+ *   (descubrir si un RFC existe, o qué campo exacto no coincide con el padrón del SAT).
  *
  * Errores:
- *   400 INVALID_RFC        → RFC malformado (falla la validación Zod)
- *   503 FACTURAMA_ERROR    → fallo real de Facturama (5xx, red, timeout)
+ *   400 INVALID_BODY  → body no es JSON o faltan campos requeridos
+ *   400 INVALID_RFC   → RFC malformado (falla la validación Zod de formato)
+ *   429 RATE_LIMITED  → límite por IP superado
+ *   503 FACTURAMA_ERROR → fallo real de Facturama/SAT (5xx, red, timeout)
  */
 
 export const runtime = 'nodejs'
@@ -18,7 +28,7 @@ export const runtime = 'nodejs'
 import { NextRequest, NextResponse } from 'next/server'
 import { rateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit'
 import { FiscalValidateSchema } from '@/lib/api/schemas'
-import { validarRfc, validarReceptor } from '@/lib/invoice-service/facturama-client'
+import { validarReceptor } from '@/lib/invoice-service/facturama-client'
 import { maskRfc } from '@/lib/log-redact'
 
 function errorResponse(code: string, message: string, status: number): NextResponse {
@@ -41,59 +51,56 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     body = await req.json()
   } catch {
-    return errorResponse('INVALID_BODY', 'El cuerpo de la petición no es JSON válido.', 400)
+    // Body no es JSON válido — error genérico sin detalles fiscales
+    return errorResponse('INVALID_BODY', 'Datos incompletos para validar.', 400)
   }
 
   // ── 2. Validación Zod ─────────────────────────────────────────────────────
+  // Si falta cualquiera de los 4 campos o el RFC tiene formato incorrecto, se
+  // responde con error genérico (INVALID_BODY) o de formato (INVALID_RFC).
+  // Nunca se comunica al cliente qué campo fiscal específico causó el rechazo.
   const result = FiscalValidateSchema.safeParse(body)
   if (!result.success) {
-    const msg = result.error.issues.map((i) => i.message).join('; ')
-    return errorResponse('INVALID_RFC', msg, 400)
+    const hasRfcError = result.error.issues.some((i) => i.path.includes('rfc'))
+    if (hasRfcError) {
+      // El formato del RFC es conocimiento del cliente (regex público del SAT),
+      // no es un oráculo de datos reales — se puede indicar.
+      const msg = result.error.issues
+        .filter((i) => i.path.includes('rfc'))
+        .map((i) => i.message)
+        .join('; ')
+      return errorResponse('INVALID_RFC', msg, 400)
+    }
+    // Campos faltantes o con formato inválido (name, zipCode, fiscalRegime)
+    return errorResponse('INVALID_BODY', 'Datos incompletos para validar.', 400)
   }
 
   const { rfc, name, zipCode, fiscalRegime } = result.data
-  const hasFullSet = name !== undefined && zipCode !== undefined && fiscalRegime !== undefined
 
-  // ── 3. Modo conjunto (los 3 campos opcionales presentes) ──────────────────
-  if (hasFullSet) {
-    try {
-      const validation = await validarReceptor({
-        Rfc: rfc,
-        Name: name,
-        ZipCode: zipCode,
-        FiscalRegime: fiscalRegime,
-      })
-      return NextResponse.json({
-        mode: 'full',
-        existsRfc: validation.ExistRfc,
-        matchName: validation.MatchName,
-        matchZipCode: validation.MatchZipCode,
-        matchFiscalRegime: validation.MatchFiscalRegime,
-      })
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err)
-      console.error('[fiscal/validate] Error en validarReceptor:', { rfc: maskRfc(rfc), error: message })
-      return errorResponse(
-        'FACTURAMA_ERROR',
-        'No se pudo verificar con el SAT en este momento. Intenta de nuevo más tarde.',
-        503
-      )
-    }
-  }
-
-  // ── 4. Modo existencia (solo rfc) ─────────────────────────────────────────
+  // ── 3. Validación de conjunto contra el SAT ───────────────────────────────
+  // Se llama a validarReceptor() con los 4 campos y se COLAPSA la respuesta a
+  // un único booleano. Los granulares (ExistRfc, MatchName, MatchZipCode,
+  // MatchFiscalRegime) NUNCA salen del servidor — solo true/false llega al cliente.
   try {
-    const existsRfc = await validarRfc(rfc)
-    return NextResponse.json({ mode: 'status', existsRfc })
+    const v = await validarReceptor({
+      Rfc:          rfc,
+      Name:         name,
+      ZipCode:      zipCode,
+      FiscalRegime: fiscalRegime,
+    })
+
+    // Colapso server-side: valid es true solo si los 4 criterios pasan.
+    // No se distingue qué campo falló ni si el RFC existe por separado.
+    const valid = v.ExistRfc && v.MatchName && v.MatchZipCode && v.MatchFiscalRegime
+
+    return NextResponse.json({ valid })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
-    // 404 de la ruta o 5xx de Facturama: degradamos con gracia.
-    // En modo existencia (blur) no bloqueamos al cliente — devolvemos existsRfc: null
-    // para que el hook trate el resultado como "no se pudo verificar".
-    console.error('[fiscal/validate] Error en validarRfc:', { rfc: maskRfc(rfc), error: message })
+    console.error('[fiscal/validate] Error en validarReceptor:', { rfc: maskRfc(rfc), error: message })
+    // Estado de servicio externo — no es un oráculo, el cliente lo usa para degradar con gracia.
     return errorResponse(
       'FACTURAMA_ERROR',
-      'No se pudo verificar con el SAT en este momento.',
+      'No se pudo verificar con el SAT en este momento. Intenta de nuevo más tarde.',
       503
     )
   }

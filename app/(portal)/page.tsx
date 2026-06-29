@@ -3,7 +3,6 @@ import { useState, useCallback } from 'react'
 import { usePortal } from './_hooks/usePortal'
 import { useToast } from './_hooks/useToast'
 import { useRfcValidation } from './_hooks/useRfcValidation'
-import type { SatFieldErrors } from './_hooks/useRfcValidation'
 import { validateFiscal } from './_lib/validators'
 import { BrandHeader } from './_components/BrandHeader'
 import { Stepper } from './_components/Stepper'
@@ -24,38 +23,24 @@ export default function PortalPage() {
   const { state, hydrated } = portal
   const { fiscal } = state
 
-  // Errores SAT del último validateReceptor (se limpian por campo al editar).
-  const [satErrors, setSatErrors] = useState<SatFieldErrors>({})
+  // Error SAT genérico del último validateReceptor (anti-oráculo: no distingue
+  // campo). Se limpia en cuanto el usuario toca cualquier dato fiscal.
+  const [satError, setSatError] = useState(false)
   // Indicador de "validando contra el SAT" para el botón Continuar.
   const [validating, setValidating] = useState(false)
 
-  // ── Blur del RFC: solo verificación de existencia (modo status) ────────────
+  // ── Blur del RFC: solo valida FORMATO local, sin red (ver useRfcValidation) ─
   const handleRfcBlur = useCallback((rfc: string) => {
     rfcVal.validateRfc(rfc)
   }, [rfcVal])
 
-  // ── Cambio de cualquier campo fiscal: limpia el satError correspondiente ───
+  // ── Cambio de cualquier campo fiscal: limpia el satError genérico ──────────
   const handleFiscalChange = useCallback(
     <K extends keyof typeof fiscal>(key: K, value: typeof fiscal[K]) => {
-      // Mapa de campo FiscalData → clave de satErrors
-      const satKey = (
-        key === 'rfc' ? 'rfc' :
-        key === 'razon' ? 'razon' :
-        key === 'regimen' ? 'regimen' :
-        key === 'cp' ? 'cp' :
-        null
-      ) as keyof SatFieldErrors | null
-
-      if (satKey && satErrors[satKey]) {
-        setSatErrors(prev => {
-          const next = { ...prev }
-          delete next[satKey]
-          return next
-        })
-      }
+      if (satError) setSatError(false)
       portal.setFiscal(key, value)
     },
-    [portal, satErrors]
+    [portal, satError]
   )
 
   // ── Botón Continuar en StepFiscal ─────────────────────────────────────────
@@ -77,21 +62,22 @@ export default function PortalPage() {
         // No se pudo contactar a Facturama/SAT — permitir avanzar con advertencia.
         // El timbrado es el gate final de validación.
         toast.show('No se pudo verificar con el SAT en este momento — podrás continuar; la validación final ocurre al timbrar.')
-        setSatErrors({})
+        setSatError(false)
         portal.goConfirm()
         return
       }
 
       if (!result.ok) {
-        // Datos no coinciden con el SAT — bloquear y mostrar errores por campo.
-        setSatErrors(result.fieldErrors)
+        // Identidad SAT no coincide — anti-oráculo: bloqueamos con un único
+        // mensaje genérico, sin indicar qué campo específico falló.
+        setSatError(true)
         portal.setTouched(true)
-        toast.show('Revisa los datos: no coinciden con el SAT')
+        toast.show('No pudimos validar tus datos fiscales. Revísalos.')
         return
       }
 
       // Todo correcto
-      setSatErrors({})
+      setSatError(false)
       portal.goConfirm()
     } finally {
       setValidating(false)
@@ -114,11 +100,13 @@ export default function PortalPage() {
           {state.step === 'ticket' && (
             <StepTicket
               folio={state.folio}
+              amount={state.amount}
               busy={state.busy}
               lookupError={state.lookupError}
               ticket={state.ticket}
               showFolioHelp={state.showFolioHelp}
               onFolioChange={portal.setFolio}
+              onAmountChange={portal.setAmount}
               onToggleFolioHelp={portal.toggleFolioHelp}
               onLookup={portal.lookup}
               onProceed={portal.proceed}
@@ -134,9 +122,9 @@ export default function PortalPage() {
               touched={state.touched}
               privacyAccepted={state.privacyAccepted}
               rfcValidation={rfcVal.state}
-              satErrors={satErrors}
+              satError={satError}
               validating={validating}
-              onBack={() => { portal.goTo('ticket'); rfcVal.reset(); setSatErrors({}) }}
+              onBack={() => { portal.goTo('ticket'); rfcVal.reset(); setSatError(false) }}
               onFiscalChange={handleFiscalChange}
               onRfcBlur={handleRfcBlur}
               onPrivacyAcceptedChange={portal.setPrivacyAccepted}

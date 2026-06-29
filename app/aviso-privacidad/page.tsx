@@ -78,7 +78,7 @@ export default function AvisoPrivacidadPage(): React.ReactElement {
       <header style={PAGE_STYLES.header}>
         <div style={PAGE_STYLES.logoWrap}>
           <Image
-            src="/assets/logo.png"
+            src="/assets/logoGQ1522.png"
             alt="Grupo Quince 22"
             width={105}
             height={32}

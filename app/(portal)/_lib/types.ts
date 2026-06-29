@@ -1,8 +1,19 @@
 export type PortalStep = 'ticket' | 'fiscal' | 'confirm' | 'success'
 
-export type LookupError = '' | 'notfound' | 'invoiced' | 'deadline' | 'refunded'
+export type LookupError =
+  | ''
+  | 'notfound'    // legado — ya no usa el backend, mantenemos por seguridad
+  | 'invalid'     // folio O monto incorrecto (error genérico, VALIDATION_FAILED)
+  | 'invoiced'
+  | 'deadline'
+  | 'refunded'
+  | 'ratelimited' // demasiados intentos (RATE_LIMITED)
 
-export type RfcValidationState = 'idle' | 'checking' | 'registered' | 'format' | 'invalid'
+// 'idle'         — campo vacío o sin tocar
+// 'valid-format' — formato correcto según regex local; NO afirma registro en el SAT
+//                  (anti-oráculo: no revelamos existencia en onBlur)
+// 'invalid'      — formato incorrecto según regex local
+export type RfcValidationState = 'idle' | 'valid-format' | 'invalid'
 
 export interface TicketItem {
   desc: string
@@ -49,6 +60,8 @@ export interface GeneratedInvoice {
 export interface PortalState {
   step: PortalStep
   folio: string
+  /** Lo que el usuario teclea en el campo "Importe total" (string crudo, ej. "8,900.00" o "$1899"). */
+  amount: string
   busy: boolean
   lookupError: LookupError
   ticket: Ticket | null

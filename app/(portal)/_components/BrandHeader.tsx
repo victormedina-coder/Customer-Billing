@@ -9,7 +9,7 @@ export function BrandHeader({ storeName, tagline }: BrandHeaderProps) {
   return (
     <header className="brand-header">
       <Image
-        src="/assets/logo.png"
+        src="/assets/logoGQ1522.png"
         alt={storeName}
         width={105}
         height={32}
