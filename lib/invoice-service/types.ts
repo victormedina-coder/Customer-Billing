@@ -1,18 +1,7 @@
 import type { NormalizedOrderWithPayment } from '../shopify/mapper'
+import type { FiscalInput } from '@/src/domain/fiscal/FiscalInput'
 
-/**
- * Datos fiscales del receptor tal como los captura el cliente en el portal.
- * Duplica FiscalData de app/(portal)/_lib/types.ts para evitar un ciclo de
- * imports entre lib/ y app/. Ambas definiciones deben mantenerse en sync.
- */
-export interface FiscalInput {
-  rfc: string
-  razon: string
-  regimen: string
-  cp: string
-  uso: string
-  email: string
-}
+export type { FiscalInput }
 
 /** Resultado de una emisión exitosa de CFDI */
 export interface EmitResult {

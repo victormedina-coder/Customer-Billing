@@ -1,10 +1,10 @@
 import type { FiscalData } from './types'
+import { RFC_REGEX } from '../../../src/domain/fiscal/Rfc'
 
-const RFC_RE = /^[A-ZÑ&]{3,4}[0-9]{6}[A-Z0-9]{3}$/
 const RAZON_RE = /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,&'/()\-]+$/
 
 export function isValidRfcFormat(rfc: string): boolean {
-  return RFC_RE.test(rfc.trim().toUpperCase())
+  return RFC_REGEX.test(rfc.trim().toUpperCase())
 }
 
 export function isValidEmail(email: string): boolean {

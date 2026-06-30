@@ -1,6 +1,7 @@
 import { z } from 'zod'
+import { RFC_REGEX } from '../../src/domain/fiscal/Rfc'
 
-const RFC_RE = /^[A-ZÑ&]{3,4}[0-9]{6}[A-Z0-9]{3}$/
+const RFC_RE = RFC_REGEX
 
 export const LookupSchema = z.object({
   folio: z.string().min(1, 'El folio no puede estar vacío').max(50),

@@ -1,3 +1,5 @@
+import type { FiscalInput } from '@/src/domain/fiscal/FiscalInput'
+
 export type PortalStep = 'ticket' | 'fiscal' | 'confirm' | 'success'
 
 export type LookupError =
@@ -39,14 +41,7 @@ export interface Ticket {
   fechaTimbrado?: string
 }
 
-export interface FiscalData {
-  rfc: string
-  razon: string
-  regimen: string
-  cp: string
-  uso: string
-  email: string
-}
+export type FiscalData = FiscalInput
 
 export interface GeneratedInvoice {
   invoiceId: string | null
