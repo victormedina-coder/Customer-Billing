@@ -1,21 +1,6 @@
-import { drizzle } from 'drizzle-orm/postgres-js'
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js'
-import postgresJs from 'postgres'
-import * as schema from './schema'
-
-type Schema = typeof schema
-
-let _db: PostgresJsDatabase<Schema> | null = null
-
 /**
- * Returns the shared Drizzle client, creating it on first call.
- * DATABASE_URL is read lazily so importing this module at the top level
- * does not throw during build/test when the env var is absent.
+ * PUENTE — re-exporta desde src/infrastructure/db/client.ts.
+ * Los imports existentes siguen funcionando sin cambios.
+ * Este puente se elimina en el Paso 9 del refactor DDD.
  */
-export function getDb(): PostgresJsDatabase<Schema> {
-  if (!_db) {
-    const client = postgresJs(process.env.DATABASE_URL!, { max: 1 })
-    _db = drizzle(client, { schema })
-  }
-  return _db
-}
+export { getDb } from '../../src/infrastructure/db/client'
