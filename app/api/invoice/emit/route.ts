@@ -1,8 +1,8 @@
 /**
  * POST /api/invoice/emit
  *
- * Recibe: { folio: string, fiscal: FiscalData }
- * Responde: { factura: { uuid, serieFolio, fecha, sello } } en 200,
+ * Recibe: { folio: string, amount: number, fiscal: FiscalData }
+ * Responde: { factura: { invoiceId, uuid, serieFolio, fecha, sello, emisor } } en 200,
  *           o error estructurado en 4xx/5xx.
  *
  * Runtime: Node.js (no edge) — secretos de servidor, caché OAuth en memoria.
@@ -14,6 +14,7 @@
  *   409 ALREADY_INVOICED  → el pedido ya tiene CFDI (activado en Etapa 3)
  *   409 FULLY_REFUNDED    → pedido reembolsado en su totalidad (neto = 0)
  *   422 DEADLINE_EXCEEDED → fuera de la ventana de facturación
+ *   422 VALIDATION_FAILED → monto no coincide con el pedido
  *   502 SHOPIFY_ERROR     → todas las tiendas fallaron / error de conexión
  *   503 FACTURAMA_ERROR   → Facturama lanza error al timbrar
  */
@@ -23,14 +24,8 @@ export const runtime = 'nodejs'
 import { NextRequest, NextResponse } from 'next/server'
 import { rateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit'
 import { EmitSchema } from '@/lib/api/schemas'
-import { getOrderSource } from '@/lib/order-source'
-import { isWithinInvoiceWindow } from '@/lib/invoice-window'
-import { isFullyRefunded } from '@/lib/refund'
-import { getInvoiceService } from '@/lib/invoice-service'
-import type { NormalizedOrderWithPayment } from '@/lib/shopify/mapper'
-import { isAlreadyInvoiced, createInvoice, updateInvoiceStamp, deleteById } from '@/lib/db/invoice-repository'
-import { maskEmail } from '@/lib/log-redact'
-import { amountMatches } from '@/lib/amount-match'
+import { makeEmitInvoiceUseCase } from '@/src/composition/makeEmitInvoiceUseCase'
+import type { EmitErrorCode } from '@/src/application/invoice/EmitInvoiceUseCase'
 
 /** Forma canónica de error de la API */
 function errorResponse(
@@ -59,6 +54,17 @@ function mockCfdi(folio: string) {
     sello,
     emisor: { rfc: 'XAXX010101000', nombre: 'EMISOR DEMO (MOCK)', regimen: '601' },
   }
+}
+
+/** Mapa de código de error de dominio → status HTTP */
+const ERROR_STATUS: Record<EmitErrorCode, number> = {
+  VALIDATION_FAILED:  422,
+  ORDER_NOT_FOUND:    404,
+  SHOPIFY_ERROR:      502,
+  ALREADY_INVOICED:   409,
+  FULLY_REFUNDED:     409,
+  DEADLINE_EXCEEDED:  422,
+  FACTURAMA_ERROR:    503,
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -99,144 +105,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ factura }, { status: 200 })
   }
 
-  // ── 4. Re-lookup en Shopify ───────────────────────────────────────────────
-  let order: NormalizedOrderWithPayment | null
-  try {
-    const source = getOrderSource()
-    const found = await source.findOrder({ orderNumber: folio, verifier: '' })
-    // findOrder devuelve NormalizedOrder; lo casteamos al tipo extendido.
-    // paymentGatewayNames puede no existir si la fuente no es Shopify — es opcional.
-    order = found as NormalizedOrderWithPayment | null
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error('[emit] Error al consultar Shopify:', { folio, error: message })
-    return errorResponse('SHOPIFY_ERROR', 'Error al consultar el pedido. Intenta de nuevo más tarde.', 502)
+  // ── 4–10. Orquestación delegada al use case ───────────────────────────────
+  const useCase = makeEmitInvoiceUseCase()
+  const ucResult = await useCase.execute({ folio, amount, fiscal })
+
+  if (!ucResult.ok) {
+    const { code, message } = ucResult.error
+    return errorResponse(code, message, ERROR_STATUS[code])
   }
 
-  if (!order) {
-    return errorResponse('ORDER_NOT_FOUND', `No se encontró ningún pedido con el folio "${folio}".`, 404)
-  }
-
-  // ── Segunda barrera de monto ───────────────────────────────────────────────
-  // Aunque el lookup ya validó el monto, un atacante puede llamar a emit
-  // directamente sin pasar por lookup. La re-validación aquí es obligatoria:
-  // si el monto no coincide → mismo error genérico que en lookup (VALIDATION_FAILED)
-  // para no revelar que el folio sí existe.
-  if (!amountMatches(amount, order.total)) {
-    return NextResponse.json(
-      {
-        error: {
-          code: 'VALIDATION_FAILED',
-          message: 'El folio o el monto no coinciden con un ticket facturable. Verifica los datos de tu ticket e intenta de nuevo.',
-        },
-      },
-      { status: 422 }
-    )
-  }
-
-  // ── Etapa 3: verificación real de doble-facturación ───────────────────────
-  const alreadyInvoiced = await isAlreadyInvoiced(order.id, order.storeName)
-  if (alreadyInvoiced) {
-    return errorResponse('ALREADY_INVOICED', 'Este pedido ya cuenta con un CFDI emitido.', 409)
-  }
-
-  if (isFullyRefunded(order)) {
-    return errorResponse(
-      'FULLY_REFUNDED',
-      'Este pedido fue reembolsado en su totalidad y no puede facturarse.',
-      409
-    )
-  }
-
-  // ── 5. Validar ventana de facturación ─────────────────────────────────────
-  if (!isWithinInvoiceWindow(order.createdAt)) {
-    return errorResponse(
-      'DEADLINE_EXCEEDED',
-      'El periodo de facturación de este ticket ya venció (solo se factura dentro del mes en curso).',
-      422
-    )
-  }
-
-  // ── 6. Insert-first: adquirir el cerrojo UNIQUE antes de timbrar ───────────
-  // Insertamos una fila 'pending' que adquiere el cerrojo UNIQUE(order_id, store_name).
-  // Si otro request ya lo tiene (carrera), createInvoice devuelve already_invoiced.
-  // Esto serializa el timbrado: solo quien gana el INSERT gasta dinero en Facturama.
-  // NOTA: una fila 'pending' también hará que isAlreadyInvoiced (paso anterior) devuelva
-  // true — comportamiento conservador correcto. Un job de conciliación futuro deberá
-  // limpiar filas 'pending' viejas (timbrados iniciados pero nunca completados).
-  let invoiceId: string
-  const pending = await createInvoice({
-    orderId: order.id,
-    orderNumber: order.orderNumber,
-    storeName: order.storeName,
-    rfcReceptor: fiscal.rfc,
-    razonSocial: fiscal.razon,
-    email: fiscal.email,
-    status: 'pending',
-    invoiceType: 'individual',
-  })
-  if (!pending.created) {
-    return errorResponse('ALREADY_INVOICED', 'Este pedido ya cuenta con un CFDI emitido.', 409)
-  }
-  invoiceId = pending.invoice.id
-
-  // ── 7. Timbrar en Facturama ───────────────────────────────────────────────
-  let emitResult
-  try {
-    emitResult = await getInvoiceService().emitir({ order, fiscal })
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error('[emit] Facturama:', message)
-    // El timbrado falló: liberamos el cerrojo borrando la fila pendiente para
-    // permitir que el cliente reintente.
-    try {
-      await deleteById(invoiceId)
-    } catch (delErr: unknown) {
-      const delMsg = delErr instanceof Error ? delErr.message : String(delErr)
-      console.error('[emit] No se pudo limpiar la fila pendiente tras fallo de timbrado:', {
-        invoiceId, error: delMsg,
-      })
-    }
-    return errorResponse('FACTURAMA_ERROR', 'Error al generar la factura. Intenta de nuevo más tarde.', 503)
-  }
-
-  // ── 8. Persistir los datos del CFDI en la fila ya bloqueada ────────────────
-  // El cerrojo ya está tomado; este UPDATE no puede fallar por carrera.
-  // Si la DB falla aquí (raro), el CFDI YA está timbrado y el pedido sigue
-  // bloqueado contra doble-timbre — se concilia manualmente. No tumbamos la respuesta.
-  try {
-    await updateInvoiceStamp(invoiceId, {
-      facturamaId: emitResult.facturamaId,
-      uuidCfdi: emitResult.uuid,
-      status: 'emitted',
-    })
-  } catch (dbErr: unknown) {
-    const dbMsg = dbErr instanceof Error ? dbErr.message : String(dbErr)
-    console.error('[emit] CFDI timbrado pero no se pudo actualizar la fila (conciliar):', {
-      invoiceId, error: dbMsg,
-    })
-  }
-
-  // ── 9. Enviar el CFDI por correo (best-effort) ────────────────────────────
-  try {
-    await getInvoiceService().enviarCorreo(emitResult.facturamaId, fiscal.email, {
-      serieFolio: emitResult.serieFolio,
-    })
-  } catch (mailErr: unknown) {
-    const mailMsg = mailErr instanceof Error ? mailErr.message : String(mailErr)
-    console.error('[emit] Correo automático falló (CFDI ya timbrado):', {
-      facturamaId: emitResult.facturamaId, email: maskEmail(fiscal.email), error: mailMsg,
-    })
-  }
-
-  // ── 10. Responder al cliente con el invoiceId como token ──────────────────
-  const factura = {
-    invoiceId,
-    uuid:        emitResult.uuid,
-    serieFolio:  emitResult.serieFolio,
-    fecha:       emitResult.fecha,
-    sello:       emitResult.sello,
-    emisor:      emitResult.emisor,
-  }
+  const factura = ucResult.value
   return NextResponse.json({ factura }, { status: 200 })
 }

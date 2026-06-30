@@ -23,8 +23,8 @@ export const runtime = 'nodejs'
 import { NextRequest, NextResponse } from 'next/server'
 import { rateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit'
 import { ResendSchema } from '@/lib/api/schemas'
-import { getInvoiceService } from '@/lib/invoice-service'
-import { findById } from '@/lib/db/invoice-repository'
+import { makeResendInvoiceUseCase } from '@/src/composition/makeResendInvoiceUseCase'
+import type { ResendErrorCode } from '@/src/application/invoice/ResendInvoiceUseCase'
 
 /** Forma canónica de error de la API */
 function errorResponse(
@@ -33,6 +33,13 @@ function errorResponse(
   status: number
 ): NextResponse {
   return NextResponse.json({ error: { code, message } }, { status })
+}
+
+/** Mapa de código de error de dominio → status HTTP */
+const ERROR_STATUS: Record<ResendErrorCode, number> = {
+  NOT_FOUND:   404,
+  NO_EMAIL:    422,
+  EMAIL_ERROR: 503,
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -62,29 +69,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const { invoiceId } = result.data
 
-  // ── 3. Resolver fila en DB usando el invoiceId como token de capacidad ────
-  const row = await findById(invoiceId)
-  if (!row || !row.facturamaId) {
-    return errorResponse('NOT_FOUND', 'Factura no encontrada.', 404)
+  // ── 3–5. Orquestación delegada al use case ────────────────────────────────
+  const useCase = makeResendInvoiceUseCase()
+  const ucResult = await useCase.execute(invoiceId)
+
+  if (!ucResult.ok) {
+    const { code, message } = ucResult.error
+    return errorResponse(code, message, ERROR_STATUS[code])
   }
 
-  // ── 4. Usar el email guardado en DB — nunca el del request ───────────────
-  if (!row.email) {
-    return errorResponse('NO_EMAIL', 'No hay correo registrado para esta factura.', 422)
-  }
-
-  // ── 5. Enviar correo via InvoiceService ───────────────────────────────────
-  try {
-    await getInvoiceService().enviarCorreo(row.facturamaId, row.email, {})
-    return NextResponse.json({ ok: true }, { status: 200 })
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err)
-    // No loguear el email en claro — solo el invoiceId y el error
-    console.error('[resend] Error al enviar el correo:', { invoiceId, error: message })
-    return errorResponse(
-      'EMAIL_ERROR',
-      'No se pudo enviar el correo. Intenta de nuevo más tarde.',
-      503
-    )
-  }
+  return NextResponse.json({ ok: true }, { status: 200 })
 }

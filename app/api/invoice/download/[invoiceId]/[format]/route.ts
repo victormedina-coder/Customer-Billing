@@ -24,20 +24,22 @@ export const runtime = 'nodejs'
 
 import { NextResponse } from 'next/server'
 import { rateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit'
-import { getInvoiceService } from '@/lib/invoice-service'
-import { findById } from '@/lib/db/invoice-repository'
 import { InvoiceIdParamSchema } from '@/lib/api/schemas'
+import { makeDownloadInvoiceUseCase } from '@/src/composition/makeDownloadInvoiceUseCase'
+import type { DownloadErrorCode } from '@/src/application/invoice/DownloadInvoiceUseCase'
 
 const ALLOWED_FORMATS = new Set(['pdf', 'xml'])
-
-const CONTENT_TYPES: Record<string, string> = {
-  pdf: 'application/pdf',
-  xml: 'application/xml',
-}
 
 /** Forma canónica de error de la API */
 function errorResponse(code: string, message: string, status: number): NextResponse {
   return NextResponse.json({ error: { code, message } }, { status })
+}
+
+/** Mapa de código de error de dominio → status HTTP */
+const ERROR_STATUS: Record<DownloadErrorCode, number> = {
+  NOT_FOUND:      404,
+  DOWNLOAD_ERROR: 502,
+  SERVICE_ERROR:  503,
 }
 
 export async function GET(
@@ -74,33 +76,19 @@ export async function GET(
 
   const safeFormat = format as 'pdf' | 'xml'
 
-  // ── 3. Resolver facturamaId desde la DB usando el invoiceId como token ───
-  const row = await findById(invoiceId)
-  if (!row || !row.facturamaId) {
-    return errorResponse('NOT_FOUND', 'Factura no encontrada.', 404)
+  // ── 3–4. Orquestación delegada al use case ────────────────────────────────
+  const useCase = makeDownloadInvoiceUseCase()
+  const ucResult = await useCase.execute(invoiceId, safeFormat)
+
+  if (!ucResult.ok) {
+    const { code, message } = ucResult.error
+    return errorResponse(code, message, ERROR_STATUS[code])
   }
 
-  // ── 4. Descargar desde Facturama (con el facturamaId interno, nunca expuesto) ─
-  let buffer: Buffer
-  try {
-    const invoiceService = getInvoiceService()
-    buffer = await invoiceService.descargar(row.facturamaId, safeFormat)
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err)
-    const statusCode = (err as { statusCode?: number }).statusCode
-
-    console.error('[download] Facturama:', { invoiceId, format: safeFormat, error: message })
-
-    if (statusCode && statusCode >= 400 && statusCode < 500) {
-      return errorResponse('DOWNLOAD_ERROR', 'No se pudo obtener el archivo de la factura.', 502)
-    }
-    return errorResponse('SERVICE_ERROR', 'Error al descargar el archivo. Intenta de nuevo más tarde.', 503)
-  }
-
-  // ── 5. Responder con el binario ───────────────────────────────────────────
-  const contentType = CONTENT_TYPES[safeFormat]
+  // ── 5. Armar la respuesta binaria con headers de seguridad ────────────────
+  const { buffer, contentType, uuidCfdi, invoiceId: rowId } = ucResult.value
   // Sanitizar el nombre de archivo para evitar header injection en Content-Disposition
-  const safeName = (row.uuidCfdi ?? row.id).replace(/[^A-Za-z0-9._-]/g, '')
+  const safeName = (uuidCfdi ?? rowId).replace(/[^A-Za-z0-9._-]/g, '')
   const filename = `Factura_${safeName}.${safeFormat}`
 
   return new NextResponse(new Uint8Array(buffer), {

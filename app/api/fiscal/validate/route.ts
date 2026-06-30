@@ -13,8 +13,7 @@
  * El resultado se COLAPSA a un booleano en el servidor a propósito:
  *   - No se revelan qué campos fallaron (MatchName, MatchZipCode, etc.).
  *   - No se revela si el RFC existe por separado del conjunto.
- *   Esto impide usar el endpoint como oráculo de enumeración de datos fiscales
- *   (descubrir si un RFC existe, o qué campo exacto no coincide con el padrón del SAT).
+ *   Esto impide usar el endpoint como oráculo de enumeración de datos fiscales.
  *
  * Errores:
  *   400 INVALID_BODY  → body no es JSON o faltan campos requeridos
@@ -28,11 +27,16 @@ export const runtime = 'nodejs'
 import { NextRequest, NextResponse } from 'next/server'
 import { rateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit'
 import { FiscalValidateSchema } from '@/lib/api/schemas'
-import { validarReceptor } from '@/lib/invoice-service/facturama-client'
-import { maskRfc } from '@/lib/log-redact'
+import { makeValidateFiscalUseCase } from '@/src/composition/makeValidateFiscalUseCase'
+import type { ValidateFiscalErrorCode } from '@/src/application/fiscal/ValidateFiscalUseCase'
 
 function errorResponse(code: string, message: string, status: number): NextResponse {
   return NextResponse.json({ error: { code, message } }, { status })
+}
+
+/** Mapa de código de error de dominio → status HTTP */
+const ERROR_STATUS: Record<ValidateFiscalErrorCode, number> = {
+  FACTURAMA_ERROR: 503,
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
@@ -77,31 +81,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const { rfc, name, zipCode, fiscalRegime } = result.data
 
-  // ── 3. Validación de conjunto contra el SAT ───────────────────────────────
-  // Se llama a validarReceptor() con los 4 campos y se COLAPSA la respuesta a
-  // un único booleano. Los granulares (ExistRfc, MatchName, MatchZipCode,
-  // MatchFiscalRegime) NUNCA salen del servidor — solo true/false llega al cliente.
-  try {
-    const v = await validarReceptor({
-      Rfc:          rfc,
-      Name:         name,
-      ZipCode:      zipCode,
-      FiscalRegime: fiscalRegime,
-    })
+  // ── 3. Orquestación delegada al use case ──────────────────────────────────
+  const useCase = makeValidateFiscalUseCase()
+  const ucResult = await useCase.execute({ rfc, name, zipCode, fiscalRegime })
 
-    // Colapso server-side: valid es true solo si los 4 criterios pasan.
-    // No se distingue qué campo falló ni si el RFC existe por separado.
-    const valid = v.ExistRfc && v.MatchName && v.MatchZipCode && v.MatchFiscalRegime
-
-    return NextResponse.json({ valid })
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error('[fiscal/validate] Error en validarReceptor:', { rfc: maskRfc(rfc), error: message })
-    // Estado de servicio externo — no es un oráculo, el cliente lo usa para degradar con gracia.
-    return errorResponse(
-      'FACTURAMA_ERROR',
-      'No se pudo verificar con el SAT en este momento. Intenta de nuevo más tarde.',
-      503
-    )
+  if (!ucResult.ok) {
+    const { code, message } = ucResult.error
+    return errorResponse(code, message, ERROR_STATUS[code])
   }
+
+  return NextResponse.json({ valid: ucResult.value.valid })
 }
