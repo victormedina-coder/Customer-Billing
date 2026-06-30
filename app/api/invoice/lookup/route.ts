@@ -27,21 +27,13 @@
 export const runtime = 'nodejs'
 
 import { NextRequest, NextResponse } from 'next/server'
-import { rateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit'
+import { rateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { normalizedOrderToTicket } from '@/lib/shopify/mapper'
 import { LookupSchema } from '@/lib/api/schemas'
 import { makeLookupOrderUseCase } from '@/src/composition/makeLookupOrderUseCase'
 import type { LookupErrorCode } from '@/src/application/invoice/LookupOrderUseCase'
-
-/** Forma canónica de error de la API */
-function errorResponse(
-  code: string,
-  message: string,
-  status: number,
-  headers?: Record<string, string>
-): NextResponse {
-  return NextResponse.json({ error: { code, message } }, { status, headers })
-}
+import { httpError, rateLimitedResponse } from '@/src/interface/http/httpError'
+import { enforceRateLimit } from '@/src/interface/http/withRateLimit'
 
 /**
  * Respuesta de validación fallida genérica (folio no encontrado O monto incorrecto).
@@ -50,9 +42,10 @@ function errorResponse(
  * sabe cuál campo corregir (revisará su ticket físico); el atacante no gana información.
  */
 function validationFailedResponse(): NextResponse {
-  return NextResponse.json(
-    { error: { code: 'VALIDATION_FAILED', message: 'El folio o el monto no coinciden con un ticket facturable. Verifica los datos de tu ticket e intenta de nuevo.' } },
-    { status: 422 }
+  return httpError(
+    'VALIDATION_FAILED',
+    'El folio o el monto no coinciden con un ticket facturable. Verifica los datos de tu ticket e intenta de nuevo.',
+    422
   )
 }
 
@@ -67,21 +60,15 @@ const ERROR_STATUS: Record<LookupErrorCode, number> = {
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   // ── 0. Rate limiting por IP ───────────────────────────────────────────────
-  const ip = getClientIp(req)
-  const rl = await rateLimit(`lookup:${ip}`, RATE_LIMITS.lookup.max, RATE_LIMITS.lookup.windowSec)
-  if (!rl.allowed) {
-    return NextResponse.json(
-      { error: { code: 'RATE_LIMITED', message: 'Demasiadas solicitudes. Intenta de nuevo en un momento.' } },
-      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } }
-    )
-  }
+  const rateLimited = await enforceRateLimit(req, 'lookup', RATE_LIMITS.lookup.max, RATE_LIMITS.lookup.windowSec)
+  if (rateLimited) return rateLimited
 
   // ── 1. Parsear body ───────────────────────────────────────────────────────
   let body: unknown
   try {
     body = await req.json()
   } catch {
-    return errorResponse('INVALID_BODY', 'El cuerpo de la petición no es JSON válido.', 400)
+    return httpError('INVALID_BODY', 'El cuerpo de la petición no es JSON válido.', 400)
   }
 
   // ── 2. Validación Zod ─────────────────────────────────────────────────────
@@ -108,10 +95,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     RATE_LIMITS.validate.windowSec
   )
   if (!rlFolio.allowed) {
-    return NextResponse.json(
-      { error: { code: 'RATE_LIMITED', message: 'Demasiadas solicitudes. Intenta de nuevo en un momento.' } },
-      { status: 429, headers: { 'Retry-After': String(rlFolio.retryAfter) } }
-    )
+    return rateLimitedResponse(rlFolio.retryAfter)
   }
 
   // ── 4–6. Orquestación delegada al use case ────────────────────────────────
@@ -120,7 +104,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   if (!ucResult.ok) {
     const { code, message } = ucResult.error
-    return errorResponse(code, message, ERROR_STATUS[code])
+    return httpError(code, message, ERROR_STATUS[code])
   }
 
   // ── 7. Mapear Order→Ticket para la UI ─────────────────────────────────────

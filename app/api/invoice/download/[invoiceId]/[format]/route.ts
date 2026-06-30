@@ -23,17 +23,14 @@
 export const runtime = 'nodejs'
 
 import { NextResponse } from 'next/server'
-import { rateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit'
+import { RATE_LIMITS } from '@/lib/rate-limit'
 import { InvoiceIdParamSchema } from '@/lib/api/schemas'
 import { makeDownloadInvoiceUseCase } from '@/src/composition/makeDownloadInvoiceUseCase'
 import type { DownloadErrorCode } from '@/src/application/invoice/DownloadInvoiceUseCase'
+import { httpError } from '@/src/interface/http/httpError'
+import { enforceRateLimit } from '@/src/interface/http/withRateLimit'
 
 const ALLOWED_FORMATS = new Set(['pdf', 'xml'])
-
-/** Forma canónica de error de la API */
-function errorResponse(code: string, message: string, status: number): NextResponse {
-  return NextResponse.json({ error: { code, message } }, { status })
-}
 
 /** Mapa de código de error de dominio → status HTTP */
 const ERROR_STATUS: Record<DownloadErrorCode, number> = {
@@ -50,24 +47,18 @@ export async function GET(
   const { invoiceId, format } = await params
 
   // ── 0. Rate limiting ──────────────────────────────────────────────────────
-  const ip = getClientIp(req)
-  const rl = await rateLimit(`download:${ip}`, RATE_LIMITS.download.max, RATE_LIMITS.download.windowSec)
-  if (!rl.allowed) {
-    return NextResponse.json(
-      { error: { code: 'RATE_LIMITED', message: 'Demasiadas solicitudes. Intenta de nuevo en un momento.' } },
-      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } }
-    )
-  }
+  const rateLimited = await enforceRateLimit(req, 'download', RATE_LIMITS.download.max, RATE_LIMITS.download.windowSec)
+  if (rateLimited) return rateLimited
 
   // ── 1. Validar invoiceId (UUID) ──────────────────────────────────────────
   const idParse = InvoiceIdParamSchema.safeParse(invoiceId)
   if (!idParse.success) {
-    return errorResponse('INVALID_ID', 'El identificador de factura no es válido.', 400)
+    return httpError('INVALID_ID', 'El identificador de factura no es válido.', 400)
   }
 
   // ── 2. Validar format ────────────────────────────────────────────────────
   if (!ALLOWED_FORMATS.has(format)) {
-    return errorResponse(
+    return httpError(
       'FORMAT_INVALID',
       `Formato "${format}" no soportado. Use "pdf" o "xml".`,
       400
@@ -82,7 +73,7 @@ export async function GET(
 
   if (!ucResult.ok) {
     const { code, message } = ucResult.error
-    return errorResponse(code, message, ERROR_STATUS[code])
+    return httpError(code, message, ERROR_STATUS[code])
   }
 
   // ── 5. Armar la respuesta binaria con headers de seguridad ────────────────

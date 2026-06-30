@@ -14,6 +14,7 @@
 import type { Order } from '../../domain/orders/Order'
 import { ok, err } from '../shared/Result'
 import type { Result } from '../shared/Result'
+import { amountMatches } from '../../../lib/amount-match'
 
 // ─── Tipos de error ───────────────────────────────────────────────────────────
 
@@ -63,16 +64,6 @@ export interface LookupInput {
   amount: number
 }
 
-// ─── Utilidad: comparación de montos al centavo ───────────────────────────────
-
-function toCents(value: number): number {
-  return Math.round(value * 100)
-}
-
-function amountMatchesOrder(clientAmount: number, orderTotal: number): boolean {
-  return toCents(clientAmount) === toCents(orderTotal)
-}
-
 // ─── Use Case ─────────────────────────────────────────────────────────────────
 
 export class LookupOrderUseCase {
@@ -102,7 +93,7 @@ export class LookupOrderUseCase {
 
     // ── 3. Gate de monto (segundo factor) ────────────────────────────────────
     // Mismo error genérico que folio-no-encontrado para no revelar que el folio existe.
-    if (!amountMatchesOrder(amount, order.total)) {
+    if (!amountMatches(amount, order.total)) {
       return err({
         code: 'VALIDATION_FAILED',
         message: 'El folio o el monto no coinciden con un ticket facturable. Verifica los datos de tu ticket e intenta de nuevo.',

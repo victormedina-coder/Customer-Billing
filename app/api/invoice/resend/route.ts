@@ -21,19 +21,12 @@
 export const runtime = 'nodejs'
 
 import { NextRequest, NextResponse } from 'next/server'
-import { rateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit'
+import { RATE_LIMITS } from '@/lib/rate-limit'
 import { ResendSchema } from '@/lib/api/schemas'
 import { makeResendInvoiceUseCase } from '@/src/composition/makeResendInvoiceUseCase'
 import type { ResendErrorCode } from '@/src/application/invoice/ResendInvoiceUseCase'
-
-/** Forma canónica de error de la API */
-function errorResponse(
-  code: string,
-  message: string,
-  status: number
-): NextResponse {
-  return NextResponse.json({ error: { code, message } }, { status })
-}
+import { httpError } from '@/src/interface/http/httpError'
+import { enforceRateLimit } from '@/src/interface/http/withRateLimit'
 
 /** Mapa de código de error de dominio → status HTTP */
 const ERROR_STATUS: Record<ResendErrorCode, number> = {
@@ -44,28 +37,22 @@ const ERROR_STATUS: Record<ResendErrorCode, number> = {
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   // ── 0. Rate limiting ──────────────────────────────────────────────────────
-  const ip = getClientIp(req)
-  const rl = await rateLimit(`resend:${ip}`, RATE_LIMITS.resend.max, RATE_LIMITS.resend.windowSec)
-  if (!rl.allowed) {
-    return NextResponse.json(
-      { error: { code: 'RATE_LIMITED', message: 'Demasiadas solicitudes. Intenta de nuevo en un momento.' } },
-      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } }
-    )
-  }
+  const rateLimited = await enforceRateLimit(req, 'resend', RATE_LIMITS.resend.max, RATE_LIMITS.resend.windowSec)
+  if (rateLimited) return rateLimited
 
   // ── 1. Parsear body ───────────────────────────────────────────────────────
   let body: unknown
   try {
     body = await req.json()
   } catch {
-    return errorResponse('INVALID_BODY', 'El cuerpo de la petición no es JSON válido.', 400)
+    return httpError('INVALID_BODY', 'El cuerpo de la petición no es JSON válido.', 400)
   }
 
   // ── 2. Validación Zod (solo invoiceId, sin email del cliente) ─────────────
   const result = ResendSchema.safeParse(body)
   if (!result.success) {
     const msg = result.error.issues.map(i => i.message).join('; ')
-    return errorResponse('INVALID_BODY', msg, 400)
+    return httpError('INVALID_BODY', msg, 400)
   }
   const { invoiceId } = result.data
 
@@ -75,7 +62,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   if (!ucResult.ok) {
     const { code, message } = ucResult.error
-    return errorResponse(code, message, ERROR_STATUS[code])
+    return httpError(code, message, ERROR_STATUS[code])
   }
 
   return NextResponse.json({ ok: true }, { status: 200 })

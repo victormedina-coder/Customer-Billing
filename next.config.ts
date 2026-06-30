@@ -16,6 +16,8 @@ import type { NextConfig } from "next";
 //     Si en el futuro se integran SDKs externos (analytics, Hotjar, etc.)
 //     habrá que agregar sus dominios aquí.
 //   - frame-ancestors 'none': equivalente a X-Frame-Options: DENY pero en CSP.
+const isDev = process.env.NODE_ENV === 'development'
+
 const cspDirectives = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -24,8 +26,10 @@ const cspDirectives = [
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
   "style-src 'self' 'unsafe-inline'",
-  "script-src 'self' 'unsafe-inline'",
-  "connect-src 'self'",
+  // 'unsafe-eval' solo en dev: Next.js HMR y React Refresh lo requieren.
+  isDev ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'" : "script-src 'self' 'unsafe-inline'",
+  // En dev el WebSocket del HMR conecta a la IP/puerto del servidor.
+  isDev ? "connect-src 'self' ws: wss:" : "connect-src 'self'",
   "object-src 'none'",
 ]
 

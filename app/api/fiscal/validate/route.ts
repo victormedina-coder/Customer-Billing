@@ -25,14 +25,12 @@
 export const runtime = 'nodejs'
 
 import { NextRequest, NextResponse } from 'next/server'
-import { rateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit'
+import { RATE_LIMITS } from '@/lib/rate-limit'
 import { FiscalValidateSchema } from '@/lib/api/schemas'
 import { makeValidateFiscalUseCase } from '@/src/composition/makeValidateFiscalUseCase'
 import type { ValidateFiscalErrorCode } from '@/src/application/fiscal/ValidateFiscalUseCase'
-
-function errorResponse(code: string, message: string, status: number): NextResponse {
-  return NextResponse.json({ error: { code, message } }, { status })
-}
+import { httpError } from '@/src/interface/http/httpError'
+import { enforceRateLimit } from '@/src/interface/http/withRateLimit'
 
 /** Mapa de código de error de dominio → status HTTP */
 const ERROR_STATUS: Record<ValidateFiscalErrorCode, number> = {
@@ -41,14 +39,8 @@ const ERROR_STATUS: Record<ValidateFiscalErrorCode, number> = {
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   // ── 0. Rate limiting ──────────────────────────────────────────────────────
-  const ip = getClientIp(req)
-  const rl = await rateLimit(`fiscal-validate:${ip}`, RATE_LIMITS.fiscal.max, RATE_LIMITS.fiscal.windowSec)
-  if (!rl.allowed) {
-    return NextResponse.json(
-      { error: { code: 'RATE_LIMITED', message: 'Demasiadas solicitudes. Intenta de nuevo en un momento.' } },
-      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } }
-    )
-  }
+  const rateLimited = await enforceRateLimit(req, 'fiscal-validate', RATE_LIMITS.fiscal.max, RATE_LIMITS.fiscal.windowSec)
+  if (rateLimited) return rateLimited
 
   // ── 1. Parsear body ───────────────────────────────────────────────────────
   let body: unknown
@@ -56,7 +48,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     body = await req.json()
   } catch {
     // Body no es JSON válido — error genérico sin detalles fiscales
-    return errorResponse('INVALID_BODY', 'Datos incompletos para validar.', 400)
+    return httpError('INVALID_BODY', 'Datos incompletos para validar.', 400)
   }
 
   // ── 2. Validación Zod ─────────────────────────────────────────────────────
@@ -73,10 +65,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         .filter((i) => i.path.includes('rfc'))
         .map((i) => i.message)
         .join('; ')
-      return errorResponse('INVALID_RFC', msg, 400)
+      return httpError('INVALID_RFC', msg, 400)
     }
     // Campos faltantes o con formato inválido (name, zipCode, fiscalRegime)
-    return errorResponse('INVALID_BODY', 'Datos incompletos para validar.', 400)
+    return httpError('INVALID_BODY', 'Datos incompletos para validar.', 400)
   }
 
   const { rfc, name, zipCode, fiscalRegime } = result.data
@@ -87,7 +79,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   if (!ucResult.ok) {
     const { code, message } = ucResult.error
-    return errorResponse(code, message, ERROR_STATUS[code])
+    return httpError(code, message, ERROR_STATUS[code])
   }
 
   return NextResponse.json({ valid: ucResult.value.valid })

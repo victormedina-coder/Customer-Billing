@@ -22,19 +22,12 @@
 export const runtime = 'nodejs'
 
 import { NextRequest, NextResponse } from 'next/server'
-import { rateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit'
+import { RATE_LIMITS } from '@/lib/rate-limit'
 import { EmitSchema } from '@/lib/api/schemas'
 import { makeEmitInvoiceUseCase } from '@/src/composition/makeEmitInvoiceUseCase'
 import type { EmitErrorCode } from '@/src/application/invoice/EmitInvoiceUseCase'
-
-/** Forma canónica de error de la API */
-function errorResponse(
-  code: string,
-  message: string,
-  status: number
-): NextResponse {
-  return NextResponse.json({ error: { code, message } }, { status })
-}
+import { httpError } from '@/src/interface/http/httpError'
+import { enforceRateLimit } from '@/src/interface/http/withRateLimit'
 
 /** Genera un CFDI de prueba sin llamar a Facturama ni Shopify */
 function mockCfdi(folio: string) {
@@ -69,33 +62,27 @@ const ERROR_STATUS: Record<EmitErrorCode, number> = {
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   // ── 0. Rate limiting ──────────────────────────────────────────────────────
-  const ip = getClientIp(req)
-  const rl = await rateLimit(`emit:${ip}`, RATE_LIMITS.emit.max, RATE_LIMITS.emit.windowSec)
-  if (!rl.allowed) {
-    return NextResponse.json(
-      { error: { code: 'RATE_LIMITED', message: 'Demasiadas solicitudes. Intenta de nuevo en un momento.' } },
-      { status: 429, headers: { 'Retry-After': String(rl.retryAfter) } }
-    )
-  }
+  const rateLimited = await enforceRateLimit(req, 'emit', RATE_LIMITS.emit.max, RATE_LIMITS.emit.windowSec)
+  if (rateLimited) return rateLimited
 
   // ── 1. Parsear body ───────────────────────────────────────────────────────
   let body: unknown
   try {
     body = await req.json()
   } catch {
-    return errorResponse('INVALID_BODY', 'El cuerpo de la petición no es JSON válido.', 400)
+    return httpError('INVALID_BODY', 'El cuerpo de la petición no es JSON válido.', 400)
   }
 
   // ── 2. Validación Zod ─────────────────────────────────────────────────────
   const result = EmitSchema.safeParse(body)
   if (!result.success) {
     const msg = result.error.issues.map(i => i.message).join('; ')
-    return errorResponse('FISCAL_INVALID', msg, 400)
+    return httpError('FISCAL_INVALID', msg, 400)
   }
   const { folio: rawFolio, amount, fiscal } = result.data
   const folio = rawFolio.trim()
   if (!folio) {
-    return errorResponse('INVALID_FOLIO', 'El folio no puede estar vacío.', 400)
+    return httpError('INVALID_FOLIO', 'El folio no puede estar vacío.', 400)
   }
 
   // ── 3. Mock de emit (desarrollo sin credenciales) ─────────────────────────
@@ -111,7 +98,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   if (!ucResult.ok) {
     const { code, message } = ucResult.error
-    return errorResponse(code, message, ERROR_STATUS[code])
+    return httpError(code, message, ERROR_STATUS[code])
   }
 
   const factura = ucResult.value

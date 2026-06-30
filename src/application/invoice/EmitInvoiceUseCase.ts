@@ -18,6 +18,7 @@ import type { CreateInvoiceData } from '../../infrastructure/db/invoice-reposito
 import { ok, err } from '../shared/Result'
 import type { Result } from '../shared/Result'
 import { maskEmail } from '../../../lib/log-redact'
+import { amountMatches } from '../../../lib/amount-match'
 
 // ─── Tipos de entrada ─────────────────────────────────────────────────────────
 
@@ -83,16 +84,6 @@ export interface WindowPolicyPort {
   isWithinInvoiceWindow(createdAt: string): boolean
 }
 
-// ─── Utilidad: comparación de montos al centavo ───────────────────────────────
-
-function toCents(value: number): number {
-  return Math.round(value * 100)
-}
-
-function amountMatchesOrder(clientAmount: number, orderTotal: number): boolean {
-  return toCents(clientAmount) === toCents(orderTotal)
-}
-
 // ─── Deps ─────────────────────────────────────────────────────────────────────
 
 export interface EmitInvoiceDeps {
@@ -131,7 +122,7 @@ export class EmitInvoiceUseCase {
     // directamente sin pasar por lookup. La re-validación aquí es obligatoria:
     // si el monto no coincide → mismo error genérico que en lookup (VALIDATION_FAILED)
     // para no revelar que el folio sí existe.
-    if (!amountMatchesOrder(amount, order.total)) {
+    if (!amountMatches(amount, order.total)) {
       return err({
         code: 'VALIDATION_FAILED',
         message: 'El folio o el monto no coinciden con un ticket facturable. Verifica los datos de tu ticket e intenta de nuevo.',
