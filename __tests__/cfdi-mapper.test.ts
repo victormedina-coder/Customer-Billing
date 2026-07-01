@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { buildCfdiPayload } from '../lib/invoice-service/cfdi-mapper'
-import type { CfdiItem } from '../lib/invoice-service/cfdi-mapper'
-import type { NormalizedOrderWithPayment } from '../lib/shopify/mapper'
-import type { FiscalInput } from '../lib/invoice-service/types'
+import { buildCfdiPayload } from '../src/infrastructure/facturama/cfdiPayloadBuilder'
+import type { CfdiItem } from '../src/infrastructure/facturama/cfdiPayloadBuilder'
+import type { NormalizedOrderWithPayment } from '../src/domain/orders/Order'
+import type { FiscalInput } from '../src/domain/fiscal/FiscalInput'
 
 const fiscal: FiscalInput = {
   rfc: 'EKU9003173C9',

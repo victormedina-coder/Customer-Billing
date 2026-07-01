@@ -50,7 +50,7 @@ const SANDBOX_BASE = 'https://apisandbox.facturama.mx'
 async function importClient() {
   // resetModules garantiza que el singleton _config se reinicia
   vi.resetModules()
-  return import('../lib/invoice-service/facturama-client')
+  return import('../src/infrastructure/facturama/facturamaClient')
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

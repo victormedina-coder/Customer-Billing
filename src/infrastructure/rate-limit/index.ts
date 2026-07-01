@@ -1,7 +1,5 @@
 /**
  * Rate limiting de ventana fija (fixed-window) por IP — adapter de infraestructura.
- * Contenido movido de lib/rate-limit.ts sin cambiar comportamiento.
- * El puente en lib/rate-limit.ts re-exporta desde aquí.
  */
 
 import Redis from 'ioredis'

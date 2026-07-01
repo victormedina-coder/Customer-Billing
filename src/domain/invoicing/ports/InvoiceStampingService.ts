@@ -1,8 +1,8 @@
 /**
  * InvoiceStampingService — port (interfaz de dominio) para timbrar CFDIs.
  *
- * Nombre canónico en domain. El alias InvoiceService se re-exporta desde
- * lib/invoice-service/types.ts para compatibilidad con los imports existentes.
+ * Nombre canónico en domain. El alias InvoiceService se exporta desde
+ * src/composition/invoiceService.ts.
  *
  * Implementaciones (adapters) en src/infrastructure/facturama/.
  */

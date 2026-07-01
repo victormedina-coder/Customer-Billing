@@ -9,8 +9,8 @@
 import { ResendInvoiceUseCase } from '../application/invoice/ResendInvoiceUseCase'
 import type { ResendInvoiceDeps } from '../application/invoice/ResendInvoiceUseCase'
 
-import { findById }          from '../../lib/db/invoice-repository'
-import { getInvoiceService } from '../../lib/invoice-service'
+import { findById }          from '../infrastructure/db/invoice-repository'
+import { getInvoiceService } from './invoiceService'
 
 export function makeResendInvoiceUseCase(): ResendInvoiceUseCase {
   const deps: ResendInvoiceDeps = {

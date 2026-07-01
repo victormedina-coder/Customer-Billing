@@ -1,7 +1,5 @@
 /**
  * Helpers de enmascarado de PII para logs de servidor — infraestructura/observabilidad.
- * Contenido movido de lib/log-redact.ts sin cambiar comportamiento.
- * El puente en lib/log-redact.ts re-exporta desde aquí.
  *
  * Cumplimiento LFPDPPP — principio de minimización de datos personales.
  */

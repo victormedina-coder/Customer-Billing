@@ -1,17 +1,12 @@
 /**
  * ShopifyOrderSource — adapter de infraestructura que implementa el port OrderSource.
- *
- * Mueve el contenido de lib/order-source/shopify.ts sin cambiar comportamiento.
- * El puente en lib/order-source/shopify.ts re-exporta esta clase para
- * compatibilidad con imports existentes.
  */
 
 import type { OrderSource } from '../../domain/orders/ports/OrderSource'
-import type { Order, OrderLine } from '../../domain/orders/Order'
-import type { NormalizedOrderWithPayment } from '../../../lib/shopify/mapper'
-import type { BrandConfig } from '../../../lib/shopify/brands'
-import { listConfiguredBrands } from '../../../lib/shopify/brands'
-import { shopifyGraphQL } from '../../../lib/shopify/client'
+import type { Order, OrderLine, NormalizedOrderWithPayment } from '../../domain/orders/Order'
+import type { BrandConfig } from './brands'
+import { listConfiguredBrands } from './brands'
+import { shopifyGraphQL } from './client'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Query GraphQL

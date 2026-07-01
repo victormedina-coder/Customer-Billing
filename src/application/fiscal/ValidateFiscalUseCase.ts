@@ -14,7 +14,7 @@
 
 import { ok, err } from '../shared/Result'
 import type { Result } from '../shared/Result'
-import { maskRfc } from '../../../lib/log-redact'
+import { maskRfc } from '../../infrastructure/observability/logRedact'
 
 // ─── Tipos de error ───────────────────────────────────────────────────────────
 

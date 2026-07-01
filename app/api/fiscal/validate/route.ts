@@ -25,7 +25,7 @@
 export const runtime = 'nodejs'
 
 import { NextRequest, NextResponse } from 'next/server'
-import { RATE_LIMITS } from '@/lib/rate-limit'
+import { RATE_LIMITS } from '@/src/infrastructure/rate-limit'
 import { FiscalValidateSchema } from '@/lib/api/schemas'
 import { makeValidateFiscalUseCase } from '@/src/composition/makeValidateFiscalUseCase'
 import type { ValidateFiscalErrorCode } from '@/src/application/fiscal/ValidateFiscalUseCase'

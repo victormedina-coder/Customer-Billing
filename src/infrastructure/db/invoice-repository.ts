@@ -1,7 +1,5 @@
 /**
  * DrizzleInvoiceRepository — adapter de infraestructura que implementa InvoiceRepository.
- * Contenido movido de lib/db/invoice-repository.ts sin cambiar comportamiento.
- * El puente en lib/db/invoice-repository.ts re-exporta desde aquí.
  *
  * IMPORTANTE — regla SAT "una compra = un CFDI":
  * El cerrojo de anti-doble-facturación está en la unique constraint

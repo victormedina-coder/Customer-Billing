@@ -9,7 +9,7 @@
 import { ValidateFiscalUseCase } from '../application/fiscal/ValidateFiscalUseCase'
 import type { ValidateFiscalDeps } from '../application/fiscal/ValidateFiscalUseCase'
 
-import { validarReceptor } from '../../lib/invoice-service/facturama-client'
+import { validarReceptor } from '../infrastructure/facturama/facturamaClient'
 
 export function makeValidateFiscalUseCase(): ValidateFiscalUseCase {
   const deps: ValidateFiscalDeps = {

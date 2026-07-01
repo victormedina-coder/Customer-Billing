@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import { sql } from 'drizzle-orm'
 import postgresJs from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
-import * as schema from '../lib/db/schema'
+import * as schema from '../src/infrastructure/db/schema'
 import {
   isAlreadyInvoiced,
   findByOrder,
@@ -12,7 +12,7 @@ import {
   deleteById,
   listInvoicedOrderIds,
   type CreateInvoiceData,
-} from '../lib/db/invoice-repository'
+} from '../src/infrastructure/db/invoice-repository'
 
 // ── Skip cuando no hay DB de test ────────────────────────────────────────────
 // DATABASE_URL ya fue redirigido a DATABASE_URL_TEST por vitest.config.ts,

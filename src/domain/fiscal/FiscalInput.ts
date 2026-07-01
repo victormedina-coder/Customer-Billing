@@ -1,7 +1,7 @@
 /**
  * Datos fiscales del receptor tal como los captura el cliente en el portal.
- * Tipo canónico en domain — sin dependencias de UI, lib ni infraestructura.
- * Importado por app/ (como FiscalData) y por lib/invoice-service/ (como FiscalInput).
+ * Tipo canónico en domain — sin dependencias de UI ni infraestructura.
+ * Importado por app/ (como FiscalData) y por application/infrastructure (como FiscalInput).
  */
 export interface FiscalInput {
   rfc: string

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { rateLimit, getClientIp, RateLimitStore } from '../lib/rate-limit'
+import { rateLimit, getClientIp, RateLimitStore } from '../src/infrastructure/rate-limit'
 
 // ── Store en memoria con reloj inyectable ────────────────────────────────────
 

@@ -1,13 +1,10 @@
 /**
  * FacturamaInvoiceService — adapter de infraestructura que implementa InvoiceStampingService.
- * Contenido movido de lib/invoice-service/facturama.ts sin cambiar comportamiento.
- * El puente en lib/invoice-service/facturama.ts re-exporta esta clase.
  */
 
 import type { InvoiceStampingService, EmitResult } from '../../domain/invoicing/ports/InvoiceStampingService'
 import type { FiscalInput } from '../../domain/fiscal/FiscalInput'
-import type { Order } from '../../domain/orders/Order'
-import type { NormalizedOrderWithPayment } from '../../../lib/shopify/mapper'
+import type { Order, NormalizedOrderWithPayment } from '../../domain/orders/Order'
 import {
   emitirCFDI,
   obtenerCFDI,
@@ -15,7 +12,7 @@ import {
   cancelarCFDI,
   enviarCFDIEmail,
 } from './facturamaClient'
-import { buildCfdiPayload } from '../../../lib/invoice-service/cfdi-mapper'
+import { buildCfdiPayload } from './cfdiPayloadBuilder'
 
 export class FacturamaInvoiceService implements InvoiceStampingService {
   async emitir(payload: {

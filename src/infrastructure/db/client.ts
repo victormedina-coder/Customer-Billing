@@ -1,7 +1,5 @@
 /**
  * Cliente Drizzle — adapter de infraestructura.
- * Contenido movido de lib/db/client.ts sin cambiar comportamiento.
- * El puente en lib/db/client.ts re-exporta desde aquí.
  */
 
 import { drizzle } from 'drizzle-orm/postgres-js'

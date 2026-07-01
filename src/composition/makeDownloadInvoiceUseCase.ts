@@ -9,8 +9,8 @@
 import { DownloadInvoiceUseCase } from '../application/invoice/DownloadInvoiceUseCase'
 import type { DownloadInvoiceDeps } from '../application/invoice/DownloadInvoiceUseCase'
 
-import { findById }          from '../../lib/db/invoice-repository'
-import { getInvoiceService } from '../../lib/invoice-service'
+import { findById }          from '../infrastructure/db/invoice-repository'
+import { getInvoiceService } from './invoiceService'
 
 export function makeDownloadInvoiceUseCase(): DownloadInvoiceUseCase {
   const deps: DownloadInvoiceDeps = {

@@ -19,9 +19,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import type { NormalizedOrderWithPayment } from '../lib/shopify/mapper'
-import type { InvoiceRow } from '../lib/db/invoice-repository'
-import type { EmitResult } from '../lib/invoice-service/types'
+import type { NormalizedOrderWithPayment } from '../src/domain/orders/Order'
+import type { InvoiceRow } from '../src/infrastructure/db/invoice-repository'
+import type { EmitResult } from '../src/domain/invoicing/ports/InvoiceStampingService'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fixtures
@@ -95,7 +95,7 @@ function makeInvoiceRow(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
 // Se reconfigura con vi.mocked().mockImplementation() en cada test
 // ─────────────────────────────────────────────────────────────────────────────
 
-vi.mock('../lib/rate-limit', () => ({
+vi.mock('../src/infrastructure/rate-limit', () => ({
   rateLimit:   vi.fn(async () => ({ allowed: true, remaining: 10, retryAfter: 0 })),
   getClientIp: vi.fn(() => 'test-ip'),
   RATE_LIMITS: {
@@ -109,11 +109,11 @@ vi.mock('../lib/rate-limit', () => ({
   },
 }))
 
-vi.mock('../lib/order-source', async () => ({
+vi.mock('../src/composition/orderSource', async () => ({
   getOrderSource: vi.fn(() => ({ findOrder: vi.fn(async () => VALID_ORDER) })),
 }))
 
-vi.mock('../lib/db/invoice-repository', async () => ({
+vi.mock('../src/infrastructure/db/invoice-repository', async () => ({
   isAlreadyInvoiced:  vi.fn(async () => false),
   createInvoice:      vi.fn(async () => ({ created: true, invoice: makeInvoiceRow() })),
   updateInvoiceStamp: vi.fn(async () => makeInvoiceRow()),
@@ -121,7 +121,7 @@ vi.mock('../lib/db/invoice-repository', async () => ({
   findById:           vi.fn(async () => makeInvoiceRow()),
 }))
 
-vi.mock('../lib/invoice-service', async () => ({
+vi.mock('../src/composition/invoiceService', async () => ({
   getInvoiceService: vi.fn(() => ({
     emitir:       vi.fn(async () => FAKE_EMIT_RESULT),
     enviarCorreo: vi.fn(async () => {}),
@@ -131,7 +131,7 @@ vi.mock('../lib/invoice-service', async () => ({
   })),
 }))
 
-vi.mock('../lib/invoice-service/facturama-client', async () => ({
+vi.mock('../src/infrastructure/facturama/facturamaClient', async () => ({
   validarRfc:      vi.fn(async () => true),
   validarReceptor: vi.fn(async () => ({
     Rfc: 'EKU9003173C9', ExistRfc: true, MatchName: true,
@@ -139,7 +139,7 @@ vi.mock('../lib/invoice-service/facturama-client', async () => ({
   })),
 }))
 
-vi.mock('../lib/log-redact', () => ({
+vi.mock('../src/infrastructure/observability/logRedact', () => ({
   maskEmail: vi.fn((e: string) => e),
   maskRfc:   vi.fn((r: string) => r),
 }))
@@ -148,10 +148,10 @@ vi.mock('../lib/log-redact', () => ({
 // Referencias a los módulos mockeados para reconfigurarlo en cada test
 // ─────────────────────────────────────────────────────────────────────────────
 
-let dbRepo:         typeof import('../lib/db/invoice-repository')
-let orderSrcMod:    typeof import('../lib/order-source')
-let invoiceSvcMod:  typeof import('../lib/invoice-service')
-let facturaMod:     typeof import('../lib/invoice-service/facturama-client')
+let dbRepo:         typeof import('../src/infrastructure/db/invoice-repository')
+let orderSrcMod:    typeof import('../src/composition/orderSource')
+let invoiceSvcMod:  typeof import('../src/composition/invoiceService')
+let facturaMod:     typeof import('../src/infrastructure/facturama/facturamaClient')
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Handlers — importados después de los vi.mock
@@ -170,10 +170,10 @@ beforeEach(async () => {
   vi.stubEnv('EMIT_MOCK', 'false')
 
   // Importar referencias a módulos mockeados
-  dbRepo        = await import('../lib/db/invoice-repository')
-  orderSrcMod   = await import('../lib/order-source')
-  invoiceSvcMod = await import('../lib/invoice-service')
-  facturaMod    = await import('../lib/invoice-service/facturama-client')
+  dbRepo        = await import('../src/infrastructure/db/invoice-repository')
+  orderSrcMod   = await import('../src/composition/orderSource')
+  invoiceSvcMod = await import('../src/composition/invoiceService')
+  facturaMod    = await import('../src/infrastructure/facturama/facturamaClient')
 
   // Importar handlers
   const [emitMod, lookupMod, resendMod, downloadMod, validateMod] = await Promise.all([

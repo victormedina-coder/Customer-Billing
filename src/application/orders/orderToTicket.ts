@@ -1,6 +1,9 @@
 /**
- * Mapper: NormalizedOrder (de lib/order-source/types.ts)
+ * Mapper: NormalizedOrderWithPayment (de src/domain/orders/Order.ts)
  *                   → Ticket (de app/(portal)/_lib/types.ts)
+ *
+ * Capa application: es la única autorizada a conocer tanto el dominio
+ * (Order) como el DTO de UI (Ticket). El dominio NUNCA importa de app/.
  *
  * La ruta POST /api/invoice/lookup devuelve directamente el Ticket ya mapeado
  * ({ ticket }) para que usePortal solo haga setState — sin transformación en el cliente.
@@ -17,16 +20,8 @@
  *   - items:      description→desc, productCode→sku, quantity→qty, unitPrice→unit.
  */
 
-import type { NormalizedOrder } from '../order-source/types'
-import type { Ticket, TicketItem } from '../../app/(portal)/_lib/types'
-
-/**
- * NormalizedOrder extendido con el campo de forma de pago de Shopify.
- * El campo es opcional para no romper otras fuentes (NetSuite, etc.).
- */
-export interface NormalizedOrderWithPayment extends NormalizedOrder {
-  paymentGatewayNames?: string[]
-}
+import type { NormalizedOrderWithPayment } from '../../domain/orders/Order'
+import type { Ticket, TicketItem } from '../../../app/(portal)/_lib/types'
 
 /**
  * Formatea un string ISO 8601 a fecha y hora legibles en zona de México.

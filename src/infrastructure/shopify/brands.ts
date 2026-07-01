@@ -1,7 +1,5 @@
 /**
  * Configuración de marcas Shopify — adapter de infraestructura.
- * Contenido movido de lib/shopify/brands.ts sin cambiar comportamiento.
- * El puente en lib/shopify/brands.ts re-exporta desde aquí.
  */
 
 export type BrandKey = 'ariat' | 'stetson' | 'western-brothers'

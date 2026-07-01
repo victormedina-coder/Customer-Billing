@@ -5,8 +5,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { normalizedOrderToTicket } from '../lib/shopify/mapper'
-import type { NormalizedOrderWithPayment } from '../lib/shopify/mapper'
+import { normalizedOrderToTicket } from '../src/application/orders/orderToTicket'
+import type { NormalizedOrderWithPayment } from '../src/domain/orders/Order'
 
 /** Construye un NormalizedOrderWithPayment mínimo válido. */
 function makeOrder(overrides: Partial<NormalizedOrderWithPayment> = {}): NormalizedOrderWithPayment {

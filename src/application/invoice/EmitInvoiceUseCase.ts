@@ -17,7 +17,7 @@ import type { InvoiceStampingService, EmitResult } from '../../domain/invoicing/
 import type { CreateInvoiceData } from '../../infrastructure/db/invoice-repository'
 import { ok, err } from '../shared/Result'
 import type { Result } from '../shared/Result'
-import { maskEmail } from '../../../lib/log-redact'
+import { maskEmail } from '../../infrastructure/observability/logRedact'
 import { amountMatches } from '../../../lib/amount-match'
 
 // ─── Tipos de entrada ─────────────────────────────────────────────────────────

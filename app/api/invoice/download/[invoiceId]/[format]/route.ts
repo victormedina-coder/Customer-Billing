@@ -23,7 +23,7 @@
 export const runtime = 'nodejs'
 
 import { NextResponse } from 'next/server'
-import { RATE_LIMITS } from '@/lib/rate-limit'
+import { RATE_LIMITS } from '@/src/infrastructure/rate-limit'
 import { InvoiceIdParamSchema } from '@/lib/api/schemas'
 import { makeDownloadInvoiceUseCase } from '@/src/composition/makeDownloadInvoiceUseCase'
 import type { DownloadErrorCode } from '@/src/application/invoice/DownloadInvoiceUseCase'

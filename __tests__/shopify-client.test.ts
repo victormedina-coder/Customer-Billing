@@ -132,8 +132,8 @@ function makeShopifyOrder(overrides: {
 // Permite controlar listConfiguredBrands() por test a través de vi.mocked()
 // ─────────────────────────────────────────────────────────────────────────────
 
-vi.mock('../lib/shopify/brands', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../lib/shopify/brands')>()
+vi.mock('../src/infrastructure/shopify/brands', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../src/infrastructure/shopify/brands')>()
   return {
     ...original,
     listConfiguredBrands: vi.fn(() => [STATIC_BRAND_CFG]),
@@ -145,7 +145,7 @@ vi.mock('../lib/shopify/brands', async (importOriginal) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function setBrands(brands: typeof STATIC_BRAND_CFG[]) {
-  const brandsModule = await import('../lib/shopify/brands')
+  const brandsModule = await import('../src/infrastructure/shopify/brands')
   vi.mocked(brandsModule.listConfiguredBrands).mockReturnValue(brands as never)
 }
 
@@ -167,7 +167,7 @@ describe('getShopifyToken — static auth', () => {
   })
 
   it('devuelve el token estático sin llamar a fetch', async () => {
-    const { getShopifyToken } = await import('../lib/shopify/client')
+    const { getShopifyToken } = await import('../src/infrastructure/shopify/client')
 
     const token = await getShopifyToken(STATIC_BRAND_CFG)
     expect(token).toBe('shpat_test_token')
@@ -175,7 +175,7 @@ describe('getShopifyToken — static auth', () => {
   })
 
   it('lanza si auth=static pero token no está configurado', async () => {
-    const { getShopifyToken } = await import('../lib/shopify/client')
+    const { getShopifyToken } = await import('../src/infrastructure/shopify/client')
 
     await expect(
       getShopifyToken({ ...STATIC_BRAND_CFG, token: undefined })
@@ -183,7 +183,7 @@ describe('getShopifyToken — static auth', () => {
   })
 
   it('lanza si auth=oauth pero sin clientId/clientSecret', async () => {
-    const { getShopifyToken } = await import('../lib/shopify/client')
+    const { getShopifyToken } = await import('../src/infrastructure/shopify/client')
 
     await expect(
       getShopifyToken({ ...OAUTH_BRAND_CFG, clientId: undefined })
@@ -211,7 +211,7 @@ describe('getShopifyToken — OAuth flow', () => {
 
   it('llama al endpoint OAuth con form-urlencoded y devuelve el access_token', async () => {
     fetchMock.mockResolvedValueOnce(tokenResponse('oauth-token-abc'))
-    const { getShopifyToken } = await import('../lib/shopify/client')
+    const { getShopifyToken } = await import('../src/infrastructure/shopify/client')
 
     const token = await getShopifyToken(OAUTH_BRAND_CFG)
     expect(token).toBe('oauth-token-abc')
@@ -230,7 +230,7 @@ describe('getShopifyToken — OAuth flow', () => {
 
   it('reutiliza el token cacheado cuando no ha expirado', async () => {
     fetchMock.mockResolvedValueOnce(tokenResponse('cached-token', 86400))
-    const { getShopifyToken } = await import('../lib/shopify/client')
+    const { getShopifyToken } = await import('../src/infrastructure/shopify/client')
 
     const t1 = await getShopifyToken(OAUTH_BRAND_CFG)
     const t2 = await getShopifyToken(OAUTH_BRAND_CFG)
@@ -243,21 +243,21 @@ describe('getShopifyToken — OAuth flow', () => {
 
   it('lanza si la respuesta de token no es OK', async () => {
     fetchMock.mockResolvedValueOnce(new Response('Unauthorized', { status: 401 }))
-    const { getShopifyToken } = await import('../lib/shopify/client')
+    const { getShopifyToken } = await import('../src/infrastructure/shopify/client')
 
     await expect(getShopifyToken(OAUTH_BRAND_CFG)).rejects.toThrow(/rechazó el token/)
   })
 
   it('lanza si la respuesta de token no tiene access_token', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ token_type: 'Bearer' }))
-    const { getShopifyToken } = await import('../lib/shopify/client')
+    const { getShopifyToken } = await import('../src/infrastructure/shopify/client')
 
     await expect(getShopifyToken(OAUTH_BRAND_CFG)).rejects.toThrow(/sin access_token/)
   })
 
   it('lanza con mensaje de red cuando fetch falla al pedir el token', async () => {
     fetchMock.mockRejectedValueOnce(new TypeError('ECONNREFUSED'))
-    const { getShopifyToken } = await import('../lib/shopify/client')
+    const { getShopifyToken } = await import('../src/infrastructure/shopify/client')
 
     await expect(getShopifyToken(OAUTH_BRAND_CFG)).rejects.toThrow(/Error de red al obtener token OAuth/)
   })
@@ -285,7 +285,7 @@ describe('shopifyGraphQL', () => {
     fetchMock.mockResolvedValueOnce(tokenResponse('gql-token'))
     fetchMock.mockResolvedValueOnce(jsonResponse({ data: { orders: { edges: [] } } }))
 
-    const { shopifyGraphQL } = await import('../lib/shopify/client')
+    const { shopifyGraphQL } = await import('../src/infrastructure/shopify/client')
 
     await shopifyGraphQL(OAUTH_BRAND_CFG, '{ orders { edges { node { id } } } }')
 
@@ -297,7 +297,7 @@ describe('shopifyGraphQL', () => {
     fetchMock.mockResolvedValueOnce(tokenResponse('tok'))
     fetchMock.mockResolvedValueOnce(jsonResponse({ data: { foo: 'bar' } }))
 
-    const { shopifyGraphQL } = await import('../lib/shopify/client')
+    const { shopifyGraphQL } = await import('../src/infrastructure/shopify/client')
     const result = await shopifyGraphQL<{ foo: string }>(OAUTH_BRAND_CFG, '{ foo }')
 
     expect(result).toEqual({ foo: 'bar' })
@@ -307,7 +307,7 @@ describe('shopifyGraphQL', () => {
     fetchMock.mockResolvedValueOnce(tokenResponse('tok'))
     fetchMock.mockResolvedValueOnce(new Response('Forbidden', { status: 403 }))
 
-    const { shopifyGraphQL } = await import('../lib/shopify/client')
+    const { shopifyGraphQL } = await import('../src/infrastructure/shopify/client')
 
     await expect(shopifyGraphQL(OAUTH_BRAND_CFG, '{ foo }')).rejects.toThrow(/GraphQL HTTP 403/)
   })
@@ -318,7 +318,7 @@ describe('shopifyGraphQL', () => {
       jsonResponse({ errors: [{ message: 'Field does not exist' }] })
     )
 
-    const { shopifyGraphQL } = await import('../lib/shopify/client')
+    const { shopifyGraphQL } = await import('../src/infrastructure/shopify/client')
 
     await expect(shopifyGraphQL(OAUTH_BRAND_CFG, '{ badField }')).rejects.toThrow(
       /GraphQL error.*Field does not exist/
@@ -329,7 +329,7 @@ describe('shopifyGraphQL', () => {
     fetchMock.mockResolvedValueOnce(tokenResponse('tok'))
     fetchMock.mockResolvedValueOnce(jsonResponse({ data: null }))
 
-    const { shopifyGraphQL } = await import('../lib/shopify/client')
+    const { shopifyGraphQL } = await import('../src/infrastructure/shopify/client')
 
     await expect(shopifyGraphQL(OAUTH_BRAND_CFG, '{ orders }')).rejects.toThrow(/data=null/)
   })
@@ -338,7 +338,7 @@ describe('shopifyGraphQL', () => {
     fetchMock.mockResolvedValueOnce(tokenResponse('tok'))
     fetchMock.mockRejectedValueOnce(new TypeError('connection reset'))
 
-    const { shopifyGraphQL } = await import('../lib/shopify/client')
+    const { shopifyGraphQL } = await import('../src/infrastructure/shopify/client')
 
     await expect(shopifyGraphQL(OAUTH_BRAND_CFG, '{ orders }')).rejects.toThrow(
       /Error de red en GraphQL/
@@ -349,7 +349,7 @@ describe('shopifyGraphQL', () => {
     // Solo una llamada a fetch (la GraphQL), sin el paso de token OAuth
     fetchMock.mockResolvedValueOnce(jsonResponse({ data: { result: 42 } }))
 
-    const { shopifyGraphQL } = await import('../lib/shopify/client')
+    const { shopifyGraphQL } = await import('../src/infrastructure/shopify/client')
     const result = await shopifyGraphQL<{ result: number }>(STATIC_BRAND_CFG, '{ result }')
 
     expect(result).toEqual({ result: 42 })
@@ -387,7 +387,7 @@ describe('ShopifyOrderSource.findOrder', () => {
       .mockResolvedValueOnce(gqlOrderResponse([]))  // primera query (quoted)
       .mockResolvedValueOnce(gqlOrderResponse([]))  // segunda query (unquoted fallback)
 
-    const { ShopifyOrderSource } = await import('../lib/order-source/shopify')
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
     const source = new ShopifyOrderSource()
 
     const result = await source.findOrder({ orderNumber: '15-5333', verifier: '' })
@@ -398,7 +398,7 @@ describe('ShopifyOrderSource.findOrder', () => {
     const order = makeShopifyOrder({ sourceIdentifier: '61103865937-15-5333' })
     fetchMock.mockResolvedValueOnce(gqlOrderResponse([order]))
 
-    const { ShopifyOrderSource } = await import('../lib/order-source/shopify')
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
     const result = await new ShopifyOrderSource().findOrder({ orderNumber: '15-5333', verifier: '' })
 
     expect(result).not.toBeNull()
@@ -410,7 +410,7 @@ describe('ShopifyOrderSource.findOrder', () => {
     const order = makeShopifyOrder({ sourceIdentifier: '15-5333' })
     fetchMock.mockResolvedValueOnce(gqlOrderResponse([order]))
 
-    const { ShopifyOrderSource } = await import('../lib/order-source/shopify')
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
     const result = await new ShopifyOrderSource().findOrder({ orderNumber: '15-5333', verifier: '' })
 
     expect(result).not.toBeNull()
@@ -420,7 +420,7 @@ describe('ShopifyOrderSource.findOrder', () => {
     const order = makeShopifyOrder({ sourceIdentifier: '61103865937-15-5333' })
     fetchMock.mockResolvedValueOnce(gqlOrderResponse([order]))
 
-    const { ShopifyOrderSource } = await import('../lib/order-source/shopify')
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
     // El cliente pasa '  #15-5333  ' — debe normalizarse a '15-5333'
     const result = await new ShopifyOrderSource().findOrder({
       orderNumber: '  #15-5333  ',
@@ -437,7 +437,7 @@ describe('ShopifyOrderSource.findOrder', () => {
     })
     fetchMock.mockResolvedValueOnce(gqlOrderResponse([order]))
 
-    const { ShopifyOrderSource } = await import('../lib/order-source/shopify')
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
     const result = await new ShopifyOrderSource().findOrder({ orderNumber: '15-5333', verifier: '' })
 
     expect(result?.storeName).toBe(STATIC_BRAND_CFG.label)
@@ -451,7 +451,7 @@ describe('ShopifyOrderSource.findOrder', () => {
       .mockResolvedValueOnce(gqlOrderResponse([order]))   // Marca 1 → match
       .mockRejectedValueOnce(new TypeError('connection refused')) // Marca 2 → falla
 
-    const { ShopifyOrderSource } = await import('../lib/order-source/shopify')
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
     const result = await new ShopifyOrderSource().findOrder({ orderNumber: '15-5333', verifier: '' })
 
     expect(result).not.toBeNull()
@@ -461,7 +461,7 @@ describe('ShopifyOrderSource.findOrder', () => {
     await setBrands([STATIC_BRAND_CFG, STATIC_BRAND_CFG])
     fetchMock.mockRejectedValue(new TypeError('connection refused'))
 
-    const { ShopifyOrderSource } = await import('../lib/order-source/shopify')
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
 
     await expect(
       new ShopifyOrderSource().findOrder({ orderNumber: '99-9999', verifier: '' })
@@ -471,7 +471,7 @@ describe('ShopifyOrderSource.findOrder', () => {
   it('lanza cuando no hay marcas configuradas', async () => {
     await setBrands([])
 
-    const { ShopifyOrderSource } = await import('../lib/order-source/shopify')
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
 
     await expect(
       new ShopifyOrderSource().findOrder({ orderNumber: '15-5333', verifier: '' })
@@ -484,7 +484,7 @@ describe('ShopifyOrderSource.findOrder', () => {
       .mockResolvedValueOnce(gqlOrderResponse([]))    // primera query: sin match
       .mockResolvedValueOnce(gqlOrderResponse([order])) // segunda query: con match
 
-    const { ShopifyOrderSource } = await import('../lib/order-source/shopify')
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
     const result = await new ShopifyOrderSource().findOrder({ orderNumber: '15-5333', verifier: '' })
 
     expect(result).not.toBeNull()
@@ -503,7 +503,7 @@ describe('ShopifyOrderSource.findOrder', () => {
 
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    const { ShopifyOrderSource } = await import('../lib/order-source/shopify')
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
     const result = await new ShopifyOrderSource().findOrder({ orderNumber: '15-5333', verifier: '' })
 
     expect(result).not.toBeNull()
@@ -528,7 +528,7 @@ describe('ShopifyOrderSource.findOrder', () => {
     })
     fetchMock.mockResolvedValueOnce(gqlOrderResponse([order]))
 
-    const { ShopifyOrderSource } = await import('../lib/order-source/shopify')
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
     const result = await new ShopifyOrderSource().findOrder({ orderNumber: 'FOLIO-42', verifier: '' })
 
     expect(result).not.toBeNull()

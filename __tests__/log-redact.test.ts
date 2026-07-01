@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { maskEmail, maskRfc } from '../lib/log-redact'
+import { maskEmail, maskRfc } from '../src/infrastructure/observability/logRedact'
 
 describe('maskEmail', () => {
   it('enmascara email normal conservando primera letra y dominio', () => {

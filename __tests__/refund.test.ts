@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isFullyRefunded } from '../lib/refund'
+import { isFullyRefunded } from '../src/domain/orders/RefundPolicy'
 
 describe('isFullyRefunded', () => {
   it("financialStatus === 'REFUNDED' → true (con cualquier monto)", () => {

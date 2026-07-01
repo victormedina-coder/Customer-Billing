@@ -27,8 +27,8 @@
 export const runtime = 'nodejs'
 
 import { NextRequest, NextResponse } from 'next/server'
-import { rateLimit, RATE_LIMITS } from '@/lib/rate-limit'
-import { normalizedOrderToTicket } from '@/lib/shopify/mapper'
+import { rateLimit, RATE_LIMITS } from '@/src/infrastructure/rate-limit'
+import { normalizedOrderToTicket } from '@/src/application/orders/orderToTicket'
 import { LookupSchema } from '@/lib/api/schemas'
 import { makeLookupOrderUseCase } from '@/src/composition/makeLookupOrderUseCase'
 import type { LookupErrorCode } from '@/src/application/invoice/LookupOrderUseCase'

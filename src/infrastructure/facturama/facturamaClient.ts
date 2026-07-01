@@ -1,7 +1,5 @@
 /**
  * Cliente HTTP de bajo nivel para la API de Facturama — adapter de infraestructura.
- * Contenido movido de lib/invoice-service/facturama-client.ts sin cambiar comportamiento.
- * El puente en lib/invoice-service/facturama-client.ts re-exporta desde aquí.
  *
  * NO importar desde app/ — este módulo es puro servidor, sin deps de Next.js.
  * FiscalValidationService (validarRfc/validarReceptor) — NO es de este paso;

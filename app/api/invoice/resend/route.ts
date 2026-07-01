@@ -21,7 +21,7 @@
 export const runtime = 'nodejs'
 
 import { NextRequest, NextResponse } from 'next/server'
-import { RATE_LIMITS } from '@/lib/rate-limit'
+import { RATE_LIMITS } from '@/src/infrastructure/rate-limit'
 import { ResendSchema } from '@/lib/api/schemas'
 import { makeResendInvoiceUseCase } from '@/src/composition/makeResendInvoiceUseCase'
 import type { ResendErrorCode } from '@/src/application/invoice/ResendInvoiceUseCase'

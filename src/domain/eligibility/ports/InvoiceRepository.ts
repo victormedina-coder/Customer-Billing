@@ -1,10 +1,7 @@
 /**
  * InvoiceRepository — port (interfaz de dominio) para persistencia de facturas.
  *
- * Agrupa las firmas de las funciones sueltas que hoy existen en
- * lib/db/invoice-repository.ts. Los tipos de datos se re-exportan desde
- * lib/db/invoice-repository para compatibilidad.
- *
+ * Agrupa las firmas de las funciones de persistencia de facturas.
  * Implementaciones (adapters) en src/infrastructure/db/.
  */
 

@@ -1,8 +1,8 @@
 /**
  * Order — entidad de dominio que representa un pedido normalizado de Shopify.
  *
- * Nombre canónico en domain. El alias NormalizedOrder se re-exporta desde
- * lib/order-source/types.ts para compatibilidad con los imports existentes.
+ * Nombre canónico en domain. El alias NormalizedOrder se exporta desde
+ * src/composition/orderSource.ts para compatibilidad con los imports existentes.
  */
 
 export interface OrderLine {
@@ -34,3 +34,11 @@ export interface Order {
 
 /** Alias de compatibilidad — usar Order en código nuevo. */
 export type NormalizedOrder = Order
+
+/**
+ * Order extendido con el campo de forma de pago de Shopify.
+ * El campo es opcional para no romper otras fuentes (NetSuite, etc.).
+ */
+export interface NormalizedOrderWithPayment extends NormalizedOrder {
+  paymentGatewayNames?: string[]
+}

@@ -22,9 +22,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import type { NormalizedOrderWithPayment } from '../lib/shopify/mapper'
-import type { InvoiceRow } from '../lib/db/invoice-repository'
-import type { EmitResult } from '../lib/invoice-service/types'
+import type { NormalizedOrderWithPayment } from '../src/domain/orders/Order'
+import type { InvoiceRow } from '../src/infrastructure/db/invoice-repository'
+import type { EmitResult } from '../src/domain/invoicing/ports/InvoiceStampingService'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fixtures
@@ -102,7 +102,7 @@ function makeInvoiceRow(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
 // con vi.mocked(...).mockImplementation() en cada test
 // ─────────────────────────────────────────────────────────────────────────────
 
-vi.mock('../lib/rate-limit', () => ({
+vi.mock('../src/infrastructure/rate-limit', () => ({
   rateLimit:   vi.fn(async () => ({ allowed: true, remaining: 10, retryAfter: 0 })),
   getClientIp: vi.fn(() => 'test-ip'),
   RATE_LIMITS: {
@@ -111,11 +111,11 @@ vi.mock('../lib/rate-limit', () => ({
   },
 }))
 
-vi.mock('../lib/order-source', async () => ({
+vi.mock('../src/composition/orderSource', async () => ({
   getOrderSource: vi.fn(() => ({ findOrder: vi.fn(async () => VALID_ORDER) })),
 }))
 
-vi.mock('../lib/db/invoice-repository', async () => ({
+vi.mock('../src/infrastructure/db/invoice-repository', async () => ({
   isAlreadyInvoiced:  vi.fn(async () => false),
   createInvoice:      vi.fn(async () => ({ created: true, invoice: makeInvoiceRow() })),
   updateInvoiceStamp: vi.fn(async () => makeInvoiceRow({ status: 'emitted' })),
@@ -123,14 +123,14 @@ vi.mock('../lib/db/invoice-repository', async () => ({
   findById:           vi.fn(async () => null),
 }))
 
-vi.mock('../lib/invoice-service', async () => ({
+vi.mock('../src/composition/invoiceService', async () => ({
   getInvoiceService: vi.fn(() => ({
     emitir:       vi.fn(async () => EMIT_RESULT),
     enviarCorreo: vi.fn(async () => {}),
   })),
 }))
 
-vi.mock('../lib/log-redact', () => ({
+vi.mock('../src/infrastructure/observability/logRedact', () => ({
   maskEmail: vi.fn((e: string) => e),
   maskRfc:   vi.fn((r: string) => r),
 }))
@@ -142,9 +142,9 @@ vi.mock('../lib/log-redact', () => ({
 let POST: (req: Request) => Promise<Response>
 
 // Importamos los módulos mockeados para poder reconfigularlos por test
-let dbRepo:          typeof import('../lib/db/invoice-repository')
-let orderSourceMod:  typeof import('../lib/order-source')
-let invoiceService:  typeof import('../lib/invoice-service')
+let dbRepo:          typeof import('../src/infrastructure/db/invoice-repository')
+let orderSourceMod:  typeof import('../src/composition/orderSource')
+let invoiceService:  typeof import('../src/composition/invoiceService')
 
 beforeEach(async () => {
   // Deshabilitar mock de emit: el .env tiene EMIT_MOCK=true (modo dev),
@@ -152,9 +152,9 @@ beforeEach(async () => {
   vi.stubEnv('EMIT_MOCK', 'false')
 
   // Importar referencias a los módulos mockeados
-  dbRepo          = await import('../lib/db/invoice-repository')
-  orderSourceMod  = await import('../lib/order-source')
-  invoiceService  = await import('../lib/invoice-service')
+  dbRepo          = await import('../src/infrastructure/db/invoice-repository')
+  orderSourceMod  = await import('../src/composition/orderSource')
+  invoiceService  = await import('../src/composition/invoiceService')
 
   // Restaurar mocks a comportamiento por defecto (flujo feliz)
   vi.mocked(orderSourceMod.getOrderSource).mockReturnValue({

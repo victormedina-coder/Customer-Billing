@@ -1,7 +1,5 @@
 /**
  * Cliente Shopify — adapter de infraestructura.
- * Contenido movido de lib/shopify/client.ts sin cambiar comportamiento.
- * El puente en lib/shopify/client.ts re-exporta desde aquí.
  */
 
 import type { BrandConfig } from './brands'

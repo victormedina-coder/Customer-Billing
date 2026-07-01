@@ -9,7 +9,7 @@
  * pertenecen a la capa de infraestructura (son la forma de Facturama).
  */
 
-import type { NormalizedOrderWithPayment } from '../../../lib/shopify/mapper'
+import type { NormalizedOrderWithPayment } from '../../domain/orders/Order'
 import type { FiscalInput } from '../../domain/fiscal/FiscalInput'
 import { FiscalCalculator } from '../../domain/fiscal/FiscalCalculator'
 

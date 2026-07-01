@@ -1,7 +1,5 @@
 /**
  * Schema Drizzle — adapter de infraestructura.
- * Contenido movido de lib/db/schema.ts sin cambiar comportamiento.
- * El puente en lib/db/schema.ts re-exporta desde aquí.
  */
 
 import { index, pgTable, text, timestamp, unique } from 'drizzle-orm/pg-core'

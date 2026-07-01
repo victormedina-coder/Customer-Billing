@@ -12,7 +12,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { rateLimit, getClientIp } from '@/lib/rate-limit'
+import { rateLimit, getClientIp } from '@/src/infrastructure/rate-limit'
 import { rateLimitedResponse } from './httpError'
 
 export async function enforceRateLimit(

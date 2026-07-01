@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isWithinInvoiceWindow } from '../lib/invoice-window'
+import { isWithinInvoiceWindow } from '../src/domain/eligibility/InvoiceWindowPolicy'
 
 // now fijo: mediados de junio 2026 12:00 UTC (06:00 MX)
 const NOW = new Date('2026-06-26T12:00:00Z')

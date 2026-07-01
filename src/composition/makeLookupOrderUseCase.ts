@@ -9,10 +9,10 @@
 import { LookupOrderUseCase } from '../application/invoice/LookupOrderUseCase'
 import type { LookupOrderDeps } from '../application/invoice/LookupOrderUseCase'
 
-import { getOrderSource }    from '../../lib/order-source'
-import { isAlreadyInvoiced } from '../../lib/db/invoice-repository'
-import { isFullyRefunded }   from '../../lib/refund'
-import { isWithinInvoiceWindow } from '../../lib/invoice-window'
+import { getOrderSource }    from './orderSource'
+import { isAlreadyInvoiced } from '../infrastructure/db/invoice-repository'
+import { isFullyRefunded }   from '../domain/orders/RefundPolicy'
+import { isWithinInvoiceWindow } from '../domain/eligibility/InvoiceWindowPolicy'
 
 export function makeLookupOrderUseCase(): LookupOrderUseCase {
   const deps: LookupOrderDeps = {
