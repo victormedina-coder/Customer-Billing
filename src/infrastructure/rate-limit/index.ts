@@ -27,17 +27,27 @@ function getRedisClient(): Redis | null {
   return redisClient
 }
 
+// Script Lua atómico: incrementa el contador y ASEGURA que la llave tenga TTL
+// en un solo round-trip. Elimina la ventana de fallo parcial (incr sin expire)
+// que dejaba llaves sin expiración → 429 permanente. Cubre llaves nuevas Y
+// llaves que perdieron su TTL (se auto-curan).
+const HIT_SCRIPT = `
+local count = redis.call('INCR', KEYS[1])
+local ttl = redis.call('TTL', KEYS[1])
+if ttl < 0 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+  ttl = tonumber(ARGV[1])
+end
+return {count, ttl}
+`
+
 export class RedisStore implements RateLimitStore {
   async hit(key: string, windowSec: number): Promise<{ count: number; ttl: number }> {
     const client = getRedisClient()
     if (!client) throw new Error('Redis no disponible')
 
-    const count = await client.incr(key)
-    if (count === 1) {
-      await client.expire(key, windowSec)
-    }
-    const ttl = await client.ttl(key)
-    return { count, ttl: ttl > 0 ? ttl : windowSec }
+    const [count, ttl] = (await client.eval(HIT_SCRIPT, 1, key, windowSec)) as [number, number]
+    return { count, ttl }
   }
 }
 

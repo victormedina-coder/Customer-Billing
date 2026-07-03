@@ -1,5 +1,44 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { rateLimit, getClientIp, RateLimitStore } from '../src/infrastructure/rate-limit'
+
+// ── Mock de ioredis para los tests de RedisStore ─────────────────────────────
+// Simula sobre un Map en memoria la semántica del script Lua de HIT_SCRIPT:
+// INCR + TTL, y si ttl < 0 (llave nueva o que perdió su TTL) le asigna
+// windowSec. Así probamos que RedisStore.hit delega en `eval` (un solo
+// round-trip) y que el resultado refleja la auto-curación de TTL.
+const evalMock = vi.fn(async (_script: string, _numKeys: number, key: string, windowSec: number) => {
+  const now = Date.now()
+  const entry = fakeRedisData.get(key)
+  let count: number
+  let expiresAt: number | undefined = entry?.expiresAt
+  if (!entry) {
+    count = 1
+  } else {
+    count = entry.count + 1
+  }
+  let ttl: number
+  if (expiresAt === undefined || expiresAt <= now) {
+    ttl = -1
+  } else {
+    ttl = Math.ceil((expiresAt - now) / 1000)
+  }
+  if (ttl < 0) {
+    expiresAt = now + Number(windowSec) * 1000
+    ttl = Number(windowSec)
+  }
+  fakeRedisData.set(key, { count, expiresAt: expiresAt as number })
+  return [count, ttl]
+})
+
+let fakeRedisData: Map<string, { count: number; expiresAt: number }>
+
+vi.mock('ioredis', () => {
+  class FakeRedis {
+    eval = evalMock
+    on = vi.fn()
+  }
+  return { default: FakeRedis }
+})
 
 // ── Store en memoria con reloj inyectable ────────────────────────────────────
 
@@ -178,5 +217,64 @@ describe('getClientIp', () => {
   it('devuelve unknown si no hay headers de IP', () => {
     const req = new Request('http://localhost')
     expect(getClientIp(req)).toBe('unknown')
+  })
+})
+
+// ── Tests de RedisStore.hit (atomicidad vía script Lua) ──────────────────────
+
+describe('RedisStore.hit', () => {
+  const originalRedisUrl = process.env.REDIS_URL
+
+  beforeEach(() => {
+    process.env.REDIS_URL = 'redis://fake-host:6379'
+    fakeRedisData = new Map()
+    evalMock.mockClear()
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    if (originalRedisUrl !== undefined) {
+      process.env.REDIS_URL = originalRedisUrl
+    } else {
+      delete process.env.REDIS_URL
+    }
+  })
+
+  it('hace UNA sola llamada a client.eval (round-trip único, no incr/expire/ttl por separado)', async () => {
+    const { RedisStore } = await import('../src/infrastructure/rate-limit')
+    const store = new RedisStore()
+
+    await store.hit('test:redis:atomic', 60)
+
+    expect(evalMock).toHaveBeenCalledTimes(1)
+    expect(evalMock).toHaveBeenCalledWith(expect.any(String), 1, 'test:redis:atomic', 60)
+  })
+
+  it('devuelve { count, ttl } con los valores que retorna el script', async () => {
+    const { RedisStore } = await import('../src/infrastructure/rate-limit')
+    const store = new RedisStore()
+
+    const r1 = await store.hit('test:redis:values', 60)
+    expect(r1.count).toBe(1)
+    expect(r1.ttl).toBe(60)
+
+    const r2 = await store.hit('test:redis:values', 60)
+    expect(r2.count).toBe(2)
+    expect(r2.ttl).toBeGreaterThan(0)
+  })
+
+  it('auto-cura una llave atascada sin TTL (ttl=-1) asignándole windowSec', async () => {
+    // Simula el escenario del bug en producción: la llave ya tiene contador
+    // pero quedó sin expiración (p. ej. por un timeout parcial anterior).
+    fakeRedisData.set('test:redis:stuck', { count: 49, expiresAt: -1 })
+
+    const { RedisStore } = await import('../src/infrastructure/rate-limit')
+    const store = new RedisStore()
+
+    const result = await store.hit('test:redis:stuck', 60)
+
+    // El fake refleja que ya no queda en -1: se le asignó windowSec como ttl.
+    expect(result.ttl).toBe(60)
+    expect(fakeRedisData.get('test:redis:stuck')?.expiresAt).toBeGreaterThan(Date.now())
   })
 })
