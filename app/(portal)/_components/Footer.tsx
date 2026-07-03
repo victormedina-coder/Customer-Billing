@@ -10,7 +10,9 @@ export function Footer(): React.ReactElement {
         <Link href="/aviso-privacidad" className="portal-footer__link">
           Aviso de Privacidad
         </Link>
-        {/* TODO: enlace a Términos y Condiciones cuando llegue su texto */}
+        <Link href="/terminos-y-condiciones" className="portal-footer__link">
+          Términos y Condiciones
+        </Link>
       </nav>
 
       {/* Copyright */}

@@ -161,6 +161,7 @@ describe('emitirCFDI', () => {
       await emitirCFDI({})
     } catch (e) {
       // Segunda llamada — necesitamos otro mock
+      fetchMock.mockResolvedValueOnce(jsonResponse({ code: 'UNKNOWN', detail: 'x' }, 500))
     }
   })
 
