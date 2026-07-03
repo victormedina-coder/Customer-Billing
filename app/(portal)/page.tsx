@@ -49,7 +49,7 @@ export default function PortalPage() {
     const localErrors = validateFiscal(fiscal)
     if (Object.keys(localErrors).length) {
       portal.setTouched(true)
-      toast.show('Revisa los campos marcados')
+      toast.show('Revisa los campos marcados', 'warning')
       return
     }
 
@@ -61,7 +61,7 @@ export default function PortalPage() {
       if (result.serviceError) {
         // No se pudo contactar a Facturama/SAT — permitir avanzar con advertencia.
         // El timbrado es el gate final de validación.
-        toast.show('No se pudo verificar con el SAT en este momento — podrás continuar; la validación final ocurre al timbrar.')
+        toast.show('No se pudo verificar con el SAT en este momento — podrás continuar; la validación final ocurre al timbrar.', 'warning')
         setSatError(false)
         portal.goConfirm()
         return
@@ -72,7 +72,7 @@ export default function PortalPage() {
         // mensaje genérico, sin indicar qué campo específico falló.
         setSatError(true)
         portal.setTouched(true)
-        toast.show('No pudimos validar tus datos fiscales. Revísalos.')
+        toast.show('No pudimos validar tus datos fiscales. Revísalos.', 'error')
         return
       }
 
@@ -111,7 +111,6 @@ export default function PortalPage() {
               onLookup={portal.lookup}
               onProceed={portal.proceed}
               onDismissError={portal.dismissError}
-              onDownloadPdf={portal.downloadPdf}
             />
           )}
 
@@ -159,7 +158,7 @@ export default function PortalPage() {
       </>
       )}
 
-      <Toast message={toast.message} visible={toast.visible} />
+      <Toast message={toast.message} visible={toast.visible} type={toast.type} />
     </>
   )
 }

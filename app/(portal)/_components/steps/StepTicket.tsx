@@ -1,6 +1,6 @@
 'use client'
 import type { LookupError, Ticket } from '../../_lib/types'
-import { formatMXN } from '../../_lib/formatters'
+import { formatMXN, formatAmountInput } from '../../_lib/formatters'
 import { FormField } from '../ui/FormField'
 import { AlertBanner } from '../ui/AlertBanner'
 import { LoadingSpinner } from '../ui/LoadingSpinner'
@@ -20,7 +20,6 @@ interface StepTicketProps {
   onLookup: () => void
   onProceed: () => void
   onDismissError: () => void
-  onDownloadPdf: () => void
 }
 
 const CARD: React.CSSProperties = {
@@ -41,16 +40,6 @@ const BTN_PRIMARY: React.CSSProperties = {
   gap: 9, transition: 'background 0.15s',
 }
 
-const BTN_OUTLINE: React.CSSProperties = {
-  flex: 1, height: 44,
-  background: '#fff', color: '#000000',
-  border: '1.5px solid var(--border-default)', borderRadius: 11,
-  fontSize: 13, fontWeight: 800,
-  cursor: 'pointer', display: 'flex',
-  alignItems: 'center', justifyContent: 'center',
-  gap: 7,
-}
-
 const BTN_GHOST: React.CSSProperties = {
   flex: 1, height: 44,
   background: '#f5f5f5', color: '#6b7280',
@@ -64,7 +53,7 @@ const BTN_GHOST: React.CSSProperties = {
 export function StepTicket({
   folio, amount, busy, lookupError, ticket, showFolioHelp,
   onFolioChange, onAmountChange, onToggleFolioHelp,
-  onLookup, onProceed, onDismissError, onDownloadPdf,
+  onLookup, onProceed, onDismissError,
 }: StepTicketProps) {
   // Ticket válido cargado (sin error) — puede ocurrir al hidratarse desde sessionStorage.
   const hasOkTicket = !!ticket && ticket.status === 'ok' && lookupError === ''
@@ -82,14 +71,14 @@ export function StepTicket({
         {/* Brand logos strip — 3 marcas con proporciones reales preservadas */}
         <p className="brand-logos-label">Facturación para nuestras marcas</p>
         <div className="brand-logos" role="list" aria-label="Marcas disponibles">
-          {/* Stetson: 1500×500 → ratio 3:1, wordmark horizontal */}
+          {/* Stetson: 1363×1104 ≈ 1.235:1 (medido del PNG real) */}
           <div className="brand-logos-item" role="listitem">
             <div className="brand-logos-img-wrap brand-logos-img-wrap--stetson">
               <Image
                 src="/assets/Stetson_logo.png"
                 alt="Stetson"
                 fill
-                sizes="(max-width: 380px) 108px, (max-width: 640px) 144px, 192px"
+                sizes="(max-width: 380px) 54px, (max-width: 640px) 69px, 128px"
               />
             </div>
           </div>
@@ -100,7 +89,7 @@ export function StepTicket({
                 src="/assets/Ariat_logo.png"
                 alt="Ariat"
                 fill
-                sizes="(max-width: 380px) 36px, (max-width: 640px) 48px, 64px"
+                sizes="(max-width: 380px) 44px, (max-width: 640px) 56px, 104px"
               />
             </div>
           </div>
@@ -111,7 +100,7 @@ export function StepTicket({
                 src="/assets/logo_wb_Negro.png"
                 alt="Western Brothers"
                 fill
-                sizes="(max-width: 380px) 64px, (max-width: 640px) 85px, 114px"
+                sizes="(max-width: 380px) 78px, (max-width: 640px) 100px, 185px"
               />
             </div>
           </div>
@@ -259,9 +248,9 @@ export function StepTicket({
           <FormField
             label="Importe total del ticket"
             value={amount}
-            onChange={(e) => onAmountChange(e.target.value)}
+            onChange={(e) => onAmountChange(formatAmountInput(e.target.value))}
             onKeyDown={handleKeyDown}
-            placeholder="Ej. 1,898.00"
+            placeholder="Ej. $1,898.00"
             type="text"
             inputMode="decimal"
             autoComplete="off"
@@ -369,34 +358,22 @@ export function StepTicket({
         </div>
       )}
 
-      {lookupError === 'invoiced' && ticket && (
+      {lookupError === 'invoiced' && (
         <div style={{ marginBottom: 14 }}>
           <AlertBanner
-            variant="neutral"
+            variant="warning"
             icon={
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#000000" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#b45309" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
                 <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
                 <polyline points="14 2 14 8 20 8"/><polyline points="9 15 12 18 15 15"/><line x1="12" y1="10" x2="12" y2="18"/>
               </svg>
             }
-            title="Este ticket ya fue facturado"
-            description={
-              <>
-                Folio: <strong>{ticket.facturaFolio}</strong> · Timbrado: {ticket.fechaTimbrado}
-              </>
-            }
+            title="Este pedido ya fue facturado"
+            description="Ya existe un CFDI generado para esta compra. Si no cuentas con tu factura, revisa el correo con el que la solicitaste o contáctanos."
             actions={
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                <button type="button" onClick={onDownloadPdf} className="btn-press" style={BTN_OUTLINE}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-                  </svg>
-                  Descargar factura
-                </button>
-                <button type="button" onClick={onDismissError} className="btn-press" style={BTN_GHOST}>
-                  Usar otro ticket
-                </button>
-              </div>
+              <button type="button" onClick={onDismissError} className="btn-press" style={BTN_GHOST}>
+                Usar otro ticket
+              </button>
             }
           />
         </div>

@@ -1,6 +1,6 @@
 'use client'
 import { useState, useRef, useCallback, useEffect } from 'react'
-import type { PortalState, PortalStep, FiscalData, Ticket, GeneratedInvoice } from '../_lib/types'
+import type { PortalState, PortalStep, FiscalData, Ticket, GeneratedInvoice, ToastType } from '../_lib/types'
 import { validateFiscal } from '../_lib/validators'
 import { DEMO_TICKETS } from '../_lib/constants'
 
@@ -119,7 +119,7 @@ async function fetchTicket(folio: string, amount: number): Promise<Ticket | null
   return data.ticket
 }
 
-export function usePortal(flash: (msg: string) => void) {
+export function usePortal(flash: (msg: string, type?: ToastType) => void) {
   // IMPORTANTE (hydration): el primer render —tanto en SSR como en el primer
   // render del cliente— SIEMPRE usa INITIAL_STATE para que el HTML del servidor
   // coincida con el del cliente. Leer sessionStorage en el valor inicial (incluso
@@ -193,7 +193,7 @@ export function usePortal(flash: (msg: string) => void) {
     if (lookupTimer.current) clearTimeout(lookupTimer.current)
 
     if (!normalizedFolio) {
-      flash('Ingresa el folio de tu ticket')
+      flash('Ingresa el folio de tu ticket', 'warning')
       set({ busy: false, ticket: null, lookupError: '' })
       return
     }
@@ -201,7 +201,7 @@ export function usePortal(flash: (msg: string) => void) {
     // Parseo del monto: quitar $, comas y espacios; aceptar "8900", "8,900.00", "$8,900.00"
     const parsedAmount = parseFloat(amountRaw.replace(/[$,\s]/g, ''))
     if (!amountRaw.trim() || isNaN(parsedAmount) || parsedAmount <= 0) {
-      flash('Ingresa el importe total de tu ticket')
+      flash('Ingresa el importe total de tu ticket', 'warning')
       set({ busy: false, ticket: null, lookupError: '' })
       return
     }
@@ -240,6 +240,11 @@ export function usePortal(flash: (msg: string) => void) {
             set({ busy: false, ticket: null, lookupError: 'ratelimited' })
             return
           }
+          if (code === 'ALREADY_INVOICED') {
+            // El pedido ya tiene un CFDI emitido — el banner lo indica, no el flash.
+            set({ busy: false, ticket: null, lookupError: 'invoiced' })
+            return
+          }
           if (code === 'FULLY_REFUNDED') {
             // Pedido reembolsado en su totalidad — no se puede facturar.
             set({ busy: false, ticket: null, lookupError: 'refunded' })
@@ -251,7 +256,7 @@ export function usePortal(flash: (msg: string) => void) {
             return
           }
           // Error de Shopify u otro error de servidor
-          flash('Error al consultar el pedido. Intenta de nuevo.')
+          flash('Error al consultar el pedido. Intenta de nuevo.', 'error')
           set({ busy: false, ticket: null, lookupError: '' })
         })
     }, 200)
@@ -278,12 +283,12 @@ export function usePortal(flash: (msg: string) => void) {
   // pero se conserva para no romper la firma pública del hook; no hace nada nuevo.
   const proceed = useCallback(() => {
     const t = stateRef.current.ticket
-    if (!t || t.status !== 'ok') { flash('Valida tu ticket primero'); return }
+    if (!t || t.status !== 'ok') { flash('Valida tu ticket primero', 'warning'); return }
     set({ step: 'fiscal' })
   }, [set, flash])
 
   const dismissError = useCallback(() =>
-    set({ lookupError: '', ticket: null, folio: '' }), [set])
+    set({ lookupError: '', ticket: null, folio: '', amount: '' }), [set])
 
   // ── Step 2: Fiscal ──────────────────────────────────────────────────────
   const setFiscal = useCallback(<K extends keyof FiscalData>(key: K, value: FiscalData[K]) =>
@@ -298,11 +303,11 @@ export function usePortal(flash: (msg: string) => void) {
    * antes de llamar a esta función.
    */
   const goConfirm = useCallback(() => {
-    if (!stateRef.current.ticket) { flash('Verifica tu ticket primero'); return }
+    if (!stateRef.current.ticket) { flash('Verifica tu ticket primero', 'warning'); return }
     const errors = validateFiscal(stateRef.current.fiscal)
     if (Object.keys(errors).length) {
       set({ touched: true })
-      flash('Revisa los campos marcados')
+      flash('Revisa los campos marcados', 'warning')
       return
     }
     set({ step: 'confirm', touched: false })
@@ -311,7 +316,7 @@ export function usePortal(flash: (msg: string) => void) {
   // ── Step 3: Confirm ──────────────────────────────────────────────────────
   const generate = useCallback(async () => {
     const current = stateRef.current
-    if (!current.ticket) { flash('Verifica tu ticket primero'); return }
+    if (!current.ticket) { flash('Verifica tu ticket primero', 'warning'); return }
     set({ busy: true })
 
     // Parseo del monto igual que en runLookup: el backend de emit también requiere amount.
@@ -340,13 +345,13 @@ export function usePortal(flash: (msg: string) => void) {
         } else if (code === 'FULLY_REFUNDED') {
           set({ busy: false, step: 'ticket', ticket: null, folio: '', lookupError: 'refunded' })
         } else if (code === 'DEADLINE_EXCEEDED') {
-          flash('El periodo de facturación de este ticket ya venció')
+          flash('El periodo de facturación de este ticket ya venció', 'error')
           set({ busy: false })
         } else if (code === 'FISCAL_INVALID') {
-          flash('Datos fiscales inválidos — regresa y verifica los campos')
+          flash('Datos fiscales inválidos — regresa y verifica los campos', 'error')
           set({ busy: false })
         } else {
-          flash('Error al generar la factura. Intenta de nuevo más tarde.')
+          flash('Error al generar la factura. Intenta de nuevo más tarde.', 'error')
           set({ busy: false })
         }
         return
@@ -358,7 +363,7 @@ export function usePortal(flash: (msg: string) => void) {
       clearSnapshot()
       set({ busy: false, step: 'success', factura: data.factura })
     } catch {
-      flash('Error de conexión. Verifica tu internet e intenta de nuevo.')
+      flash('Error de conexión. Verifica tu internet e intenta de nuevo.', 'error')
       set({ busy: false })
     }
   }, [set, flash])
@@ -409,32 +414,32 @@ export function usePortal(flash: (msg: string) => void) {
 
   const downloadPdf = useCallback(async () => {
     const factura = stateRef.current.factura
-    if (!factura?.invoiceId) { flash('No hay factura para descargar'); return }
-    flash('Descargando PDF…')
+    if (!factura?.invoiceId) { flash('No hay factura para descargar', 'warning'); return }
+    flash('Descargando PDF…', 'info')
     try {
       await triggerDownload(factura.invoiceId, 'pdf', factura.serieFolio)
     } catch {
-      flash('No se pudo descargar el archivo. Intenta de nuevo.')
+      flash('No se pudo descargar el archivo. Intenta de nuevo.', 'error')
     }
   }, [flash, triggerDownload])
 
   const downloadXml = useCallback(async () => {
     const factura = stateRef.current.factura
-    if (!factura?.invoiceId) { flash('No hay factura para descargar'); return }
-    flash('Descargando XML…')
+    if (!factura?.invoiceId) { flash('No hay factura para descargar', 'warning'); return }
+    flash('Descargando XML…', 'info')
     try {
       await triggerDownload(factura.invoiceId, 'xml', factura.serieFolio)
     } catch {
-      flash('No se pudo descargar el archivo. Intenta de nuevo.')
+      flash('No se pudo descargar el archivo. Intenta de nuevo.', 'error')
     }
   }, [flash, triggerDownload])
 
   const resendEmail = useCallback(async () => {
     const factura = stateRef.current.factura
     const email   = stateRef.current.fiscal.email
-    if (!factura?.invoiceId) { flash('No hay factura para reenviar'); return }
+    if (!factura?.invoiceId) { flash('No hay factura para reenviar', 'warning'); return }
 
-    flash('Enviando factura por correo…')
+    flash('Enviando factura por correo…', 'info')
     try {
       const res = await fetch('/api/invoice/resend', {
         method: 'POST',
@@ -444,12 +449,12 @@ export function usePortal(flash: (msg: string) => void) {
         }),
       })
       if (res.ok) {
-        flash('Factura enviada a ' + email)
+        flash('Factura enviada a ' + email, 'success')
       } else {
-        flash('No se pudo enviar el correo. Intenta de nuevo.')
+        flash('No se pudo enviar el correo. Intenta de nuevo.', 'error')
       }
     } catch {
-      flash('No se pudo enviar el correo. Intenta de nuevo.')
+      flash('No se pudo enviar el correo. Intenta de nuevo.', 'error')
     }
   }, [flash])
 

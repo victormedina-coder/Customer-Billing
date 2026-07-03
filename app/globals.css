@@ -342,12 +342,12 @@
   domine. `max-width: 100%` evita desbordes en columnas estrechas (móvil).
 */
 .brand-logos-img-wrap {
-  --logo-h: 84px;
+  --logo-h: 104px;
   position: relative;
   height: var(--logo-h);
   max-width: 100%;
 }
-.brand-logos-img-wrap--stetson { width: calc(var(--logo-h) * 3); }    /* 1500×500 = 3:1 */
+.brand-logos-img-wrap--stetson { width: calc(var(--logo-h) * 1.235);  } /* 1363×1104 ≈ 1.235:1 (medido del PNG real) */
 .brand-logos-img-wrap--ariat   { width: var(--logo-h); }              /* 801×801  = 1:1 */
 .brand-logos-img-wrap--wb      { width: calc(var(--logo-h) * 1.78); } /* 4000×2250 ≈ 1.78:1 */
 /* Each logo fills its wrapper with contain so proportions are never distorted */
@@ -379,7 +379,7 @@
     padding: 0 12px;
   }
   .brand-logos-img-wrap {
-    --logo-h: 44px;
+    --logo-h: 56px;
   }
 }
 
@@ -391,7 +391,7 @@
     padding: 0 8px;
   }
   .brand-logos-img-wrap {
-    --logo-h: 36px;
+    --logo-h: 44px;
   }
 }
 
