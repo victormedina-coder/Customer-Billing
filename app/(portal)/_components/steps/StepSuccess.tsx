@@ -1,6 +1,6 @@
 'use client'
 import type { Ticket, FiscalData, GeneratedInvoice } from '../../_lib/types'
-import { formatMXN, calcInvoiceBreakdown } from '../../_lib/formatters'
+import { formatMXN } from '../../_lib/formatters'
 import { METODO_PAGO_LABEL, USOS_CFDI, REGIMENES } from '../../_lib/constants'
 
 interface StepSuccessProps {
@@ -27,7 +27,7 @@ export function StepSuccess({
   onDownloadPdf, onDownloadXml, onResendEmail, onNewInvoice,
 }: StepSuccessProps) {
   const usoLabel = USOS_CFDI.find(u => u.code === fiscal.uso)?.label ?? fiscal.uso
-  const b = calcInvoiceBreakdown(ticket)
+  const b = ticket.breakdown
   const regimenLabel = REGIMENES.find(r => r.code === factura.emisor.regimen)?.label ?? factura.emisor.regimen
 
   return (

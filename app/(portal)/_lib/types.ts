@@ -27,6 +27,19 @@ export interface TicketItem {
   unit: number
 }
 
+/**
+ * Desglose fiscal final para el preview de Confirmar/Éxito.
+ * Espejo plano de FiscalBreakdown['totales'] (src/domain/fiscal/FiscalBreakdown.ts):
+ * lo calcula el servidor con FiscalCalculator y el cliente solo lo renderiza,
+ * sin volver a hacer matemática fiscal (fuente única de verdad).
+ */
+export interface TicketBreakdown {
+  subtotalSinIVA: number
+  descuento: number
+  iva: number
+  total: number
+}
+
 export interface Ticket {
   folio: string
   fecha: string
@@ -39,6 +52,8 @@ export interface Ticket {
   // Montos autoritativos de Shopify para el desglose fiscal B1
   tax?: number      // IVA real (order.taxAmount)
   discount?: number // Descuento a nivel pedido con IVA incluido (order.discountAmount)
+  /** Desglose fiscal ya calculado por FiscalCalculator — fuente única de verdad. */
+  breakdown: TicketBreakdown
   // Solo si status === 'invoiced'
   facturaFolio?: string
   fechaTimbrado?: string

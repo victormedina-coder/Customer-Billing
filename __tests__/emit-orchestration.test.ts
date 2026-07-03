@@ -48,7 +48,8 @@ const VALID_ORDER: NormalizedOrderWithPayment = {
     description:          'Sombrero Test',
     quantity:             1,
     unitPrice:            100,
-    unitPriceIncludesTax: true,
+    taxRate:              0.16,
+    taxObject:            '02',
     discount:             0,
     productCode:          'TEST-001',
   }],
@@ -121,6 +122,7 @@ vi.mock('../src/infrastructure/db/invoice-repository', async () => ({
   updateInvoiceStamp: vi.fn(async () => makeInvoiceRow({ status: 'emitted' })),
   deleteById:         vi.fn(async () => {}),
   findById:           vi.fn(async () => null),
+  reapIfStalePending: vi.fn(async () => false),
 }))
 
 vi.mock('../src/composition/invoiceService', async () => ({
@@ -169,6 +171,7 @@ beforeEach(async () => {
     makeInvoiceRow({ status: 'emitted' })
   )
   vi.mocked(dbRepo.deleteById).mockImplementation(async () => {})
+  vi.mocked(dbRepo.reapIfStalePending).mockImplementation(async () => false)
   vi.mocked(invoiceService.getInvoiceService).mockReturnValue({
     emitir:       vi.fn(async () => EMIT_RESULT),
     enviarCorreo: vi.fn(async () => {}),
@@ -477,5 +480,154 @@ describe('orquestación emit — respuesta canónica', () => {
     expect(body.factura.fecha).toBe(EMIT_RESULT.fecha)
     expect(body.factura.sello).toBe(EMIT_RESULT.sello)
     expect(body.factura.emisor.rfc).toBe(EMIT_RESULT.emisor.rfc)
+  })
+})
+
+describe('orquestación emit — reap-lazy de filas pending huérfanas (docs/08-plan-pre-deploy.md §4)', () => {
+  it('fila pending vieja: reapIfStalePending libera el cerrojo y el segundo createInvoice timbra normal', async () => {
+    // Primer intento choca con el UNIQUE (fila huérfana existente); el reap la libera;
+    // el segundo intento de createInvoice tiene éxito.
+    let createInvoiceCalls = 0
+    vi.mocked(dbRepo.createInvoice).mockImplementation(async () => {
+      createInvoiceCalls += 1
+      if (createInvoiceCalls === 1) {
+        return { created: false as const, reason: 'already_invoiced' as const }
+      }
+      return { created: true as const, invoice: makeInvoiceRow() }
+    })
+    vi.mocked(dbRepo.reapIfStalePending).mockImplementation(async () => true)
+
+    const res = await POST(makeEmitRequest())
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { factura: { invoiceId: string } }
+    expect(body.factura.invoiceId).toBeTruthy()
+    expect(dbRepo.reapIfStalePending).toHaveBeenCalledWith(
+      ORDER_ID, STORE_NAME, expect.any(Number), expect.any(Date)
+    )
+    expect(createInvoiceCalls).toBe(2)
+  })
+
+  it('fila pending reciente: reapIfStalePending devuelve false → ALREADY_INVOICED sin reintentar el insert', async () => {
+    let createInvoiceCalls = 0
+    vi.mocked(dbRepo.createInvoice).mockImplementation(async () => {
+      createInvoiceCalls += 1
+      return { created: false as const, reason: 'already_invoiced' as const }
+    })
+    vi.mocked(dbRepo.reapIfStalePending).mockImplementation(async () => false)
+    const emitFn = vi.fn()
+    mockInvoiceService({ emitir: emitFn })
+
+    const res = await POST(makeEmitRequest())
+
+    expect(res.status).toBe(409)
+    const body = await res.json() as { error: { code: string } }
+    expect(body.error.code).toBe('ALREADY_INVOICED')
+    expect(createInvoiceCalls).toBe(1)
+    expect(emitFn).not.toHaveBeenCalled()
+  })
+
+  it('fila emitted: nunca se reapea, siempre ALREADY_INVOICED', async () => {
+    vi.mocked(dbRepo.createInvoice).mockImplementation(async () => ({
+      created: false as const,
+      reason: 'already_invoiced' as const,
+    }))
+    vi.mocked(dbRepo.reapIfStalePending).mockImplementation(async () => false)
+
+    const res = await POST(makeEmitRequest())
+
+    expect(res.status).toBe(409)
+    const body = await res.json() as { error: { code: string } }
+    expect(body.error.code).toBe('ALREADY_INVOICED')
+  })
+
+  it('fila stamped_unconfirmed: nunca se reapea aunque sea vieja — no permite doble timbre', async () => {
+    // reapIfStalePending es responsable de este invariante a nivel repo (nunca borra
+    // algo que no sea 'pending'); aquí verificamos que el use case respeta `false`
+    // devuelto por el repo y no reintenta el insert.
+    let createInvoiceCalls = 0
+    vi.mocked(dbRepo.createInvoice).mockImplementation(async () => {
+      createInvoiceCalls += 1
+      return { created: false as const, reason: 'already_invoiced' as const }
+    })
+    vi.mocked(dbRepo.reapIfStalePending).mockImplementation(async () => false)
+    const emitFn = vi.fn()
+    mockInvoiceService({ emitir: emitFn })
+
+    const res = await POST(makeEmitRequest())
+
+    expect(res.status).toBe(409)
+    const body = await res.json() as { error: { code: string } }
+    expect(body.error.code).toBe('ALREADY_INVOICED')
+    expect(createInvoiceCalls).toBe(1)
+    expect(emitFn).not.toHaveBeenCalled()
+  })
+
+  it('carrera de dos reaps: el reintento de insert vuelve a chocar con UNIQUE → ALREADY_INVOICED limpio, sin lanzar', async () => {
+    // El reap devuelve true (creyó liberar el cerrojo), pero otro request ganó la
+    // carrera y ya reinsertó primero: el segundo createInvoice vuelve a chocar.
+    let createInvoiceCalls = 0
+    vi.mocked(dbRepo.createInvoice).mockImplementation(async () => {
+      createInvoiceCalls += 1
+      return { created: false as const, reason: 'already_invoiced' as const }
+    })
+    vi.mocked(dbRepo.reapIfStalePending).mockImplementation(async () => true)
+    const emitFn = vi.fn()
+    mockInvoiceService({ emitir: emitFn })
+
+    const res = await POST(makeEmitRequest())
+
+    expect(res.status).toBe(409)
+    const body = await res.json() as { error: { code: string } }
+    expect(body.error.code).toBe('ALREADY_INVOICED')
+    expect(createInvoiceCalls).toBe(2)
+    expect(emitFn).not.toHaveBeenCalled()
+  })
+})
+
+describe('orquestación emit — subcaso crítico: timbrado exitoso pero updateInvoiceStamp falla', () => {
+  it('marca stamped_unconfirmed cuando el UPDATE a emitted falla tras timbrar con éxito', async () => {
+    const stampCalls: Array<{ id: unknown; data: unknown }> = []
+    vi.mocked(dbRepo.updateInvoiceStamp).mockImplementation(async (id: unknown, data: unknown) => {
+      stampCalls.push({ id, data })
+      const d = data as { status?: string }
+      if (d.status === 'emitted') {
+        throw new Error('DB connection lost')
+      }
+      return makeInvoiceRow({ status: 'stamped_unconfirmed' })
+    })
+
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const res = await POST(makeEmitRequest())
+
+    // El CFDI YA se timbró en Facturama — la respuesta al cliente sigue siendo 200.
+    expect(res.status).toBe(200)
+
+    expect(stampCalls).toHaveLength(2)
+    expect(stampCalls[0].data).toMatchObject({ status: 'emitted' })
+    expect(stampCalls[1].data).toMatchObject({
+      status:      'stamped_unconfirmed',
+      facturamaId: EMIT_RESULT.facturamaId,
+      uuidCfdi:    EMIT_RESULT.uuid,
+    })
+
+    consoleError.mockRestore()
+  })
+
+  it('si también falla el marcado de stamped_unconfirmed, sigue respondiendo 200 y loguea para revisión manual', async () => {
+    vi.mocked(dbRepo.updateInvoiceStamp).mockImplementation(async () => {
+      throw new Error('DB connection lost')
+    })
+
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const res = await POST(makeEmitRequest())
+
+    expect(res.status).toBe(200)
+    const allMessages = consoleError.mock.calls.flat().map(String).join(' ')
+    expect(allMessages).toMatch(/stamped_unconfirmed|manual|conciliar/i)
+
+    consoleError.mockRestore()
   })
 })

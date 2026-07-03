@@ -105,6 +105,8 @@ Todas las flechas apuntan **hacia el dominio**. `domain/` no importa de ninguna 
 3. **`POST /api/invoice/emit`** — `{ folio, amount, fiscal }`
    Re-valida el monto (cierra el bypass de saltarse `lookup` e ir directo a `emit`), adquiere el cerrojo de base de datos con patrón **insert-first** (inserta una fila `pending` que toma el `UNIQUE(order_id, store_name)` antes de gastar en Facturama), timbra el CFDI, persiste el resultado y envía el correo con el CFDI (best-effort — un fallo de correo no tumba la respuesta). Devuelve `{ factura }`.
 
+   **Reap-lazy de filas `pending` huérfanas:** si el proceso muere entre el insert-first y el timbrado/rollback (crash, timeout, redeploy), la fila `pending` queda huérfana y bloquearía reintentos del mismo pedido para siempre. Cuando el insert choca con el `UNIQUE`, `EmitInvoiceUseCase` revisa la fila existente: si sigue `pending` y es más vieja que `PENDING_TTL_MINUTES` (default 10 min), la borra y reintenta el insert una vez; si es `pending` pero reciente, o `emitted`, responde `ALREADY_INVOICED` (comportamiento normal). Si el CFDI se timbró en Facturama pero el `UPDATE` que lo confirma en la fila falla, la fila se marca `stamped_unconfirmed` en vez de quedar `pending` — ese status nunca se reapea (evita un segundo timbrado duplicado) y requiere conciliación manual. Ver `docs/08-plan-pre-deploy.md` §4 para el diseño completo.
+
 4. **`GET /api/invoice/download/[invoiceId]/[format]`** y **`POST /api/invoice/resend`**
    Usan el `invoiceId` (UUID de la fila en DB) como **token de capacidad** — el `facturamaId` interno nunca se expone al cliente. `resend` solo reenvía al email guardado en la fila (nunca a uno provisto por el request).
 
@@ -196,7 +198,7 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 | `FACTURAMA_DEFAULT_PRODUCT_CODE` | ClaveProdServ por defecto |
 | `FACTURAMA_DEFAULT_UNIT_CODE` | ClaveUnidad por defecto |
 | `FACTURAMA_DEFAULT_PAYMENT_FORM` | FormaPago por defecto |
-| `FACTURAMA_EXPEDITION_PLACE` | Código postal de expedición |
+| `FACTURAMA_EXPEDITION_PLACE` | **Opcional.** Override manual del Lugar de Expedición (CP). Por defecto (vacío) se resuelve en vivo desde el perfil fiscal del emisor en Facturama (`GET /TaxEntity` → `IssuedIn.ZipCode`, cacheado 1h en memoria de proceso). Nunca cae al CP del receptor — si Facturama no devuelve un CP registrado, el timbrado falla explícitamente. |
 | `FACTURAMA_ISSUER_EMAIL` | Correo remitente del CFDI (opcional; el reenvío funciona sin ella) |
 
 ### Base de datos
@@ -224,6 +226,7 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 | Variable | Descripción |
 |---|---|
 | `EMIT_MOCK` | `true` genera un CFDI de prueba en `emit` sin llamar a Facturama ni Shopify (desarrollo) |
+| `PENDING_TTL_MINUTES` | Minutos de antigüedad tras los cuales una fila `pending` huérfana se libera de forma lazy en `emit` (default: `10`) |
 | `NEXT_PUBLIC_LOOKUP_MOCK` | `true` usa `DEMO_TICKETS` en vez de llamar a Shopify en `lookup` (desarrollo sin credenciales) |
 | `INVOICE_WINDOW_MODE` | Modo de la ventana de facturación (default en código: `current-month`) |
 | `TRUSTED_PROXY_COUNT` | Ver grupo de Redis / rate limiting arriba |

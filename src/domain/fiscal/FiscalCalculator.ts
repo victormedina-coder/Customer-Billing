@@ -78,9 +78,9 @@ export const FiscalCalculator = {
 
     // ── Paso 3: convertir a campos CFDI (sin IVA) por línea ────────────────
     const lines: LineBreakdown[] = order.lines.map((line, index) => {
-      const lc       = lineCalcs[index]
-      const qty      = line.quantity
-      const inclsTax = line.unitPriceIncludesTax
+      const lc     = lineCalcs[index]
+      const qty    = line.quantity
+      const exento = line.taxObject === '01'
 
       let subtotal: number  // Importe lista SIN IVA
       let discount: number  // Descuento SIN IVA
@@ -88,21 +88,23 @@ export const FiscalCalculator = {
       let iva: number
       let total: number
 
-      if (inclsTax) {
+      if (exento) {
+        // Sin nodo de impuesto: el bruto ES el importe (no hay IVA que restar).
+        subtotal = lc.listGross
+        base     = lc.netGross
+        discount = round2(subtotal - base)
+        iva      = 0
+        total    = base
+      } else {
         // Derivar subtotal y base desde los brutos para evitar acumulación de
         // errores de redondeo: si se divide listGross y discGross por separado y
         // luego se restan, el resultado difiere en ±0.01 del valor correcto.
         // La fuente de verdad es netGross (ya reconciliado contra order.total).
-        subtotal = round2(lc.listGross / 1.16)
-        base     = round2(lc.netGross  / 1.16)   // más preciso que subtotal - discount
+        const factor = 1 + line.taxRate
+        subtotal = round2(lc.listGross / factor)
+        base     = round2(lc.netGross  / factor)   // más preciso que subtotal - discount
         discount = round2(subtotal - base)         // derivado, no dividido
-        iva      = round2(base * 0.16)
-        total    = round2(base + iva)
-      } else {
-        subtotal = lc.listGross
-        base     = lc.netGross
-        discount = round2(subtotal - base)
-        iva      = round2(base * 0.16)
+        iva      = round2(base * line.taxRate)
         total    = round2(base + iva)
       }
 
@@ -147,11 +149,14 @@ export const FiscalCalculator = {
       // y recalcular Subtotal = Base + Discount.  Así nunca hay descuento negativo
       // ni se rompe la identidad que valida el SAT/Facturama.
       const last        = lines[lines.length - 1]
+      const lastLine    = order.lines[order.lines.length - 1]
       const qty         = last.quantity
+      const lastExento  = lastLine.taxObject === '01'
       const lastTotal   = round2(last.total + centDiff)
       const lastDisc    = last.discount   // se mantiene intacto
-      const lastBase    = round2(lastTotal / 1.16)
-      const lastIva     = round2(lastTotal - lastBase)
+      // Último renglón exento: no hay IVA, base === total.
+      const lastBase    = lastExento ? lastTotal : round2(lastTotal / (1 + lastLine.taxRate))
+      const lastIva     = lastExento ? 0 : round2(lastTotal - lastBase)
       const lastSub     = round2(lastBase + lastDisc)  // garantiza Subtotal − Discount === Base
 
       last.total          = lastTotal

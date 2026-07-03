@@ -231,3 +231,60 @@ export async function cancelarCFDI(
   const path = uuidReemplazo ? `${base}/${encodeURIComponent(uuidReemplazo)}` : base
   return request('DELETE', path)
 }
+
+// ─── Perfil fiscal del emisor (TaxEntity) ─────────────────────────────────────
+
+/**
+ * Forma real de la respuesta de GET /TaxEntity (confirmada contra el sandbox
+ * de Facturama el 2026-07-03). Solo se tipan los campos que consumimos.
+ */
+export interface TaxEntityInfo {
+  FiscalRegime: string
+  Rfc: string
+  TaxAddress?: { ZipCode?: string }
+  IssuedIn?: { ZipCode?: string }
+  [k: string]: unknown
+}
+
+export async function getTaxEntityInfo(): Promise<TaxEntityInfo> {
+  return request<TaxEntityInfo>('GET', '/TaxEntity')
+}
+
+// Cache en memoria de proceso: el lugar de expedición es config de cuenta,
+// cambia rarísima vez. Un cache simple de módulo + timestamp es suficiente
+// (mismo espíritu KISS que el resto del cliente, sin sobre-diseñar).
+const EXPEDITION_PLACE_TTL_MS = 60 * 60 * 1000 // 1 hora
+
+let _expeditionPlaceCache: { value: string; expiresAt: number } | null = null
+
+/**
+ * Devuelve el código postal del "Lugar de Expedición" (IssuedIn) registrado
+ * en el perfil fiscal del emisor en Facturama. Este es el único valor válido
+ * para ExpeditionPlace en un CFDI 4.0 — jamás el CP de un tercero (receptor).
+ *
+ * Cachea en memoria de proceso con TTL de 1h porque es configuración de
+ * cuenta que cambia muy rara vez.
+ */
+export async function getExpeditionPlace(): Promise<string> {
+  const now = Date.now()
+  if (_expeditionPlaceCache && _expeditionPlaceCache.expiresAt > now) {
+    return _expeditionPlaceCache.value
+  }
+
+  const info = await getTaxEntityInfo()
+  const zipCode = info.IssuedIn?.ZipCode?.trim()
+
+  if (!zipCode) {
+    throw new Error(
+      'Facturama no devolvió un Lugar de Expedición (IssuedIn.ZipCode) registrado en el perfil fiscal del emisor.'
+    )
+  }
+
+  _expeditionPlaceCache = { value: zipCode, expiresAt: now + EXPEDITION_PLACE_TTL_MS }
+  return zipCode
+}
+
+/** Solo para tests: limpia el cache en memoria de getExpeditionPlace(). */
+export function __resetExpeditionPlaceCache(): void {
+  _expeditionPlaceCache = null
+}

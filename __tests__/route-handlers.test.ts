@@ -41,7 +41,8 @@ const VALID_ORDER: NormalizedOrderWithPayment = {
     description:          'Sombrero',
     quantity:             1,
     unitPrice:            100,
-    unitPriceIncludesTax: true,
+    taxRate:              0.16,
+    taxObject:            '02',
     discount:             0,
     productCode:          'STT-001',
   }],
@@ -119,6 +120,7 @@ vi.mock('../src/infrastructure/db/invoice-repository', async () => ({
   updateInvoiceStamp: vi.fn(async () => makeInvoiceRow()),
   deleteById:         vi.fn(async () => {}),
   findById:           vi.fn(async () => makeInvoiceRow()),
+  reapIfStalePending: vi.fn(async () => false),
 }))
 
 vi.mock('../src/composition/invoiceService', async () => ({

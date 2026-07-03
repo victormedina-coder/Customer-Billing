@@ -14,6 +14,18 @@ export const invoices = pgTable('invoices', {
   rfcReceptor: text('rfc_receptor'),
   razonSocial: text('razon_social'),
   email: text('email'),
+  /**
+   * Estado del ciclo de vida de la fila (no es un enum de Postgres — texto libre
+   * validado en código).
+   * - 'pending': cerrojo insert-first tomado, timbrado aún no confirmado. Si
+   *   queda huérfana (proceso murió antes de timbrar), el reap-lazy de
+   *   EmitInvoiceUseCase la libera tras PENDING_TTL_MINUTES.
+   * - 'emitted': CFDI timbrado y confirmado en la fila.
+   * - 'stamped_unconfirmed': el CFDI SÍ se timbró en Facturama (existe), pero
+   *   el UPDATE que debía confirmarlo en la fila falló. El reap-lazy NUNCA
+   *   toca este status — borrarla permitiría un segundo timbrado duplicado
+   *   del mismo pedido. Requiere conciliación manual (ver docs/08-plan-pre-deploy.md §4).
+   */
   status: text('status').notNull().default('pending'),
   /**
    * Tipo de CFDI emitido.

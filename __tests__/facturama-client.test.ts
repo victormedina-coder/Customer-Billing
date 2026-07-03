@@ -569,3 +569,107 @@ describe('cancelarCFDI', () => {
     expect(url).not.toContain('/issued/02/')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// describe: getExpeditionPlace
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('getExpeditionPlace', () => {
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  // Shape real confirmado contra el sandbox de Facturama (GET /TaxEntity, 2026-07-03)
+  const taxEntityResponse = {
+    FiscalRegime: '601',
+    ComercialName: 'ESCUELA KEMPER URGATE',
+    Rfc: 'EKU9003173C9',
+    TaxName: 'ESCUELA KEMPER URGATE',
+    Email: 'analistab2c@1522.mx',
+    TaxAddress: {
+      Street: 'LOS PINOS', Neighborhood: 'Los Pinos', ZipCode: '26015',
+      Locality: '', Municipality: 'Piedras Negras', State: 'Coahuila', Country: 'MEXICO',
+    },
+    IssuedIn: {
+      Street: 'LOS PINOS', Neighborhood: 'Los Pinos', ZipCode: '26015',
+      Locality: '', Municipality: 'Piedras Negras', State: 'COAHUILA', Country: 'MEXICO',
+      Id: 'Gb8Aw7eVtBQTRaC9o1F0MQ2',
+    },
+  }
+
+  beforeEach(() => {
+    fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubEnv('FACTURAMA_USER', FAKE_USER)
+    vi.stubEnv('FACTURAMA_PASS', FAKE_PASS)
+    vi.stubEnv('FACTURAMA_ENV', 'sandbox')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  it('llama a GET /TaxEntity y devuelve IssuedIn.ZipCode', async () => {
+    const { getExpeditionPlace } = await importClient()
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(taxEntityResponse))
+
+    const result = await getExpeditionPlace()
+
+    expect(result).toBe('26015')
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(`${SANDBOX_BASE}/TaxEntity`)
+    expect(init.method).toBe('GET')
+    expect((init.headers as Record<string, string>)['Authorization']).toBe(EXPECTED_AUTH)
+  })
+
+  it('lanza error claro cuando IssuedIn.ZipCode viene vacío', async () => {
+    const { getExpeditionPlace } = await importClient()
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ...taxEntityResponse, IssuedIn: { ZipCode: '' } }))
+
+    await expect(getExpeditionPlace()).rejects.toThrow(/Lugar de Expedición/)
+  })
+
+  it('lanza error claro cuando IssuedIn no viene en la respuesta', async () => {
+    const { getExpeditionPlace } = await importClient()
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ FiscalRegime: '601', Rfc: 'EKU9003173C9' }))
+
+    await expect(getExpeditionPlace()).rejects.toThrow(/Lugar de Expedición/)
+  })
+
+  it('propaga el error si Facturama responde con error HTTP', async () => {
+    const { getExpeditionPlace } = await importClient()
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ Message: 'No autorizado' }, 401))
+
+    await expect(getExpeditionPlace()).rejects.toMatchObject({ statusCode: 401 })
+  })
+
+  it('cachea el resultado: una segunda llamada dentro del TTL no vuelve a golpear Facturama', async () => {
+    const { getExpeditionPlace } = await importClient()
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(taxEntityResponse))
+
+    const first = await getExpeditionPlace()
+    const second = await getExpeditionPlace()
+
+    expect(first).toBe('26015')
+    expect(second).toBe('26015')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('__resetExpeditionPlaceCache fuerza una nueva llamada a Facturama', async () => {
+    const { getExpeditionPlace, __resetExpeditionPlaceCache } = await importClient()
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(taxEntityResponse))
+    await getExpeditionPlace()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    __resetExpeditionPlaceCache()
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(taxEntityResponse))
+    await getExpeditionPlace()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+})

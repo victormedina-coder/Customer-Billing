@@ -24,9 +24,24 @@ import {
   createInvoice,
   updateInvoiceStamp,
   deleteById,
+  reapIfStalePending,
 } from '../infrastructure/db/invoice-repository'
 import { isWithinInvoiceWindow } from '../domain/eligibility/InvoiceWindowPolicy'
 import { isFullyRefunded } from '../domain/orders/RefundPolicy'
+
+const DEFAULT_PENDING_TTL_MINUTES = 10
+
+/**
+ * Minutos de antigüedad tras los cuales una fila 'pending' huérfana se libera
+ * (reap-lazy). Ver docs/08-plan-pre-deploy.md §4. Default: 10 min — muy por
+ * encima de cualquier timbrado real (segundos).
+ */
+function getPendingTtlMinutes(): number {
+  const raw = process.env.PENDING_TTL_MINUTES
+  if (!raw) return DEFAULT_PENDING_TTL_MINUTES
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PENDING_TTL_MINUTES
+}
 
 /**
  * Construye un EmitInvoiceUseCase con todas sus dependencias cableadas.
@@ -55,6 +70,8 @@ export function makeEmitInvoiceUseCase(): EmitInvoiceUseCase {
       createInvoice:     (data)               => createInvoice(data),
       updateInvoiceStamp: (id, data)          => updateInvoiceStamp(id, data),
       deleteById:        (id)                 => deleteById(id),
+      reapIfStalePending: (orderId, storeName, ttlMinutes, now) =>
+        reapIfStalePending(orderId, storeName, ttlMinutes, now),
     },
     refundPolicy: {
       isFullyRefunded: (order) => isFullyRefunded(order),
@@ -62,6 +79,7 @@ export function makeEmitInvoiceUseCase(): EmitInvoiceUseCase {
     windowPolicy: {
       isWithinInvoiceWindow: (createdAt) => isWithinInvoiceWindow(createdAt),
     },
+    pendingTtlMinutes: getPendingTtlMinutes(),
   }
 
   return new EmitInvoiceUseCase(deps)

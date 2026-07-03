@@ -1,6 +1,6 @@
 'use client'
 import type { Ticket, FiscalData } from '../../_lib/types'
-import { formatMXN, calcInvoiceBreakdown } from '../../_lib/formatters'
+import { formatMXN } from '../../_lib/formatters'
 import { METODO_PAGO_LABEL, REGIMENES, USOS_CFDI } from '../../_lib/constants'
 import { BackButton } from '../ui/BackButton'
 import { LoadingSpinner } from '../ui/LoadingSpinner'
@@ -42,7 +42,7 @@ function DataRow({ label, value }: { label: string; value: string }) {
 export function StepConfirm({ ticket, fiscal, busy, onBack, onGenerate }: StepConfirmProps) {
   const regimenLabel = REGIMENES.find(r => r.code === fiscal.regimen)?.label ?? fiscal.regimen
   const usoLabel = USOS_CFDI.find(u => u.code === fiscal.uso)?.label ?? fiscal.uso
-  const b = calcInvoiceBreakdown(ticket)
+  const b = ticket.breakdown
 
   return (
     <div style={{ width: '100%', maxWidth: 520, animation: 'fadeIn 0.3s ease both' }}>

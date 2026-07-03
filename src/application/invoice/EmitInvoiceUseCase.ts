@@ -66,6 +66,12 @@ export interface EmitInvoiceRepo {
     data: { facturamaId: string; uuidCfdi: string; status: string }
   ): Promise<unknown>
   deleteById(invoiceId: string): Promise<void>
+  /**
+   * Reap-lazy de una fila 'pending' huérfana (ver docs/08-plan-pre-deploy.md §4).
+   * Devuelve `true` si liberó el cerrojo borrando la fila, `false` si no había
+   * nada que reapear (fila reciente, 'emitted', 'stamped_unconfirmed' o inexistente).
+   */
+  reapIfStalePending(orderId: string, storeName: string, ttlMinutes: number, now: Date): Promise<boolean>
 }
 
 // ─── Port mínimo del OrderSource necesario en este caso de uso ───────────────
@@ -92,12 +98,24 @@ export interface EmitInvoiceDeps {
   repo: EmitInvoiceRepo
   refundPolicy: RefundPolicyPort
   windowPolicy: WindowPolicyPort
+  /** Minutos de antigüedad tras los cuales una fila 'pending' se considera huérfana. Default: 10. */
+  pendingTtlMinutes?: number
+  /** Reloj inyectable — permite testear el TTL sin esperar minutos reales. Default: () => new Date(). */
+  now?: () => Date
 }
 
 // ─── Use Case ─────────────────────────────────────────────────────────────────
 
+const DEFAULT_PENDING_TTL_MINUTES = 10
+
 export class EmitInvoiceUseCase {
-  constructor(private readonly deps: EmitInvoiceDeps) {}
+  private readonly pendingTtlMinutes: number
+  private readonly now: () => Date
+
+  constructor(private readonly deps: EmitInvoiceDeps) {
+    this.pendingTtlMinutes = deps.pendingTtlMinutes ?? DEFAULT_PENDING_TTL_MINUTES
+    this.now = deps.now ?? (() => new Date())
+  }
 
   async execute(input: EmitInput): Promise<Result<EmitOk, EmitError>> {
     const { folio, amount, fiscal } = input
@@ -151,10 +169,7 @@ export class EmitInvoiceUseCase {
     // Insertamos una fila 'pending' que adquiere el cerrojo UNIQUE(order_id, store_name).
     // Si otro request ya lo tiene (carrera), createInvoice devuelve already_invoiced.
     // Esto serializa el timbrado: solo quien gana el INSERT gasta dinero en Facturama.
-    // NOTA: una fila 'pending' también hará que isAlreadyInvoiced (paso anterior) devuelva
-    // true — comportamiento conservador correcto. Un job de conciliación futuro deberá
-    // limpiar filas 'pending' viejas (timbrados iniciados pero nunca completados).
-    const pending = await repo.createInvoice({
+    const createInvoiceData: CreateInvoiceData = {
       orderId: order.id,
       orderNumber: order.orderNumber,
       storeName: order.storeName,
@@ -163,7 +178,24 @@ export class EmitInvoiceUseCase {
       email: fiscal.email,
       status: 'pending',
       invoiceType: 'individual',
-    })
+    }
+    let pending = await repo.createInvoice(createInvoiceData)
+
+    // ── 6b. Reap-lazy de filas 'pending' huérfanas (docs/08-plan-pre-deploy.md §4) ──
+    // Si el INSERT chocó con el UNIQUE, puede ser: (a) un timbrado legítimo en
+    // curso/completado, o (b) una fila 'pending' huérfana porque el proceso murió
+    // antes de timbrar/rollback. Distinguimos por antigüedad: si es 'pending' y
+    // más vieja que pendingTtlMinutes, la reapeamos y reintentamos el INSERT una
+    // sola vez. 'emitted' y 'stamped_unconfirmed' nunca se reapean (ver ese status
+    // más abajo). Si el reintento vuelve a chocar (otro request ganó la carrera
+    // reapeando primero), cae limpiamente a ALREADY_INVOICED.
+    if (!pending.created) {
+      const reaped = await repo.reapIfStalePending(order.id, order.storeName, this.pendingTtlMinutes, this.now())
+      if (reaped) {
+        pending = await repo.createInvoice(createInvoiceData)
+      }
+    }
+
     if (!pending.created) {
       return err({ code: 'ALREADY_INVOICED', message: 'Este pedido ya cuenta con un CFDI emitido.' })
     }
@@ -191,8 +223,11 @@ export class EmitInvoiceUseCase {
 
     // ── 8. Persistir los datos del CFDI en la fila ya bloqueada ─────────────
     // El cerrojo ya está tomado; este UPDATE no puede fallar por carrera.
-    // Si la DB falla aquí (raro), el CFDI YA está timbrado y el pedido sigue
-    // bloqueado contra doble-timbre — se concilia manualmente. No tumbamos la respuesta.
+    // Si la DB falla aquí (raro), el CFDI YA está timbrado en Facturama — la fila
+    // NO debe quedar como 'pending' reapeable (el reap-lazy la borraría y un
+    // reintento del cliente causaría un SEGUNDO timbrado duplicado). En su lugar
+    // la marcamos 'stamped_unconfirmed', un status que el reaper nunca toca y que
+    // requiere conciliación manual (docs/08-plan-pre-deploy.md §4).
     try {
       await repo.updateInvoiceStamp(invoiceId, {
         facturamaId: emitResult.facturamaId,
@@ -204,6 +239,18 @@ export class EmitInvoiceUseCase {
       console.error('[emit] CFDI timbrado pero no se pudo actualizar la fila (conciliar):', {
         invoiceId, error: dbMsg,
       })
+      try {
+        await repo.updateInvoiceStamp(invoiceId, {
+          facturamaId: emitResult.facturamaId,
+          uuidCfdi: emitResult.uuid,
+          status: 'stamped_unconfirmed',
+        })
+      } catch (markErr: unknown) {
+        const markMsg = markErr instanceof Error ? markErr.message : String(markErr)
+        console.error('[emit] No se pudo marcar la fila como stamped_unconfirmed (riesgo de reap indebido, conciliar manualmente):', {
+          invoiceId, error: markMsg,
+        })
+      }
     }
 
     // ── 9. Enviar el CFDI por correo (best-effort) ─────────────────────────

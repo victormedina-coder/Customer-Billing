@@ -18,9 +18,14 @@
  *                 como campo extendido opcional.
  *   - status:     'ok' siempre por ahora (alreadyInvoiced=false es Etapa 3).
  *   - items:      description→desc, productCode→sku, quantity→qty, unitPrice→unit.
+ *   - breakdown:  FiscalCalculator.compute(order).totales — el mismo cálculo que se
+ *                 timbra en el CFDI. El cliente ('use client') NUNCA recalcula el
+ *                 desglose fiscal; solo renderiza lo que el servidor ya calculó
+ *                 (Paso 6 DDD — unificación del preview con FiscalCalculator).
  */
 
 import type { NormalizedOrderWithPayment } from '../../domain/orders/Order'
+import { FiscalCalculator } from '../../domain/fiscal/FiscalCalculator'
 import type { Ticket, TicketItem } from '../../../app/(portal)/_lib/types'
 
 /**
@@ -78,6 +83,8 @@ export function normalizedOrderToTicket(
     unit: line.unitPrice,
   }))
 
+  const { totales } = FiscalCalculator.compute(order)
+
   return {
     folio: displayFolio ?? order.orderNumber,
     fecha,
@@ -86,6 +93,7 @@ export function normalizedOrderToTicket(
     total: order.total,
     tax: order.taxAmount,
     discount: order.discountAmount,
+    breakdown: totales,
     // status siempre 'ok' por ahora — alreadyInvoiced es Etapa 3
     status: 'ok',
     formaPago: mapFormaPago(order.paymentGatewayNames),

@@ -44,7 +44,7 @@ describe('FiscalCalculator — línea única sin descuento, IVA inclusivo', () =
     total: 116,
     shippingAmount: 0,
     lines: [
-      { description: 'Sombrero', quantity: 1, unitPrice: 116, unitPriceIncludesTax: true, discount: 0, productCode: 'SKU-001' },
+      { description: 'Sombrero', quantity: 1, unitPrice: 116, taxRate: 0.16, taxObject: '02', discount: 0, productCode: 'SKU-001' },
     ],
   })
   const bd = FiscalCalculator.compute(order)
@@ -77,7 +77,7 @@ describe('FiscalCalculator — línea única con descuento a nivel pedido (5-108
     total: 480,
     shippingAmount: 0,
     lines: [
-      { description: 'Sombrero Test', quantity: 1, unitPrice: 800, unitPriceIncludesTax: true, discount: 0, productCode: 'SKU-001' },
+      { description: 'Sombrero Test', quantity: 1, unitPrice: 800, taxRate: 0.16, taxObject: '02', discount: 0, productCode: 'SKU-001' },
     ],
   })
   const bd = FiscalCalculator.compute(order)
@@ -99,9 +99,9 @@ describe('FiscalCalculator — cent-fix en último item CON descuento (C1 regres
     total: 762.00,
     shippingAmount: 0,
     lines: [
-      { description: 'Producto A', quantity: 3,  unitPrice: 99.99, unitPriceIncludesTax: true, discount: 0, productCode: 'A001' },
-      { description: 'Producto B', quantity: 7,  unitPrice: 31.43, unitPriceIncludesTax: true, discount: 0, productCode: 'B001' },
-      { description: 'Producto C', quantity: 4,  unitPrice: 74.95, unitPriceIncludesTax: true, discount: 0, productCode: 'C001' },
+      { description: 'Producto A', quantity: 3,  unitPrice: 99.99, taxRate: 0.16, taxObject: '02', discount: 0, productCode: 'A001' },
+      { description: 'Producto B', quantity: 7,  unitPrice: 31.43, taxRate: 0.16, taxObject: '02', discount: 0, productCode: 'B001' },
+      { description: 'Producto C', quantity: 4,  unitPrice: 74.95, taxRate: 0.16, taxObject: '02', discount: 0, productCode: 'C001' },
     ],
   })
   const bd = FiscalCalculator.compute(order)
@@ -148,8 +148,8 @@ describe('FiscalCalculator — multi-línea sin descuento', () => {
     total: 232,
     shippingAmount: 0,
     lines: [
-      { description: 'Sombrero A', quantity: 1, unitPrice: 116, unitPriceIncludesTax: true, discount: 0, productCode: 'A001' },
-      { description: 'Sombrero B', quantity: 1, unitPrice: 116, unitPriceIncludesTax: true, discount: 0, productCode: 'B001' },
+      { description: 'Sombrero A', quantity: 1, unitPrice: 116, taxRate: 0.16, taxObject: '02', discount: 0, productCode: 'A001' },
+      { description: 'Sombrero B', quantity: 1, unitPrice: 116, taxRate: 0.16, taxObject: '02', discount: 0, productCode: 'B001' },
     ],
   })
   const bd = FiscalCalculator.compute(order)
@@ -164,5 +164,96 @@ describe('FiscalCalculator — multi-línea sin descuento', () => {
       expect(round2(l.subtotal - l.discount)).toBeCloseTo(l.base, 2)
       expect(round2(l.unitPriceSinIva * l.quantity)).toBeCloseTo(l.subtotal, 2)
     }
+  })
+})
+
+// ── Caso 5: línea con tasa 0% (tasa cero real, gravada) ──────────────────────
+describe('FiscalCalculator — línea con tasa 0% (tasa cero, gravada)', () => {
+  const order = makeOrder({
+    total: 100,
+    shippingAmount: 0,
+    lines: [
+      { description: 'Producto tasa 0', quantity: 1, unitPrice: 100, taxRate: 0, taxObject: '02', discount: 0, productCode: 'Z001' },
+    ],
+  })
+  const bd = FiscalCalculator.compute(order)
+
+  it('iva === 0', () => expect(bd.porLinea[0].iva).toBe(0))
+  it('subtotal === 100 (no se divide entre 1+tasa)', () => expect(bd.porLinea[0].subtotal).toBe(100))
+  it('base === 100', () => expect(bd.porLinea[0].base).toBe(100))
+  it('total === 100', () => expect(bd.porLinea[0].total).toBe(100))
+})
+
+// ── Caso 6: línea exenta (taxObject '01', sin taxLines) ──────────────────────
+describe('FiscalCalculator — línea exenta (taxObject 01)', () => {
+  const order = makeOrder({
+    total: 100,
+    shippingAmount: 0,
+    lines: [
+      { description: 'Producto exento', quantity: 1, unitPrice: 100, taxRate: 0, taxObject: '01', discount: 0, productCode: 'E001' },
+    ],
+  })
+  const bd = FiscalCalculator.compute(order)
+
+  it('iva === 0', () => expect(bd.porLinea[0].iva).toBe(0))
+  it('base === subtotal - discount', () => {
+    const l = bd.porLinea[0]
+    expect(round2(l.subtotal - l.discount)).toBeCloseTo(l.base, 2)
+  })
+  it('total === base (sin IVA que sumar)', () => {
+    const l = bd.porLinea[0]
+    expect(l.total).toBeCloseTo(l.base, 2)
+  })
+})
+
+// ── Caso 7: mezcla de tasas (gravado 16%, tasa 0%, exento) ───────────────────
+describe('FiscalCalculator — mezcla de tasas en el mismo pedido', () => {
+  const order = makeOrder({
+    total: 216,
+    shippingAmount: 0,
+    lines: [
+      { description: 'Gravado 16%', quantity: 1, unitPrice: 116, taxRate: 0.16, taxObject: '02', discount: 0, productCode: 'G001' },
+      { description: 'Tasa 0%',     quantity: 1, unitPrice: 50,  taxRate: 0,    taxObject: '02', discount: 0, productCode: 'Z001' },
+      { description: 'Exento',      quantity: 1, unitPrice: 50,  taxRate: 0,    taxObject: '01', discount: 0, productCode: 'E001' },
+    ],
+  })
+  const bd = FiscalCalculator.compute(order)
+
+  it('línea gravada: iva ≈ 16', () => expect(bd.porLinea[0].iva).toBeCloseTo(16, 2))
+  it('línea tasa 0: iva === 0', () => expect(bd.porLinea[1].iva).toBe(0))
+  it('línea exenta: iva === 0', () => expect(bd.porLinea[2].iva).toBe(0))
+  it('Σ porLinea.total ≈ totales.total', () => {
+    const sum = round2(bd.porLinea.reduce((acc, l) => acc + l.total, 0))
+    expect(sum).toBeCloseTo(bd.totales.total, 2)
+  })
+})
+
+// ── Caso 8: cent-fix con último item exento ───────────────────────────────────
+describe('FiscalCalculator — cent-fix con último item exento', () => {
+  const order = makeOrder({
+    total: 262.00,
+    shippingAmount: 0,
+    lines: [
+      { description: 'Producto A', quantity: 3, unitPrice: 39.99, taxRate: 0.16, taxObject: '02', discount: 0, productCode: 'A001' },
+      { description: 'Producto B (exento)', quantity: 4, unitPrice: 34.95, taxRate: 0, taxObject: '01', discount: 0, productCode: 'B001' },
+    ],
+  })
+  const bd = FiscalCalculator.compute(order)
+
+  it('último item (exento): iva === 0 tras el cent-fix', () => {
+    const last = bd.porLinea[bd.porLinea.length - 1]
+    expect(last.iva).toBe(0)
+  })
+  it('último item (exento): base === total tras el cent-fix', () => {
+    const last = bd.porLinea[bd.porLinea.length - 1]
+    expect(last.base).toBeCloseTo(last.total, 2)
+  })
+  it('Σ porLinea.total === totales.total (cent-fix cierra)', () => {
+    const sum = round2(bd.porLinea.reduce((acc, l) => acc + l.total, 0))
+    expect(sum).toBeCloseTo(bd.totales.total, 2)
+  })
+  it('invariante base === subtotal − discount se conserva', () => {
+    const last = bd.porLinea[bd.porLinea.length - 1]
+    expect(round2(last.subtotal - last.discount)).toBeCloseTo(last.base, 2)
   })
 })

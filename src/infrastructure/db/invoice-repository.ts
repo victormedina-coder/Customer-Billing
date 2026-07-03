@@ -136,6 +136,44 @@ export async function findById(id: string): Promise<InvoiceRow | null> {
   return rows[0] ?? null
 }
 
+/**
+ * Reap-lazy de filas 'pending' huérfanas — ver docs/08-plan-pre-deploy.md §4.
+ *
+ * `EmitInvoiceUseCase` inserta una fila 'pending' (cerrojo insert-first) antes
+ * de timbrar. Si el proceso muere entre el INSERT y el timbrado/rollback, la
+ * fila queda huérfana y bloquea reintentos del mismo pedido para siempre
+ * (UNIQUE(order_id, store_name)).
+ *
+ * Esta función borra la fila SOLO si sigue en 'pending' y es más vieja que
+ * `ttlMinutes` — nunca toca 'emitted' ni 'stamped_unconfirmed' (ese último
+ * status indica que el CFDI YA existe en Facturama aunque la fila no se haya
+ * podido confirmar; reapearla permitiría un segundo timbrado duplicado).
+ *
+ * Devuelve `true` si liberó el cerrojo (la fila se borró), `false` si no
+ * había nada que reapear (no existe, no es 'pending', o no es lo bastante
+ * vieja) — en ese caso el llamador debe tratar el pedido como ya facturado.
+ */
+export async function reapIfStalePending(
+  orderId: string,
+  storeName: string,
+  ttlMinutes: number,
+  now: Date = new Date(),
+): Promise<boolean> {
+  const row = await findByOrder(orderId, storeName)
+  if (!row) return false
+  if (row.status !== 'pending') return false
+
+  const ageMs = now.getTime() - row.createdAt.getTime()
+  const ttlMs = ttlMinutes * 60_000
+  if (ageMs <= ttlMs) return false
+
+  const db = getDb()
+  await db
+    .delete(invoices)
+    .where(and(eq(invoices.id, row.id), eq(invoices.status, 'pending')))
+  return true
+}
+
 export async function updateInvoiceStamp(
   id: string,
   data: { facturamaId: string; uuidCfdi: string; status?: string },

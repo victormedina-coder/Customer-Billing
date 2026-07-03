@@ -35,7 +35,8 @@ export interface CfdiItem {
   Subtotal: string
   Discount?: string
   TaxObject: string
-  Taxes: CfdiTax[]
+  /** Ausente/omitido cuando TaxObject === '01' (exento — Facturama exige no mandar impuesto). */
+  Taxes?: CfdiTax[]
   Total: string
 }
 
@@ -90,13 +91,16 @@ function mapPaymentForm(gateways?: string[]): string {
 
 export function buildCfdiPayload(
   order: NormalizedOrderWithPayment,
-  fiscal: FiscalInput
+  fiscal: FiscalInput,
+  expeditionPlace: string
 ): CfdiPayload {
   const nameId          = process.env.FACTURAMA_NAME_ID ?? '1'
   const defaultProdCode = process.env.FACTURAMA_DEFAULT_PRODUCT_CODE ?? '01010101'
   const defaultUnitCode = process.env.FACTURAMA_DEFAULT_UNIT_CODE ?? 'ACT'
-  const expeditionPlace =
-    (process.env.FACTURAMA_EXPEDITION_PLACE ?? '').trim() || fiscal.cp
+
+  if (!expeditionPlace.trim()) {
+    throw new Error('buildCfdiPayload: expeditionPlace es obligatorio y no puede estar vacío.')
+  }
 
   // Folio: timestamp en ms truncado a 8 dígitos para unicidad razonable
   const folio = String(Date.now()).slice(-8)
@@ -109,6 +113,7 @@ export function buildCfdiPayload(
   // Serializar cada línea a CfdiItem — SOLO conversión a strings
   const items: CfdiItem[] = order.lines.map((line, index) => {
     const lb = breakdown.porLinea[index]
+    const exento = line.taxObject === '01'
 
     const item: CfdiItem = {
       ProductCode:          defaultProdCode,
@@ -119,18 +124,22 @@ export function buildCfdiPayload(
       UnitPrice:            String(lb.unitPriceSinIva),
       Quantity:             String(lb.quantity),
       Subtotal:             String(lb.subtotal),
-      TaxObject:            '02',
-      Taxes: [
+      TaxObject:            line.taxObject,
+      Total:                String(lb.total),
+    }
+
+    // Exento: Facturama exige NO mandar el nodo Taxes en no-objeto de impuesto.
+    if (!exento) {
+      item.Taxes = [
         {
           Total:        String(lb.iva),
           Name:         'IVA',
           Base:         String(lb.base),
-          Rate:         '0.16',
+          Rate:         String(line.taxRate),
           IsRetention:  'false',
           IsFederalTax: 'true',
         },
-      ],
-      Total: String(lb.total),
+      ]
     }
 
     // Solo incluir Discount cuando es > 0 (Facturama lo omite si no aplica)

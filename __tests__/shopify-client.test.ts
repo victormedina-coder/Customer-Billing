@@ -538,6 +538,111 @@ describe('ShopifyOrderSource.findOrder', () => {
     expect(result!.lines[0].quantity).toBe(2)
     expect(result!.lines[0].unitPrice).toBe(50)
     expect(result!.lines[0].discount).toBe(5) // 50 - 45 = 5 por unidad
-    expect(result!.lines[0].unitPriceIncludesTax).toBe(true)
+    expect(result!.lines[0].taxRate).toBe(0.16)
+    expect(result!.lines[0].taxObject).toBe('02')
+  })
+
+  it('múltiples taxLines en un item → suma las tasas', async () => {
+    const order = makeShopifyOrder({
+      sourceIdentifier: 'dev-FOLIO-43',
+      lineItems: [
+        {
+          title:    'Producto tasa partida',
+          quantity: 1,
+          sku:      'SPLIT-SKU',
+          originalUnitPriceSet:  { shopMoney: { amount: '100.00', currencyCode: 'MXN' } },
+          discountedUnitPriceSet:{ shopMoney: { amount: '100.00', currencyCode: 'MXN' } },
+          taxLines: [{ rate: 0.08 }, { rate: 0.08 }],
+        },
+      ],
+    })
+    fetchMock.mockResolvedValueOnce(gqlOrderResponse([order]))
+
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
+    const result = await new ShopifyOrderSource().findOrder({ orderNumber: 'FOLIO-43', verifier: '' })
+
+    expect(result).not.toBeNull()
+    expect(result!.lines[0].taxRate).toBeCloseTo(0.16, 4)
+    expect(result!.lines[0].taxObject).toBe('02')
+  })
+
+  it('sin taxLines → línea exenta (taxObject 01, taxRate 0)', async () => {
+    const order = makeShopifyOrder({
+      sourceIdentifier: 'dev-FOLIO-44',
+      lineItems: [
+        {
+          title:    'Producto exento',
+          quantity: 1,
+          sku:      'EXENTO-SKU',
+          originalUnitPriceSet:  { shopMoney: { amount: '100.00', currencyCode: 'MXN' } },
+          discountedUnitPriceSet:{ shopMoney: { amount: '100.00', currencyCode: 'MXN' } },
+          taxLines: [],
+        },
+      ],
+    })
+    fetchMock.mockResolvedValueOnce(gqlOrderResponse([order]))
+
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
+    const result = await new ShopifyOrderSource().findOrder({ orderNumber: 'FOLIO-44', verifier: '' })
+
+    expect(result).not.toBeNull()
+    expect(result!.lines[0].taxRate).toBe(0)
+    expect(result!.lines[0].taxObject).toBe('01')
+  })
+
+  it('taxLine con rate === 0 → tasa cero gravada (taxObject 02, taxRate 0)', async () => {
+    const order = makeShopifyOrder({
+      sourceIdentifier: 'dev-FOLIO-45',
+      lineItems: [
+        {
+          title:    'Producto tasa cero',
+          quantity: 1,
+          sku:      'ZERO-SKU',
+          originalUnitPriceSet:  { shopMoney: { amount: '100.00', currencyCode: 'MXN' } },
+          discountedUnitPriceSet:{ shopMoney: { amount: '100.00', currencyCode: 'MXN' } },
+          taxLines: [{ rate: 0 }],
+        },
+      ],
+    })
+    fetchMock.mockResolvedValueOnce(gqlOrderResponse([order]))
+
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
+    const result = await new ShopifyOrderSource().findOrder({ orderNumber: 'FOLIO-45', verifier: '' })
+
+    expect(result).not.toBeNull()
+    expect(result!.lines[0].taxRate).toBe(0)
+    expect(result!.lines[0].taxObject).toBe('02')
+  })
+
+  it('tasa "rara" (no 0 ni ~0.16) → console.warn estructurado y fallback a 0.16', async () => {
+    const order = makeShopifyOrder({
+      sourceIdentifier: 'dev-FOLIO-46',
+      lineItems: [
+        {
+          title:    'Producto tasa rara',
+          quantity: 1,
+          sku:      'RARE-SKU',
+          originalUnitPriceSet:  { shopMoney: { amount: '100.00', currencyCode: 'MXN' } },
+          discountedUnitPriceSet:{ shopMoney: { amount: '100.00', currencyCode: 'MXN' } },
+          taxLines: [{ rate: 0.08 }],
+        },
+      ],
+    })
+    fetchMock.mockResolvedValueOnce(gqlOrderResponse([order]))
+
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
+    const result = await new ShopifyOrderSource().findOrder({ orderNumber: 'FOLIO-46', verifier: '' })
+
+    expect(result).not.toBeNull()
+    expect(result!.lines[0].taxRate).toBe(0.16)
+    expect(result!.lines[0].taxObject).toBe('02')
+    expect(consoleWarn).toHaveBeenCalledWith(
+      '[shopify] tasa IVA inesperada',
+      expect.objectContaining({ summedRate: 0.08, fallback: 0.16 })
+    )
+
+    consoleWarn.mockRestore()
   })
 })

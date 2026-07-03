@@ -11,6 +11,7 @@ import {
   updateInvoiceStamp,
   deleteById,
   listInvoicedOrderIds,
+  reapIfStalePending,
   type CreateInvoiceData,
 } from '../src/infrastructure/db/invoice-repository'
 
@@ -268,5 +269,83 @@ describe.skipIf(skip)('invoice-repository (integration, Railway test DB)', () =>
 
     const row = await findById(created.invoice.id)
     expect(row?.email).toBe('test@example.com')
+  })
+
+  // ── reapIfStalePending (docs/08-plan-pre-deploy.md §4) ────────────────────
+
+  it('reapIfStalePending borra una fila pending más vieja que el TTL y devuelve true', async () => {
+    const created = await createInvoice({
+      orderId: 'order-reap-001',
+      orderNumber: '#R001',
+      storeName: 'tienda-ariat',
+      status: 'pending',
+    })
+    expect(created.created).toBe(true)
+
+    // now = 20 minutos en el futuro respecto a createdAt (default DB = now()),
+    // con TTL de 10 min la fila queda vieja.
+    const future = new Date(Date.now() + 20 * 60_000)
+    const reaped = await reapIfStalePending('order-reap-001', 'tienda-ariat', 10, future)
+
+    expect(reaped).toBe(true)
+    expect(await findByOrder('order-reap-001', 'tienda-ariat')).toBeNull()
+  })
+
+  it('reapIfStalePending NO borra una fila pending reciente (dentro del TTL) y devuelve false', async () => {
+    const created = await createInvoice({
+      orderId: 'order-reap-002',
+      orderNumber: '#R002',
+      storeName: 'tienda-ariat',
+      status: 'pending',
+    })
+    expect(created.created).toBe(true)
+
+    const reaped = await reapIfStalePending('order-reap-002', 'tienda-ariat', 10, new Date())
+
+    expect(reaped).toBe(false)
+    expect(await findByOrder('order-reap-002', 'tienda-ariat')).not.toBeNull()
+  })
+
+  it('reapIfStalePending NO borra una fila emitted aunque sea vieja', async () => {
+    const created = await createInvoice({
+      orderId: 'order-reap-003',
+      orderNumber: '#R003',
+      storeName: 'tienda-ariat',
+      status: 'emitted',
+      facturamaId: 'F-REAP003',
+      uuidCfdi: crypto.randomUUID(),
+    })
+    expect(created.created).toBe(true)
+
+    const future = new Date(Date.now() + 20 * 60_000)
+    const reaped = await reapIfStalePending('order-reap-003', 'tienda-ariat', 10, future)
+
+    expect(reaped).toBe(false)
+    expect(await findByOrder('order-reap-003', 'tienda-ariat')).not.toBeNull()
+  })
+
+  it('reapIfStalePending NO borra una fila stamped_unconfirmed aunque sea vieja — invariante anti-doble-timbre', async () => {
+    const created = await createInvoice({
+      orderId: 'order-reap-004',
+      orderNumber: '#R004',
+      storeName: 'tienda-ariat',
+      status: 'stamped_unconfirmed',
+      facturamaId: 'F-REAP004',
+      uuidCfdi: crypto.randomUUID(),
+    })
+    expect(created.created).toBe(true)
+
+    const future = new Date(Date.now() + 20 * 60_000)
+    const reaped = await reapIfStalePending('order-reap-004', 'tienda-ariat', 10, future)
+
+    expect(reaped).toBe(false)
+    const row = await findByOrder('order-reap-004', 'tienda-ariat')
+    expect(row).not.toBeNull()
+    expect(row?.status).toBe('stamped_unconfirmed')
+  })
+
+  it('reapIfStalePending devuelve false cuando no existe fila para el pedido', async () => {
+    const reaped = await reapIfStalePending('order-inexistente', 'tienda-ariat', 10, new Date())
+    expect(reaped).toBe(false)
   })
 })

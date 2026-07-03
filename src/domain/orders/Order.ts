@@ -9,7 +9,14 @@ export interface OrderLine {
   description: string
   quantity: number
   unitPrice: number
-  unitPriceIncludesTax: boolean
+  /**
+   * Tasa de IVA de la línea como fracción: 0.16 gravado, 0 tasa-cero.
+   * El precio SIEMPRE incluye impuesto (retail MX). Se distingue tasa-cero
+   * de exento con taxObject.
+   */
+  taxRate: number
+  /** Objeto de impuesto CFDI: '02' gravado (incluye tasa 0) | '01' no objeto (exento). */
+  taxObject: '01' | '02'
   discount: number
   productCode: string
 }

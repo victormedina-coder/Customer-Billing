@@ -11,8 +11,22 @@ import {
   descargarArchivo,
   cancelarCFDI,
   enviarCFDIEmail,
+  getExpeditionPlace,
 } from './facturamaClient'
 import { buildCfdiPayload } from './cfdiPayloadBuilder'
+
+/**
+ * Resuelve el Lugar de Expedición del CFDI.
+ *
+ * FACTURAMA_EXPEDITION_PLACE es SOLO un override manual explícito (útil para
+ * escenarios multi-sucursal futuros). Por defecto se resuelve en vivo contra
+ * el perfil fiscal del emisor en Facturama — nunca cae al CP del receptor.
+ */
+async function resolveExpeditionPlace(): Promise<string> {
+  const override = (process.env.FACTURAMA_EXPEDITION_PLACE ?? '').trim()
+  if (override) return override
+  return getExpeditionPlace()
+}
 
 export class FacturamaInvoiceService implements InvoiceStampingService {
   async emitir(payload: {
@@ -20,9 +34,10 @@ export class FacturamaInvoiceService implements InvoiceStampingService {
     fiscal: FiscalInput
   }): Promise<EmitResult> {
     const { order, fiscal } = payload
+    const expeditionPlace = await resolveExpeditionPlace()
     // buildCfdiPayload espera NormalizedOrderWithPayment; Order es compatible
     // porque ShopifyOrderSource siempre devuelve NormalizedOrderWithPayment.
-    const cfdiPayload = buildCfdiPayload(order as NormalizedOrderWithPayment, fiscal)
+    const cfdiPayload = buildCfdiPayload(order as NormalizedOrderWithPayment, fiscal, expeditionPlace)
     const resp = await emitirCFDI(cfdiPayload)
 
     const facturamaId = resp.Id
