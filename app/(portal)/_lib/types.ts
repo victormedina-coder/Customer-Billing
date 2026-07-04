@@ -85,6 +85,8 @@ export interface PortalState {
   factura: GeneratedInvoice | null
   /** Si el usuario aceptó el Aviso de Privacidad en StepFiscal. */
   privacyAccepted: boolean
+  /** Si el usuario aceptó los Términos y Condiciones en StepFiscal. */
+  termsAccepted: boolean
 }
 
 export interface SelectOption {

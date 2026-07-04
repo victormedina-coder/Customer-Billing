@@ -38,6 +38,20 @@ export const FiscalValidateSchema = z.object({
   fiscalRegime: z.string().min(1).max(10),
 })
 
+/**
+ * Consentimiento legal (Aviso de Privacidad + Términos y Condiciones) que el
+ * usuario debe aceptar para emitir un CFDI. Ambos flags deben llegar en `true`
+ * — la UI ya bloquea el envío si no están marcados, pero el servidor es la
+ * autoridad final: nunca confía en el cliente para saltarse el gate.
+ *
+ * La VERSIÓN de cada documento aceptado la estampa el servidor (CONSENT_VERSIONS),
+ * no el cliente — este schema solo valida el hecho de la aceptación.
+ */
+export const ConsentSchema = z.object({
+  acceptedPrivacy: z.literal(true, { error: 'Debes aceptar el Aviso de Privacidad' }),
+  acceptedTerms: z.literal(true, { error: 'Debes aceptar los Términos y Condiciones' }),
+})
+
 export const EmitSchema = z.object({
   folio: z.string().min(1, 'El folio no puede estar vacío').max(50),
   /**
@@ -47,6 +61,7 @@ export const EmitSchema = z.object({
    */
   amount: z.coerce.number().positive('El monto debe ser mayor a cero'),
   fiscal: FiscalDataSchema,
+  consent: ConsentSchema,
 })
 
 export const ResendSchema = z.object({

@@ -17,6 +17,7 @@ interface StepFiscalProps {
   fiscal: FiscalData
   touched: boolean
   privacyAccepted: boolean
+  termsAccepted: boolean
   rfcValidation: RfcValidationState
   /** true cuando la validación de identidad SAT (Continuar) falló. Anti-oráculo: no indica qué campo. */
   satError?: boolean
@@ -25,6 +26,7 @@ interface StepFiscalProps {
   onFiscalChange: <K extends keyof FiscalData>(key: K, value: FiscalData[K]) => void
   onRfcBlur: (rfc: string) => void
   onPrivacyAcceptedChange: (accepted: boolean) => void
+  onTermsAcceptedChange: (accepted: boolean) => void
   onContinue: () => void
 }
 
@@ -64,8 +66,8 @@ function RfcBadge({ state }: { state: RfcValidationState }) {
 }
 
 export function StepFiscal({
-  ticket, fiscal, touched, privacyAccepted, rfcValidation, satError = false, validating = false,
-  onBack, onFiscalChange, onRfcBlur, onPrivacyAcceptedChange, onContinue,
+  ticket, fiscal, touched, privacyAccepted, termsAccepted, rfcValidation, satError = false, validating = false,
+  onBack, onFiscalChange, onRfcBlur, onPrivacyAcceptedChange, onTermsAcceptedChange, onContinue,
 }: StepFiscalProps) {
   // Errores de FORMATO local por campo (de validateFiscal). Anti-oráculo: satError
   // NO se mezcla aquí — se muestra como banner genérico, sin marcar campos individuales.
@@ -362,17 +364,48 @@ export function StepFiscal({
           </label>
         </div>
 
-        {/* TODO: Términos y Condiciones — descomentar cuando llegue el texto
-        <div style={{ borderTop: '1px solid var(--border-light)', padding: '12px 16px', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-          <input type="checkbox" id="terms-accepted" style={{ marginTop: 2, width: 16, height: 16, cursor: 'pointer', accentColor: 'var(--brand-primary)', flexShrink: 0 }} />
-          <label htmlFor="terms-accepted" style={{ fontSize: 13, fontWeight: 600, color: '#374151', lineHeight: 1.5, cursor: 'pointer', userSelect: 'none' }}>
+        {/* Checkbox de aceptación — Términos y Condiciones */}
+        <div style={{
+          borderTop: '1px solid var(--border-light)',
+          padding: '12px 16px',
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 10,
+        }}>
+          <input
+            type="checkbox"
+            id="terms-accepted"
+            checked={termsAccepted}
+            onChange={(e) => onTermsAcceptedChange(e.target.checked)}
+            style={{
+              marginTop: 2,
+              width: 16,
+              height: 16,
+              cursor: 'pointer',
+              accentColor: 'var(--brand-primary)',
+              flexShrink: 0,
+            }}
+          />
+          <label
+            htmlFor="terms-accepted"
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: '#374151',
+              lineHeight: 1.5,
+              cursor: 'pointer',
+              userSelect: 'none',
+            }}
+          >
             He leído y acepto los{' '}
-            <a href="/terminos-condiciones" target="_blank" rel="noopener noreferrer" style={{ color: '#000000', fontWeight: 700, textDecoration: 'underline' }}>
+            <a
+              href="/terminos-y-condiciones"
+              style={{ color: '#000000', fontWeight: 700, textDecoration: 'underline' }}
+            >
               Términos y Condiciones
             </a>
           </label>
         </div>
-        */}
       </div>
 
       {/* Navigation buttons */}
@@ -394,12 +427,12 @@ export function StepFiscal({
         <button
           type="button"
           onClick={onContinue}
-          disabled={validating || !privacyAccepted}
+          disabled={validating || !privacyAccepted || !termsAccepted}
           className="btn-press"
           style={{
             ...BTN_PRIMARY,
-            opacity: (validating || !privacyAccepted) ? 0.5 : 1,
-            cursor: (validating || !privacyAccepted) ? 'not-allowed' : 'pointer',
+            opacity: (validating || !privacyAccepted || !termsAccepted) ? 0.5 : 1,
+            cursor: (validating || !privacyAccepted || !termsAccepted) ? 'not-allowed' : 'pointer',
           }}
         >
           {validating ? 'Verificando…' : 'Continuar'}

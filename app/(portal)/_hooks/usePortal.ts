@@ -19,6 +19,7 @@ const INITIAL_STATE: PortalState = {
   showFolioHelp: false,
   factura: null,
   privacyAccepted: false,
+  termsAccepted: false,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -36,7 +37,7 @@ const SESSION_KEY = 'portal:state'
 /** Campos que se persisten. busy, touched y showFolioHelp son UI-transient. */
 type PersistedSnapshot = Pick<
   PortalState,
-  'step' | 'folio' | 'amount' | 'ticket' | 'fiscal' | 'factura' | 'privacyAccepted' | 'rfcRazon' | 'lookupError'
+  'step' | 'folio' | 'amount' | 'ticket' | 'fiscal' | 'factura' | 'privacyAccepted' | 'termsAccepted' | 'rfcRazon' | 'lookupError'
 >
 
 function readSnapshot(): PersistedSnapshot | null {
@@ -60,6 +61,7 @@ function writeSnapshot(s: PortalState): void {
       fiscal: s.fiscal,
       factura: s.factura,
       privacyAccepted: s.privacyAccepted,
+      termsAccepted: s.termsAccepted,
       rfcRazon: s.rfcRazon,
       lookupError: s.lookupError,
     }
@@ -156,6 +158,7 @@ export function usePortal(flash: (msg: string, type?: ToastType) => void) {
         fiscal: snap.fiscal,
         factura: snap.factura,
         privacyAccepted: snap.privacyAccepted,
+        termsAccepted: snap.termsAccepted,
         rfcRazon: snap.rfcRazon,
         lookupError: snap.lookupError,
       }))
@@ -297,6 +300,9 @@ export function usePortal(flash: (msg: string, type?: ToastType) => void) {
   const setPrivacyAccepted = useCallback((accepted: boolean) =>
     set({ privacyAccepted: accepted }), [set])
 
+  const setTermsAccepted = useCallback((accepted: boolean) =>
+    set({ termsAccepted: accepted }), [set])
+
   /**
    * goConfirm: valida solo los campos locales (formato).
    * La validación de coherencia con el SAT (validarReceptor) ocurre en page.tsx
@@ -330,6 +336,10 @@ export function usePortal(flash: (msg: string, type?: ToastType) => void) {
           folio: current.ticket.folio,
           amount: parsedAmount,
           fiscal: current.fiscal,
+          consent: {
+            acceptedPrivacy: current.privacyAccepted,
+            acceptedTerms: current.termsAccepted,
+          },
         }),
       })
 
@@ -466,7 +476,7 @@ export function usePortal(flash: (msg: string, type?: ToastType) => void) {
     // Step 1
     setFolio, setAmount, toggleFolioHelp, lookup, proceed, dismissError,
     // Step 2
-    setFiscal, setPrivacyAccepted, setTouched, goConfirm,
+    setFiscal, setPrivacyAccepted, setTermsAccepted, setTouched, goConfirm,
     // Step 3
     generate,
     // Navigation

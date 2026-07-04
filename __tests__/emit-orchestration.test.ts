@@ -95,6 +95,9 @@ function makeInvoiceRow(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
     paymentType: overrides.paymentType ?? null,
     createdAt:   overrides.createdAt   ?? new Date(),
     cancelledAt: overrides.cancelledAt ?? null,
+    privacyVersion: overrides.privacyVersion ?? null,
+    termsVersion:   overrides.termsVersion   ?? null,
+    consentAt:      overrides.consentAt      ?? null,
   }
 }
 
@@ -189,8 +192,12 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
+const VALID_CONSENT = { acceptedPrivacy: true, acceptedTerms: true }
+
 // amount: 116 coincide con VALID_ORDER.total = 116 para pasar la validación de monto
-function makeEmitRequest(body: unknown = { folio: '15-5333', amount: 116, fiscal: VALID_FISCAL }): Request {
+function makeEmitRequest(
+  body: unknown = { folio: '15-5333', amount: 116, fiscal: VALID_FISCAL, consent: VALID_CONSENT }
+): Request {
   return new Request('http://localhost/api/invoice/emit', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -287,6 +294,23 @@ describe('orquestación emit — patrón insert-first', () => {
       status:      'emitted',
     })
   })
+
+  it('flujo feliz: createInvoice recibe privacyVersion, termsVersion y consentAt poblados', async () => {
+    const createArgs: unknown[] = []
+    vi.mocked(dbRepo.createInvoice).mockImplementation(async (data: unknown) => {
+      createArgs.push(data)
+      return { created: true as const, invoice: makeInvoiceRow() }
+    })
+
+    await POST(makeEmitRequest())
+
+    expect(createArgs).toHaveLength(1)
+    expect(createArgs[0]).toMatchObject({
+      privacyVersion: '2026-07-03',
+      termsVersion: '2026-07-03',
+    })
+    expect((createArgs[0] as { consentAt: Date }).consentAt).toBeInstanceOf(Date)
+  })
 })
 
 describe('orquestación emit — rollback en fallo de timbrado', () => {
@@ -338,7 +362,7 @@ describe('orquestación emit — rollback en fallo de timbrado', () => {
       },
     })
 
-    await POST(makeEmitRequest({ folio: '15-5333', amount: 116, fiscal: VALID_FISCAL }))
+    await POST(makeEmitRequest({ folio: '15-5333', amount: 116, fiscal: VALID_FISCAL, consent: VALID_CONSENT }))
 
     expect(callArgs).toHaveLength(1)
     expect(callArgs[0][0]).toMatchObject({
@@ -371,7 +395,7 @@ describe('orquestación emit — correo best-effort', () => {
       },
     })
 
-    await POST(makeEmitRequest({ folio: '15-5333', amount: 116, fiscal: VALID_FISCAL }))
+    await POST(makeEmitRequest({ folio: '15-5333', amount: 116, fiscal: VALID_FISCAL, consent: VALID_CONSENT }))
 
     expect(capturedId).toBe(EMIT_RESULT.facturamaId)
     expect(capturedEmail).toBe(VALID_FISCAL.email)

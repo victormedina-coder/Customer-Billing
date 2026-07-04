@@ -1,7 +1,7 @@
 /**
  * POST /api/invoice/emit
  *
- * Recibe: { folio: string, amount: number, fiscal: FiscalData }
+ * Recibe: { folio: string, amount: number, fiscal: FiscalData, consent: { acceptedPrivacy: true, acceptedTerms: true } }
  * Responde: { factura: { invoiceId, uuid, serieFolio, fecha, sello, emisor } } en 200,
  *           o error estructurado en 4xx/5xx.
  *
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const msg = result.error.issues.map(i => i.message).join('; ')
     return httpError('FISCAL_INVALID', msg, 400)
   }
-  const { folio: rawFolio, amount, fiscal } = result.data
+  const { folio: rawFolio, amount, fiscal, consent } = result.data
   const folio = rawFolio.trim()
   if (!folio) {
     return httpError('INVALID_FOLIO', 'El folio no puede estar vacío.', 400)
@@ -94,7 +94,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // ── 4–10. Orquestación delegada al use case ───────────────────────────────
   const useCase = makeEmitInvoiceUseCase()
-  const ucResult = await useCase.execute({ folio, amount, fiscal })
+  const ucResult = await useCase.execute({ folio, amount, fiscal, consent })
 
   if (!ucResult.ok) {
     const { code, message } = ucResult.error

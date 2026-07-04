@@ -63,6 +63,8 @@ const VALID_FISCAL = {
   email:  'cliente@example.com',
 }
 
+const VALID_CONSENT = { acceptedPrivacy: true, acceptedTerms: true }
+
 const FAKE_EMIT_RESULT: EmitResult = {
   facturamaId: 'FACT-ABC-123',
   uuid:        'UUID-12345678-1234-1234-1234-123456789012',
@@ -88,6 +90,9 @@ function makeInvoiceRow(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
     paymentType: overrides.paymentType ?? null,
     createdAt:   overrides.createdAt   ?? new Date(),
     cancelledAt: overrides.cancelledAt ?? null,
+    privacyVersion: overrides.privacyVersion ?? null,
+    termsVersion:   overrides.termsVersion   ?? null,
+    consentAt:      overrides.consentAt      ?? null,
   }
 }
 
@@ -266,7 +271,7 @@ async function parseJson(res: Response): Promise<unknown> {
 
 describe('POST /api/invoice/emit', () => {
   // amount: 116 coincide con VALID_ORDER.total = 116
-  const validBody = { folio: '15-5333', amount: 116, fiscal: VALID_FISCAL }
+  const validBody = { folio: '15-5333', amount: 116, fiscal: VALID_FISCAL, consent: VALID_CONSENT }
 
   it('200 con envelope { factura } en flujo feliz', async () => {
     const req = makePostRequest(validBody)
@@ -289,6 +294,43 @@ describe('POST /api/invoice/emit', () => {
     expect(body.error.code).toBe('FISCAL_INVALID')
   })
 
+  it('400 FISCAL_INVALID cuando falta consent en el body', async () => {
+    const req = makePostRequest({ folio: '15-5333', amount: 116, fiscal: VALID_FISCAL })
+    const res = await emitHandler(req as never)
+
+    expect(res.status).toBe(400)
+    const body = await parseJson(res) as { error: { code: string } }
+    expect(body.error.code).toBe('FISCAL_INVALID')
+  })
+
+  it('400 FISCAL_INVALID cuando consent.acceptedPrivacy es false', async () => {
+    const req = makePostRequest({
+      folio: '15-5333',
+      amount: 116,
+      fiscal: VALID_FISCAL,
+      consent: { acceptedPrivacy: false, acceptedTerms: true },
+    })
+    const res = await emitHandler(req as never)
+
+    expect(res.status).toBe(400)
+    const body = await parseJson(res) as { error: { code: string } }
+    expect(body.error.code).toBe('FISCAL_INVALID')
+  })
+
+  it('400 FISCAL_INVALID cuando consent.acceptedTerms es false', async () => {
+    const req = makePostRequest({
+      folio: '15-5333',
+      amount: 116,
+      fiscal: VALID_FISCAL,
+      consent: { acceptedPrivacy: true, acceptedTerms: false },
+    })
+    const res = await emitHandler(req as never)
+
+    expect(res.status).toBe(400)
+    const body = await parseJson(res) as { error: { code: string } }
+    expect(body.error.code).toBe('FISCAL_INVALID')
+  })
+
   it('400 INVALID_BODY cuando el body no es JSON', async () => {
     const req = new Request('http://localhost/api/invoice/emit', {
       method:  'POST',
@@ -303,7 +345,7 @@ describe('POST /api/invoice/emit', () => {
   })
 
   it('400 INVALID_FOLIO cuando folio es solo espacios', async () => {
-    const req = makePostRequest({ folio: '   ', amount: 116, fiscal: VALID_FISCAL })
+    const req = makePostRequest({ folio: '   ', amount: 116, fiscal: VALID_FISCAL, consent: VALID_CONSENT })
     const res = await emitHandler(req as never)
 
     expect(res.status).toBe(400)

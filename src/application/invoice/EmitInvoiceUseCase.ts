@@ -19,13 +19,21 @@ import { ok, err } from '../shared/Result'
 import type { Result } from '../shared/Result'
 import { maskEmail } from '../../infrastructure/observability/logRedact'
 import { amountMatches } from '../../../lib/amount-match'
+import { CONSENT_VERSIONS } from '../../domain/consent/ConsentVersions'
 
 // ─── Tipos de entrada ─────────────────────────────────────────────────────────
+
+/** Consentimiento legal aceptado por el usuario (Aviso de Privacidad + Términos). */
+export interface ConsentInput {
+  acceptedPrivacy: boolean
+  acceptedTerms: boolean
+}
 
 export interface EmitInput {
   folio: string
   amount: number
   fiscal: FiscalInput
+  consent: ConsentInput
 }
 
 // ─── Tipos de salida ──────────────────────────────────────────────────────────
@@ -118,8 +126,18 @@ export class EmitInvoiceUseCase {
   }
 
   async execute(input: EmitInput): Promise<Result<EmitOk, EmitError>> {
-    const { folio, amount, fiscal } = input
+    const { folio, amount, fiscal, consent } = input
     const { orderSource, stamping, repo, refundPolicy, windowPolicy } = this.deps
+
+    // ── Defensa en profundidad: el Zod del handler ya garantiza ambos flags
+    // en `true`, pero el use case debe ser seguro también testeado de forma
+    // aislada (sin pasar por el schema HTTP).
+    if (!consent.acceptedPrivacy || !consent.acceptedTerms) {
+      return err({
+        code: 'VALIDATION_FAILED',
+        message: 'Debes aceptar el Aviso de Privacidad y los Términos y Condiciones para continuar.',
+      })
+    }
 
     // ── 4. Re-lookup en Shopify ────────────────────────────────────────────
     let order: Order | null
@@ -178,6 +196,9 @@ export class EmitInvoiceUseCase {
       email: fiscal.email,
       status: 'pending',
       invoiceType: 'individual',
+      privacyVersion: CONSENT_VERSIONS.privacy,
+      termsVersion: CONSENT_VERSIONS.terms,
+      consentAt: this.now(),
     }
     let pending = await repo.createInvoice(createInvoiceData)
 

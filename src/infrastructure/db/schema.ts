@@ -42,6 +42,17 @@ export const invoices = pgTable('invoices', {
   paymentType: text('payment_type'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   cancelledAt: timestamp('cancelled_at'),
+  /**
+   * Registro auditable de consentimiento legal (LFPDPPP) al momento de emitir
+   * el CFDI. `privacyVersion`/`termsVersion` son la versión vigente de cada
+   * documento (estampada por el servidor, ver CONSENT_VERSIONS) y `consentAt`
+   * es el instante en que el usuario aceptó ambos. Junto con rfc/email/orden
+   * ya presentes en la fila, constituyen el "quién + cuándo + qué versión".
+   * Nullable: filas anteriores a esta feature no tienen consentimiento registrado.
+   */
+  privacyVersion: text('privacy_version'),
+  termsVersion: text('terms_version'),
+  consentAt: timestamp('consent_at'),
 }, (table) => [
   // Cerrojo anti-duplicados: una orden por tienda = un único CFDI individual.
   unique('unique_order_store').on(table.orderId, table.storeName),

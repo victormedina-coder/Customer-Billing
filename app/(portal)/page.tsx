@@ -120,6 +120,7 @@ export default function PortalPage() {
               fiscal={state.fiscal}
               touched={state.touched}
               privacyAccepted={state.privacyAccepted}
+              termsAccepted={state.termsAccepted}
               rfcValidation={rfcVal.state}
               satError={satError}
               validating={validating}
@@ -127,6 +128,7 @@ export default function PortalPage() {
               onFiscalChange={handleFiscalChange}
               onRfcBlur={handleRfcBlur}
               onPrivacyAcceptedChange={portal.setPrivacyAccepted}
+              onTermsAcceptedChange={portal.setTermsAccepted}
               onContinue={() => { void handleContinue() }}
             />
           )}

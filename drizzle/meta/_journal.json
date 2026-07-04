@@ -15,6 +15,13 @@
       "when": 1782491851156,
       "tag": "0001_perfect_triton",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783125705014,
+      "tag": "0002_milky_jane_foster",
+      "breakpoints": true
     }
   ]
 }

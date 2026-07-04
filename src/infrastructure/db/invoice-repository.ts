@@ -27,6 +27,10 @@ export interface CreateInvoiceData {
   status?: string
   invoiceType?: 'individual' | 'global'
   paymentType?: 'credito' | 'debito' | 'efectivo' | null
+  /** Registro auditable de consentimiento legal — ver docstring en schema.ts. */
+  privacyVersion?: string | null
+  termsVersion?: string | null
+  consentAt?: Date | null
 }
 
 export type InvoiceRow = typeof invoices.$inferSelect
@@ -119,6 +123,9 @@ export async function createInvoice(
         status: data.status ?? 'pending',
         invoiceType: data.invoiceType ?? 'individual',
         paymentType: data.paymentType ?? null,
+        privacyVersion: data.privacyVersion ?? null,
+        termsVersion: data.termsVersion ?? null,
+        consentAt: data.consentAt ?? null,
       })
       .returning()
     return { created: true, invoice: rows[0] }

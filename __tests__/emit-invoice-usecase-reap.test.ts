@@ -129,7 +129,9 @@ function makeDeps(overrides: Partial<EmitInvoiceDeps> & { repo: EmitInvoiceDeps[
   }
 }
 
-const INPUT = { folio: '15-9001', amount: 116, fiscal: VALID_FISCAL }
+const VALID_CONSENT = { acceptedPrivacy: true, acceptedTerms: true }
+
+const INPUT = { folio: '15-9001', amount: 116, fiscal: VALID_FISCAL, consent: VALID_CONSENT }
 
 describe('EmitInvoiceUseCase — reap-lazy de pending huérfanas', () => {
   it('pending vieja (> TTL): se reapea, el insert se reintenta y timbra OK', async () => {
@@ -286,5 +288,75 @@ describe('EmitInvoiceUseCase — stamped_unconfirmed tras timbrado exitoso', () 
     expect(result.ok).toBe(true)
     expect(updateInvoiceStamp).toHaveBeenCalledTimes(1)
     expect(updateInvoiceStamp).toHaveBeenCalledWith('invoice-y', expect.objectContaining({ status: 'emitted' }))
+  })
+})
+
+describe('EmitInvoiceUseCase — consentimiento legal auditable', () => {
+  it('createInvoice recibe privacyVersion, termsVersion y consentAt (reloj inyectado)', async () => {
+    const fixedNow = new Date('2026-07-03T12:00:00.000Z')
+    const repo = makeRepo({
+      createInvoiceResults: [{ created: true, invoice: { id: 'invoice-consent' } }],
+    })
+    const useCase = new EmitInvoiceUseCase(makeDeps({ repo, now: () => fixedNow }))
+
+    const result = await useCase.execute(INPUT)
+
+    expect(result.ok).toBe(true)
+    expect(repo.createInvoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        privacyVersion: '2026-07-03',
+        termsVersion: '2026-07-03',
+        consentAt: fixedNow,
+      })
+    )
+  })
+
+  it('rechaza con VALIDATION_FAILED si acceptedPrivacy es false (defensa en profundidad, sin pasar por Zod)', async () => {
+    const repo = makeRepo({ createInvoiceResults: [] })
+    const useCase = new EmitInvoiceUseCase(makeDeps({ repo }))
+
+    const result = await useCase.execute({
+      ...INPUT,
+      consent: { acceptedPrivacy: false, acceptedTerms: true },
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.code).toBe('VALIDATION_FAILED')
+    }
+    expect(repo.createInvoice).not.toHaveBeenCalled()
+  })
+
+  it('rechaza con VALIDATION_FAILED si acceptedTerms es false', async () => {
+    const repo = makeRepo({ createInvoiceResults: [] })
+    const useCase = new EmitInvoiceUseCase(makeDeps({ repo }))
+
+    const result = await useCase.execute({
+      ...INPUT,
+      consent: { acceptedPrivacy: true, acceptedTerms: false },
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.code).toBe('VALIDATION_FAILED')
+    }
+    expect(repo.createInvoice).not.toHaveBeenCalled()
+  })
+
+  it('rechaza con VALIDATION_FAILED si ambos flags son false, sin llamar a orderSource', async () => {
+    const repo = makeRepo({ createInvoiceResults: [] })
+    const orderSource = makeOrderSource()
+    const useCase = new EmitInvoiceUseCase(makeDeps({ repo, orderSource }))
+
+    const result = await useCase.execute({
+      ...INPUT,
+      consent: { acceptedPrivacy: false, acceptedTerms: false },
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.code).toBe('VALIDATION_FAILED')
+    }
+    expect(orderSource.findOrder).not.toHaveBeenCalled()
   })
 })

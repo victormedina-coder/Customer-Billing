@@ -271,6 +271,42 @@ describe.skipIf(skip)('invoice-repository (integration, Railway test DB)', () =>
     expect(row?.email).toBe('test@example.com')
   })
 
+  it('createInvoice persiste el registro de consentimiento (privacyVersion, termsVersion, consentAt)', async () => {
+    const consentAt = new Date()
+    const data: CreateInvoiceData = {
+      orderId: 'order-consent-001',
+      orderNumber: '#C001',
+      storeName: 'tienda-ariat',
+      status: 'pending',
+      privacyVersion: '2026-07-03',
+      termsVersion: '2026-07-03',
+      consentAt,
+    }
+    const created = await createInvoice(data)
+    expect(created.created).toBe(true)
+    if (!created.created) return
+
+    const row = await findById(created.invoice.id)
+    expect(row?.privacyVersion).toBe('2026-07-03')
+    expect(row?.termsVersion).toBe('2026-07-03')
+    expect(row?.consentAt?.getTime()).toBe(consentAt.getTime())
+  })
+
+  it('createInvoice deja privacyVersion/termsVersion/consentAt en null cuando no se proporcionan', async () => {
+    const created = await createInvoice({
+      orderId: 'order-consent-002',
+      orderNumber: '#C002',
+      storeName: 'tienda-ariat',
+    })
+    expect(created.created).toBe(true)
+    if (!created.created) return
+
+    const row = await findById(created.invoice.id)
+    expect(row?.privacyVersion).toBeNull()
+    expect(row?.termsVersion).toBeNull()
+    expect(row?.consentAt).toBeNull()
+  })
+
   // ── reapIfStalePending (docs/08-plan-pre-deploy.md §4) ────────────────────
 
   it('reapIfStalePending borra una fila pending más vieja que el TTL y devuelve true', async () => {
