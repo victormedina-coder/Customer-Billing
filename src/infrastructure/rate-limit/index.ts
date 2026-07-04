@@ -15,6 +15,7 @@ function getRedisClient(): Redis | null {
   if (!process.env.REDIS_URL) return null
   if (!redisClient) {
     redisClient = new Redis(process.env.REDIS_URL, {
+      family: 0,
       maxRetriesPerRequest: 1,
       connectTimeout: 1000,
       commandTimeout: 1000,
