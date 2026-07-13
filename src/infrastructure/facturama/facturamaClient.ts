@@ -43,7 +43,7 @@ function getConfig(): FacturamaConfig | null {
 
   const user = process.env.FACTURAMA_USER
   const pass = process.env.FACTURAMA_PASS
-  const env  = process.env.FACTURAMA_ENV ?? 'sandbox'
+  const env  = (process.env.FACTURAMA_ENV ?? 'sandbox').trim().toLowerCase()
 
   if (!user || !pass) {
     _config = null
@@ -176,6 +176,42 @@ export async function emitirCFDI(payload: unknown): Promise<FacturamaCfdiRespons
 
 export async function obtenerCFDI(id: string): Promise<FacturamaCfdiResponse> {
   return request<FacturamaCfdiResponse>('GET', `/cfdi/${encodeURIComponent(id)}/issued`)
+}
+
+/**
+ * Forma real de un elemento del listado `GET /cfdi?type=issued` (confirmada
+ * contra el sandbox de Facturama, 2026-07-09 — ver
+ * scripts/probe-global-exclusion.mjs). `OrderNumber` se OMITE por completo
+ * (no llega como null/"") cuando el CFDI no lo tiene. `Status`/`IsActive`
+ * aparecieron ambos en el sondeo — se tipan ambos como opcionales y el
+ * consumidor (FacturamaInvoicedOrdersGateway) acepta cualquiera de las dos
+ * señales de cancelación.
+ */
+export interface FacturamaCfdiListItem {
+  Id: string
+  Folio?: string
+  Date?: string
+  OrderNumber?: string
+  Status?: string
+  IsActive?: boolean
+  [k: string]: unknown
+}
+
+/**
+ * Lista los CFDIs YA EMITIDOS de la cuenta (GET /cfdi?type=issued) — usado
+ * por el canal Facturama de InvoicedOrdersGateway (Paso 4) para excluir
+ * pedidos ya facturados por la app externa de Facturama en Shopify.
+ *
+ * TODO: investigar params de fecha/paginación del listado (verificar contra
+ * sandbox en el Paso 7) — hoy se trae la lista completa y el filtrado por
+ * periodo se hace client-side (ver FacturamaInvoicedOrdersGateway).
+ */
+export async function listarCfdisEmitidos(): Promise<FacturamaCfdiListItem[]> {
+  const data = await request<FacturamaCfdiListItem[] | { Items?: FacturamaCfdiListItem[] }>(
+    'GET',
+    '/cfdi?type=issued'
+  )
+  return Array.isArray(data) ? data : data.Items ?? []
 }
 
 export async function descargarArchivo(

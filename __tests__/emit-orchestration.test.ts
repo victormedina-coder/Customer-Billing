@@ -93,6 +93,7 @@ function makeInvoiceRow(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
     status:      overrides.status      ?? 'pending',
     invoiceType: overrides.invoiceType ?? 'individual',
     paymentType: overrides.paymentType ?? null,
+    globalInvoiceId: overrides.globalInvoiceId ?? null,
     createdAt:   overrides.createdAt   ?? new Date(),
     cancelledAt: overrides.cancelledAt ?? null,
     privacyVersion: overrides.privacyVersion ?? null,

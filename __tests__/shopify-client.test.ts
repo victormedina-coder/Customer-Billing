@@ -416,6 +416,18 @@ describe('ShopifyOrderSource.findOrder', () => {
     expect(result).not.toBeNull()
   })
 
+  it('propaga sourceIdentifier al Order normalizado (feature OrderNumber en emisión)', async () => {
+    const order = makeShopifyOrder({ sourceIdentifier: '61103865937-15-5333' })
+    fetchMock.mockResolvedValueOnce(gqlOrderResponse([order]))
+
+    const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
+    const result = await new ShopifyOrderSource().findOrder({ orderNumber: '15-5333', verifier: '' })
+
+    expect(result).not.toBeNull()
+    expect(result!.sourceIdentifier).toBe('61103865937-15-5333')
+  })
+
+
   it('normaliza el folio: trim + quitar # + uppercase', async () => {
     const order = makeShopifyOrder({ sourceIdentifier: '61103865937-15-5333' })
     fetchMock.mockResolvedValueOnce(gqlOrderResponse([order]))

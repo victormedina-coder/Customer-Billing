@@ -101,6 +101,12 @@ export const RATE_LIMITS = {
     max: Number(process.env.RATE_LIMIT_VALIDATE_MAX ?? 5),
     windowSec: Number(process.env.RATE_LIMIT_VALIDATE_WINDOW_SEC ?? 900),
   },
+  // Defensa en profundidad sobre /api/global/emit — ya protegido por
+  // GLOBAL_INVOICE_SECRET, este límite acota además el ritmo de intentos.
+  globalEmit: {
+    max: Number(process.env.RATE_LIMIT_GLOBAL_EMIT_MAX ?? 5),
+    windowSec: Number(process.env.RATE_LIMIT_GLOBAL_EMIT_WINDOW_SEC ?? 900),
+  },
 } as const
 
 // ── Resultado de rate limiting ───────────────────────────────────────────────

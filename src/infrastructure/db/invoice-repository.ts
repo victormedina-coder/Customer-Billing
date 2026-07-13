@@ -27,6 +27,12 @@ export interface CreateInvoiceData {
   status?: string
   invoiceType?: 'individual' | 'global'
   paymentType?: 'credito' | 'debito' | 'efectivo' | null
+  /**
+   * Encabezado de la global (tabla `global_invoices`) al que pertenece esta
+   * fila de membresía. Solo aplica cuando `invoiceType==='global'`; el flujo
+   * individual no lo pasa y queda null (ver GlobalInvoiceRepository).
+   */
+  globalInvoiceId?: string | null
   /** Registro auditable de consentimiento legal — ver docstring en schema.ts. */
   privacyVersion?: string | null
   termsVersion?: string | null
@@ -123,6 +129,7 @@ export async function createInvoice(
         status: data.status ?? 'pending',
         invoiceType: data.invoiceType ?? 'individual',
         paymentType: data.paymentType ?? null,
+        globalInvoiceId: data.globalInvoiceId ?? null,
         privacyVersion: data.privacyVersion ?? null,
         termsVersion: data.termsVersion ?? null,
         consentAt: data.consentAt ?? null,
@@ -201,6 +208,18 @@ export async function updateInvoiceStamp(
 export async function deleteById(id: string): Promise<void> {
   const db = getDb()
   await db.delete(invoices).where(eq(invoices.id, id))
+}
+
+/**
+ * Rollback de membresías de un CFDI global — borra TODAS las filas que
+ * apuntan a `globalInvoiceId` (ver EmitGlobalInvoiceUseCase §6.e). Se usa
+ * cuando el timbrado del chunk falla y hay que liberar el cerrojo
+ * UNIQUE(order_id, store_name) de cada pedido sobreviviente, además del
+ * propio encabezado (`GlobalInvoiceRepository.deleteGlobalHeader`).
+ */
+export async function deleteByGlobalInvoiceId(globalInvoiceId: string): Promise<void> {
+  const db = getDb()
+  await db.delete(invoices).where(eq(invoices.globalInvoiceId, globalInvoiceId))
 }
 
 export async function listInvoicedOrderIds(
