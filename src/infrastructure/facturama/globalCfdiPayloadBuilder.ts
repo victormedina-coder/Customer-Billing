@@ -5,8 +5,8 @@
  * sobrevivientes de un chunk) a la forma exacta que espera la API de
  * Facturama para un CFDI GLOBAL mensual. Imita deliberadamente el estilo de
  * cfdiPayloadBuilder.ts (el individual): serialización pura a strings, mismo
- * manejo de ExpeditionPlace, mismo uso de FiscalCalculator para el desglose
- * de IVA. NO recalcula nada que FiscalCalculator ya calcule; NO hace I/O.
+ * manejo de ExpeditionPlace. La base sale de FiscalCalculator; el IVA del
+ * concepto se recalcula a tasa fija 16% (ver GLOBAL_TAX_RATE). NO hace I/O.
  *
  * Diferencias clave frente al individual:
  *   - Receptor FIJO "PUBLICO EN GENERAL" (no hay datos fiscales de cliente).
@@ -67,6 +67,14 @@ const GLOBAL_UNIT_CODE = 'ACT'
 const GLOBAL_UNIT_NAME = 'Actividad'
 
 /**
+ * Tasa de IVA FIJA del CFDI global — decisión del contador (2026-07-13, D1):
+ * todos los tickets van al 16%, sin tasas mixtas. Se usa fija (nunca
+ * back-derivada de iva/base) para garantizar Base × Rate == Total, que es
+ * exactamente lo que valida Facturama por concepto.
+ */
+const GLOBAL_TAX_RATE = 0.16
+
+/**
  * Clave SAT de forma de pago por PaymentBucket. Igual mecanismo que
  * GATEWAY_CLASS_TO_SAT_PAYMENT_FORM del individual, pero indexado por bucket
  * (ya decidido por PaymentBucketPolicy) en vez de por clase de gateway.
@@ -90,16 +98,18 @@ function round2(n: number): number {
  * ya reconciliados/cent-fixed que usaría el CFDI individual de ese pedido,
  * aquí colapsados a Quantity=1 (todo el pedido es un concepto).
  *
- * TODO(D1): pedidos con tasas de IVA mixtas (gravado 16% + tasa 0%) quedan
- * representados con la tasa efectiva blended (iva/base) — pendiente decisión
- * del contador sobre el tratamiento correcto en el global. Ver plan §D1.
+ * D1 RESUELTO (contador, 2026-07-13): tasa FIJA 16% — no hay tasas mixtas.
+ * El IVA del concepto se recalcula como round2(base × 0.16) para que
+ * Base × Rate == Total cuadre siempre (validación estricta de Facturama);
+ * puede diferir ±1 centavo del IVA exacto del ticket, aceptable en el global.
  */
 function buildItemForOrder(order: Order): CfdiItem {
   const breakdown = FiscalCalculator.compute(order)
-  const { subtotalSinIVA, descuento, iva, total } = breakdown.totales
+  const { subtotalSinIVA, descuento } = breakdown.totales
 
   const allExempt = order.lines.length > 0 && order.lines.every((line) => line.taxObject === '01')
   const base = round2(subtotalSinIVA - descuento)
+  const ivaConcepto = allExempt ? 0 : round2(base * GLOBAL_TAX_RATE)
 
   const identificationNumber = order.sourceIdentifier
     ? receiptTail(order.sourceIdentifier)
@@ -115,7 +125,7 @@ function buildItemForOrder(order: Order): CfdiItem {
     Quantity: '1',
     Subtotal: String(subtotalSinIVA),
     TaxObject: allExempt ? '01' : '02',
-    Total: String(total),
+    Total: String(round2(base + ivaConcepto)),
   }
 
   if (descuento > 0) {
@@ -124,12 +134,11 @@ function buildItemForOrder(order: Order): CfdiItem {
 
   // Exento: igual que el individual, Facturama exige NO mandar el nodo Taxes.
   if (!allExempt) {
-    const rate = base > 0 ? Math.round((iva / base) * 10_000) / 10_000 : 0
     const tax: CfdiTax = {
-      Total: String(iva),
+      Total: String(ivaConcepto),
       Name: 'IVA',
       Base: String(base),
-      Rate: String(rate),
+      Rate: String(GLOBAL_TAX_RATE),
       IsRetention: 'false',
       IsFederalTax: 'true',
     }
@@ -173,14 +182,14 @@ export function buildGlobalCfdiPayload(
   const items = orders.map((monthlyOrder) => buildItemForOrder(monthlyOrder.order))
 
   return {
-    NameId:          nameId,
-    Folio:           folio,
-    CfdiType:        'I',
+    NameId: nameId,
+    Folio: folio,
+    CfdiType: 'I',
     ExpeditionPlace: expeditionPlace,
-    Exportation:     '01',
-    PaymentForm:     paymentForm,
-    PaymentMethod:   'PUE',
-    Currency:        'MXN',
+    Exportation: '01',
+    PaymentForm: paymentForm,
+    PaymentMethod: 'PUE',
+    Currency: 'MXN',
     Receiver: {
       ...GENERIC_RECEIVER,
       TaxZipCode: expeditionPlace,
@@ -188,8 +197,8 @@ export function buildGlobalCfdiPayload(
     Items: items,
     GlobalInformation: {
       Periodicity: period.periodicityCode(),
-      Months:      period.monthsCode(),
-      Year:        period.yearString(),
+      Months: period.monthsCode(),
+      Year: period.yearString(),
     },
   }
 }

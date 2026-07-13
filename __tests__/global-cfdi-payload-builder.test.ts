@@ -50,6 +50,12 @@ function assertItemIdentities(items: CfdiItem[]): void {
     expect(Math.round(unit * qty * 100) / 100).toBeCloseTo(sub, 2)
     expect(Math.round((sub - disc) * 100) / 100).toBeCloseTo(base, 2)
     expect(Math.round((base + iva) * 100) / 100).toBeCloseTo(total, 2)
+    // Validación estricta de Facturama por concepto: Base × Rate === Taxes.Total
+    // exacto a 2 decimales (era la causa del rechazo en sandbox 2026-07-13).
+    if (it.Taxes && it.Taxes.length > 0) {
+      const rate = parseFloat(it.Taxes[0].Rate)
+      expect(Math.round(base * rate * 100) / 100).toBe(iva)
+    }
   }
 }
 
@@ -245,6 +251,40 @@ describe('buildGlobalCfdiPayload — desglose de IVA por pedido (delegado a Fisc
     const item = payload.Items[0]
     expect(item.Discount).toBeDefined()
     expect(parseFloat(item.Discount!)).toBeGreaterThan(0)
+  })
+
+  // ── Regresión sandbox 2026-07-13: "Base por Rate debe ser igual al Total" ──
+  // Con varios líneas, la suma de IVAs redondeados por línea se desvía de
+  // 0.16 × base. El código viejo back-derivaba Rate = round4(iva/base) (aquí
+  // 0.1598) y mandaba el iva sumado como Total → Facturama recomputa
+  // Base × Rate = 47.99 ≠ 48.00 y rechaza el CFDI completo del bucket.
+  // El fix (D1, contador): Rate FIJO 0.16 e IVA = round2(base × 0.16).
+  it('regresión: pedido multilínea con IVA acumulado desviado → Rate fijo 0.16 y Base × Rate === Taxes.Total', () => {
+    // 10 líneas de $34.83 (IVA incluido): base por línea 30.03, iva por línea
+    // round2(30.03 × 0.16) = 4.80 (drift −0.0048 c/u). Suma: base 300.30,
+    // iva 48.00 — pero round2(300.30 × 0.16) = 48.05.
+    const driftLine: OrderLine = {
+      description: 'Artículo', quantity: 1, unitPrice: 34.83, taxRate: 0.16, taxObject: '02', discount: 0, productCode: 'D1',
+    }
+    const driftOrder = makeMonthlyOrder({
+      lines: Array.from({ length: 10 }, () => ({ ...driftLine })),
+      total: 348.3,
+      taxAmount: 48,
+    })
+    const payload = buildGlobalCfdiPayload(PERIOD, 'debito', [driftOrder], 'tienda-ariat', EXPEDITION_PLACE)
+    const item = payload.Items[0]
+    const tax = item.Taxes![0]
+
+    // La tasa es la fija del global — NUNCA back-derivada (el bug producía "0.1598").
+    expect(tax.Rate).toBe('0.16')
+    // El IVA del concepto se recalcula desde la base para que cuadre exacto.
+    expect(parseFloat(tax.Base)).toBeCloseTo(300.3, 2)
+    expect(parseFloat(tax.Total)).toBeCloseTo(48.05, 2)
+    // La validación que aplica Facturama, exacta a 2 decimales:
+    expect(Math.round(parseFloat(tax.Base) * parseFloat(tax.Rate) * 100) / 100).toBe(parseFloat(tax.Total))
+    // Y el Total del concepto es Base + IVA recalculado (±1 centavo vs ticket, aceptado).
+    expect(parseFloat(item.Total)).toBeCloseTo(348.35, 2)
+    assertItemIdentities(payload.Items)
   })
 
   it('múltiples pedidos: la suma de Total de items ≈ suma de order.total y cumplen las 3 invariantes', () => {
