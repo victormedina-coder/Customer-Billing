@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config'
+import { defineConfig, defaultExclude } from 'vitest/config'
 import { readFileSync } from 'fs'
 import path from 'path'
 
@@ -26,12 +26,42 @@ function loadEnvLocal(): Record<string, string> {
   }
 }
 
+// Estos 3 archivos son integration tests gateados por DATABASE_URL_TEST:
+// comparten la MISMA tabla en la MISMA DB Postgres real y cada uno hace
+// TRUNCATE ... CASCADE en beforeEach. Si corren en paralelo entre sí (el
+// fileParallelism default de Vitest 4), se pisan y el suite queda flaky.
+// El resto de los tests usan fakes en memoria (sin DB), así que sí pueden
+// correr en paralelo sin conflicto.
+const INTEGRATION_TEST_FILES = [
+  '__tests__/invoice-repository.test.ts',
+  '__tests__/invoiced-orders-gateway.test.ts',
+  '__tests__/global-invoice-repository.test.ts',
+]
+
 export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
-    include: ['__tests__/**/*.test.ts'],
     env: loadEnvLocal(),
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          include: ['__tests__/**/*.test.ts'],
+          exclude: [...defaultExclude, ...INTEGRATION_TEST_FILES],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'integration',
+          include: INTEGRATION_TEST_FILES,
+          // Serializa solo estos 3 archivos entre sí; no afecta al proyecto "unit".
+          fileParallelism: false,
+        },
+      },
+    ],
   },
   resolve: {
     alias: {
