@@ -197,8 +197,8 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 | `FACTURAMA_USER` / `FACTURAMA_PASS` | Credenciales de la API |
 | `FACTURAMA_ENV` | Entorno (`sandbox` / `production`) |
 | `FACTURAMA_NAME_ID` | Identificador del emisor/CSD en Facturama |
-| `FACTURAMA_DEFAULT_PRODUCT_CODE` | ClaveProdServ por defecto |
-| `FACTURAMA_DEFAULT_UNIT_CODE` | ClaveUnidad por defecto |
+| `FACTURAMA_DEFAULT_PRODUCT_CODE` | ClaveProdServ por defecto — **solo CFDI individual**. Default en código: `53102500`. El CFDI global usa `01010101` fijo (normativo, SAT 2.7.1.21), no lee esta var. |
+| `FACTURAMA_DEFAULT_UNIT_CODE` | ClaveUnidad por defecto — **solo CFDI individual**. Default en código: `H87` (Pieza). El CFDI global usa `ACT` fijo (normativo, SAT 2.7.1.21), no lee esta var. |
 | `FACTURAMA_DEFAULT_PAYMENT_FORM` | FormaPago por defecto |
 | `FACTURAMA_EXPEDITION_PLACE` | **Opcional.** Override manual del Lugar de Expedición (CP). Por defecto (vacío) se resuelve en vivo desde el perfil fiscal del emisor en Facturama (`GET /TaxEntity` → `IssuedIn.ZipCode`, cacheado 1h en memoria de proceso). Nunca cae al CP del receptor — si Facturama no devuelve un CP registrado, el timbrado falla explícitamente. |
 | `FACTURAMA_ISSUER_EMAIL` | Correo remitente del CFDI (opcional; el reenvío funciona sin ella) |

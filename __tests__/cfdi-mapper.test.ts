@@ -229,6 +229,10 @@ describe('mapPaymentForm — via buildCfdiPayload', () => {
     const p = buildCfdiPayload(makeOrder({ total: 116, taxAmount: 16, lines: baseLine, paymentGatewayNames: undefined }), fiscal, EXPEDITION_PLACE)
     expect(p.PaymentForm).toBe('03')
   })
+  it("['Tarjeta'] → PaymentForm === '04' (gateway genérico histórico Ariat → crédito, finanzas 2026-07-10)", () => {
+    const p = buildCfdiPayload(makeOrder({ total: 116, taxAmount: 16, lines: baseLine, paymentGatewayNames: ['Tarjeta'] }), fiscal, EXPEDITION_PLACE)
+    expect(p.PaymentForm).toBe('04')
+  })
 })
 
 // ── Test 7: cent-fix con descuento — verifica las 3 invariantes ───────────────
@@ -354,6 +358,64 @@ describe('buildCfdiPayload — línea con tasa 0% (gravada, tasa cero)', () => {
   })
   it('Taxes[0].Total === "0" (IVA cero)', () => {
     expect(item.Taxes![0].Total).toBe('0')
+  })
+})
+
+// ── Test 12: ClaveProdServ/ClaveUnidad genéricas del INDIVIDUAL (2026-07-10) ──
+// Decisión de negocio: individual usa 53102500/H87 (Pieza), distinto del
+// global (01010101/ACT), que es normativo y vive en globalCfdiPayloadBuilder.
+describe('buildCfdiPayload — ClaveProdServ/ClaveUnidad genéricas', () => {
+  const baseLine: OrderLine[] = [
+    { description: 'Item', quantity: 1, unitPrice: 116, taxRate: 0.16, taxObject: '02', discount: 0, productCode: 'P001' },
+  ]
+  const order = makeOrder({ total: 116, taxAmount: 16, lines: baseLine })
+
+  // El .env de desarrollo fija FACTURAMA_DEFAULT_PRODUCT_CODE/UNIT_CODE
+  // (histórico, valores del flujo global) y vitest lo carga a process.env,
+  // así que estos dos casos simulan "sin env" desactivándolas temporalmente
+  // para probar el default real que trae el código.
+  it('ProductCode === "53102500" por default (sin env)', () => {
+    const prev = process.env.FACTURAMA_DEFAULT_PRODUCT_CODE
+    delete process.env.FACTURAMA_DEFAULT_PRODUCT_CODE
+    try {
+      const payload = buildCfdiPayload(order, fiscal, EXPEDITION_PLACE)
+      expect(payload.Items[0].ProductCode).toBe('53102500')
+    } finally {
+      if (prev !== undefined) process.env.FACTURAMA_DEFAULT_PRODUCT_CODE = prev
+    }
+  })
+
+  it('UnitCode === "H87" por default (sin env)', () => {
+    const prev = process.env.FACTURAMA_DEFAULT_UNIT_CODE
+    delete process.env.FACTURAMA_DEFAULT_UNIT_CODE
+    try {
+      const payload = buildCfdiPayload(order, fiscal, EXPEDITION_PLACE)
+      expect(payload.Items[0].UnitCode).toBe('H87')
+    } finally {
+      if (prev !== undefined) process.env.FACTURAMA_DEFAULT_UNIT_CODE = prev
+    }
+  })
+
+  it('Unit === "Pieza" (nombre consistente con H87)', () => {
+    const payload = buildCfdiPayload(order, fiscal, EXPEDITION_PLACE)
+    expect(payload.Items[0].Unit).toBe('Pieza')
+  })
+
+  it('respeta override por env de FACTURAMA_DEFAULT_PRODUCT_CODE/UNIT_CODE', () => {
+    const prevProd = process.env.FACTURAMA_DEFAULT_PRODUCT_CODE
+    const prevUnit = process.env.FACTURAMA_DEFAULT_UNIT_CODE
+    process.env.FACTURAMA_DEFAULT_PRODUCT_CODE = '90101501'
+    process.env.FACTURAMA_DEFAULT_UNIT_CODE = 'E48'
+    try {
+      const payload = buildCfdiPayload(order, fiscal, EXPEDITION_PLACE)
+      expect(payload.Items[0].ProductCode).toBe('90101501')
+      expect(payload.Items[0].UnitCode).toBe('E48')
+    } finally {
+      if (prevProd === undefined) delete process.env.FACTURAMA_DEFAULT_PRODUCT_CODE
+      else process.env.FACTURAMA_DEFAULT_PRODUCT_CODE = prevProd
+      if (prevUnit === undefined) delete process.env.FACTURAMA_DEFAULT_UNIT_CODE
+      else process.env.FACTURAMA_DEFAULT_UNIT_CODE = prevUnit
+    }
   })
 })
 

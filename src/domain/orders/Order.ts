@@ -37,6 +37,14 @@ export interface Order {
   storeName: string
   refundedAmount: number
   financialStatus: string
+  /**
+   * Identificador de origen del pedido (Shopify `sourceIdentifier`), típicamente
+   * `{deviceId}-{folio}` del recibo POS. Es el folio que el cliente teclea en el
+   * portal. Se usa para construir la referencia de orden que se manda a Facturama
+   * (ver src/domain/orders/OrderReference.ts). Opcional: fuentes distintas de
+   * Shopify (o pedidos sin POS) pueden no tenerlo.
+   */
+  sourceIdentifier?: string | null
 }
 
 /** Alias de compatibilidad — usar Order en código nuevo. */

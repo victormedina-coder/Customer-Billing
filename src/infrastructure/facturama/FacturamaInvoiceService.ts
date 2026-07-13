@@ -21,8 +21,11 @@ import { buildCfdiPayload } from './cfdiPayloadBuilder'
  * FACTURAMA_EXPEDITION_PLACE es SOLO un override manual explícito (útil para
  * escenarios multi-sucursal futuros). Por defecto se resuelve en vivo contra
  * el perfil fiscal del emisor en Facturama — nunca cae al CP del receptor.
+ *
+ * Exportada: FacturamaGlobalStamping (CFDI global) reutiliza EXACTAMENTE el
+ * mismo mecanismo/override que el individual (DRY) — ver plan Paso 4.
  */
-async function resolveExpeditionPlace(): Promise<string> {
+export async function resolveExpeditionPlace(): Promise<string> {
   const override = (process.env.FACTURAMA_EXPEDITION_PLACE ?? '').trim()
   if (override) return override
   return getExpeditionPlace()

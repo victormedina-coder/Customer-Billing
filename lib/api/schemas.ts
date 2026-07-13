@@ -69,3 +69,16 @@ export const ResendSchema = z.object({
 })
 
 export const InvoiceIdParamSchema = z.string().uuid()
+
+/**
+ * Body de POST /api/global/emit — facturación global mensual. Endpoint
+ * disparado por cron/operación interna (no por el cliente final), de ahí que
+ * year/month se validen como number estricto (sin coerce): quien lo llama
+ * controla el JSON que envía.
+ */
+export const GlobalEmitSchema = z.object({
+  year: z.number().int('El año debe ser un entero').min(2020, 'Año fuera de rango').max(2100, 'Año fuera de rango'),
+  month: z.number().int('El mes debe ser un entero').min(1, 'Mes inválido (1-12)').max(12, 'Mes inválido (1-12)'),
+  storeName: z.string().min(1).max(100).optional(),
+  dryRun: z.boolean().optional().default(false),
+})

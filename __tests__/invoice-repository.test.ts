@@ -10,6 +10,7 @@ import {
   createInvoice,
   updateInvoiceStamp,
   deleteById,
+  deleteByGlobalInvoiceId,
   listInvoicedOrderIds,
   reapIfStalePending,
   type CreateInvoiceData,
@@ -96,6 +97,23 @@ describe.skipIf(skip)('invoice-repository (integration, Railway test DB)', () =>
     const r2 = await createInvoice({ orderId: 'order-004', orderNumber: '#1004', storeName: 'tienda-stetson' })
     expect(r1.created).toBe(true)
     expect(r2.created).toBe(true)
+  })
+
+  it('una membresía GLOBAL con el mismo (order_id, store_name de sucursal) que una fila INDIVIDUAL choca — cerrojo anti-doble-facturación entre canales (bug corregido 2026-07-10)', async () => {
+    const sucursal = 'Western Brothers Outlet Lerma'
+    const individual = await createInvoice({
+      orderId: 'order-branch-1', orderNumber: '#B1', storeName: sucursal, invoiceType: 'individual',
+    })
+    expect(individual.created).toBe(true)
+
+    // La membresía global usa `order.storeName` (sucursal), NO la clave de
+    // marca — por eso debe chocar con la fila individual del mismo pedido.
+    const membership = await createInvoice({
+      orderId: 'order-branch-1', orderNumber: '#B1', storeName: sucursal,
+      invoiceType: 'global', paymentType: 'efectivo',
+    })
+    expect(membership.created).toBe(false)
+    if (!membership.created) expect(membership.reason).toBe('already_invoiced')
   })
 
   // ── findByOrder ────────────────────────────────────────────────────────────
@@ -221,6 +239,35 @@ describe.skipIf(skip)('invoice-repository (integration, Railway test DB)', () =>
 
   it('deleteById sobre id inexistente no lanza', async () => {
     await expect(deleteById(crypto.randomUUID())).resolves.toBeUndefined()
+  })
+
+  // ── deleteByGlobalInvoiceId — rollback de membresías de una global ────────
+
+  it('deleteByGlobalInvoiceId borra TODAS las membresías de un CFDI global; no toca otras filas', async () => {
+    const [header] = await cleanupDb!
+      .insert(schema.globalInvoices)
+      .values({ storeName: 'tienda-ariat', periodYear: 2026, periodMonth: 6, paymentBucket: 'debito', chunkIndex: 0 })
+      .returning()
+
+    await createInvoice({
+      orderId: 'order-glob-a', orderNumber: '#A', storeName: 'tienda-ariat',
+      invoiceType: 'global', paymentType: 'debito', globalInvoiceId: header.id,
+    })
+    await createInvoice({
+      orderId: 'order-glob-b', orderNumber: '#B', storeName: 'tienda-ariat',
+      invoiceType: 'global', paymentType: 'debito', globalInvoiceId: header.id,
+    })
+    await createInvoice({ orderId: 'order-individual', orderNumber: '#C', storeName: 'tienda-ariat', invoiceType: 'individual' })
+
+    await deleteByGlobalInvoiceId(header.id)
+
+    expect(await findByOrder('order-glob-a', 'tienda-ariat')).toBeNull()
+    expect(await findByOrder('order-glob-b', 'tienda-ariat')).toBeNull()
+    expect(await findByOrder('order-individual', 'tienda-ariat')).not.toBeNull()
+  })
+
+  it('deleteByGlobalInvoiceId sobre un id inexistente no lanza', async () => {
+    await expect(deleteByGlobalInvoiceId(crypto.randomUUID())).resolves.toBeUndefined()
   })
 
   // ── Flujo insert-first ─────────────────────────────────────────────────────

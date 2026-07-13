@@ -12,6 +12,11 @@
 import type { NormalizedOrderWithPayment } from '../../domain/orders/Order'
 import type { FiscalInput } from '../../domain/fiscal/FiscalInput'
 import { FiscalCalculator } from '../../domain/fiscal/FiscalCalculator'
+import { buildOrderReference } from '../../domain/orders/OrderReference'
+import {
+  classifyGateway,
+  type GatewayPaymentClass,
+} from '../../domain/global/GatewayPaymentClassification'
 
 // ─── Tipos Facturama (infraestructura) ───────────────────────────────────────
 
@@ -59,32 +64,42 @@ export interface CfdiPayload {
   Currency: 'MXN'
   Receiver: CfdiReceiver
   Items: CfdiItem[]
+  /**
+   * Metadato de Facturama (NO va en el XML SAT) — referencia al pedido de
+   * origen, formato "{order.name} {sourceIdentifier}" (ver OrderReference).
+   * Es el mismo campo "Orden de Compra" que rellena la app de autofacturación
+   * de Facturama. La futura facturación global mensual filtra "ya facturado"
+   * leyendo este campo por API (round-trip verificado en sandbox 2026-07-09
+   * con scripts/probe-ordernumber-roundtrip.mjs).
+   */
+  OrderNumber?: string
 }
 
 // ─── Utilidades de serialización ─────────────────────────────────────────────
 
 /**
- * Mapea el nombre del gateway de Shopify a la clave SAT de forma de pago.
+ * Clave SAT de forma de pago por clase de gateway. La CLASIFICACIÓN del
+ * gateway (qué gateway es efectivo/transferencia/crédito/débito) vive en
+ * src/domain/global/GatewayPaymentClassification.ts (single source of
+ * truth); aquí solo se traduce la clase a la clave SAT correspondiente.
  * PENDIENTE: el contador debe confirmar el mapeo definitivo.
- *
- * Claves SAT comunes:
- *   01 = Efectivo
- *   03 = Transferencia electrónica
- *   04 = Tarjeta de crédito
- *   28 = Tarjeta de débito
  */
+const GATEWAY_CLASS_TO_SAT_PAYMENT_FORM: Record<GatewayPaymentClass, string> = {
+  efectivo: '01',
+  transferencia: '03',
+  credito: '04',
+  debito: '28',
+}
+
+/** Mapea el nombre del gateway de Shopify a la clave SAT de forma de pago. */
 function mapPaymentForm(gateways?: string[]): string {
   const defaultForm = process.env.FACTURAMA_DEFAULT_PAYMENT_FORM ?? '03'
   if (!gateways || gateways.length === 0) return defaultForm
 
-  const raw = gateways[0].toLowerCase()
+  const gatewayClass = classifyGateway(gateways[0])
+  if (gatewayClass === 'unmapped') return defaultForm
 
-  if (raw.includes('cash') || raw.includes('efectivo')) return '01'
-  if (raw.includes('transfer') || raw.includes('transferencia') || raw === 'bogus') return '03'
-  if (raw.includes('credit') || raw.includes('crédito') || raw.includes('credito') || raw.includes('paypal')) return '04'
-  if (raw.includes('debit') || raw.includes('débito') || raw.includes('debito')) return '28'
-
-  return defaultForm
+  return GATEWAY_CLASS_TO_SAT_PAYMENT_FORM[gatewayClass]
 }
 
 // ─── Builder principal ────────────────────────────────────────────────────────
@@ -95,8 +110,12 @@ export function buildCfdiPayload(
   expeditionPlace: string
 ): CfdiPayload {
   const nameId          = process.env.FACTURAMA_NAME_ID ?? '1'
-  const defaultProdCode = process.env.FACTURAMA_DEFAULT_PRODUCT_CODE ?? '01010101'
-  const defaultUnitCode = process.env.FACTURAMA_DEFAULT_UNIT_CODE ?? 'ACT'
+  // Default de negocio (2026-07-10): factura INDIVIDUAL (cliente) usa clave
+  // genérica de servicios "53102500" + unidad "H87" (Pieza). Distinto del
+  // CFDI GLOBAL, que usa las claves normativas fijas de globalCfdiPayloadBuilder.ts.
+  const defaultProdCode = process.env.FACTURAMA_DEFAULT_PRODUCT_CODE ?? '53102500'
+  const defaultUnitCode = process.env.FACTURAMA_DEFAULT_UNIT_CODE ?? 'H87'
+  const defaultUnitName = 'Pieza'
 
   if (!expeditionPlace.trim()) {
     throw new Error('buildCfdiPayload: expeditionPlace es obligatorio y no puede estar vacío.')
@@ -106,6 +125,14 @@ export function buildCfdiPayload(
   const folio = String(Date.now()).slice(-8)
 
   const paymentForm = mapPaymentForm(order.paymentGatewayNames)
+
+  // Referencia al pedido de origen para OrderNumber. Facturama limita
+  // OrderNumber a ~100 chars; la referencia real siempre es corta, pero se
+  // trunca defensivamente para no romper la emisión.
+  const orderReference = buildOrderReference(
+    order.orderNumber,
+    order.sourceIdentifier ?? null
+  ).slice(0, 100)
 
   // Delegar TODO el cálculo numérico al domain service
   const breakdown = FiscalCalculator.compute(order)
@@ -119,7 +146,7 @@ export function buildCfdiPayload(
       ProductCode:          defaultProdCode,
       IdentificationNumber: line.productCode || String(index + 1).padStart(3, '0'),
       Description:          line.description,
-      Unit:                 defaultUnitCode,
+      Unit:                 defaultUnitName,
       UnitCode:             defaultUnitCode,
       UnitPrice:            String(lb.unitPriceSinIva),
       Quantity:             String(lb.quantity),
@@ -167,5 +194,6 @@ export function buildCfdiPayload(
       TaxZipCode:   fiscal.cp,
     },
     Items: items,
+    OrderNumber: orderReference,
   }
 }

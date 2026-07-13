@@ -1,0 +1,94 @@
+/**
+ * MxCalendar — utilidades de calendario puras para zona horaria de México.
+ *
+ * Shared kernel de dominio: extraído de InvoiceWindowPolicy para que
+ * cualquier VO/policy que necesite límites de mes en zona MX (ej.
+ * GlobalPeriod, facturación global mensual) use la MISMA mecánica en
+ * lugar de reimplementarla (DRY).
+ *
+ * Zona horaria:
+ *   México abolió el horario de verano (DST) a partir del 30 de octubre de 2022.
+ *   Desde entonces America/Mexico_City es UTC-6 fijo (CST permanente).
+ *   Sin embargo, NO hardcodeamos -6 como offset literal: usamos Intl.DateTimeFormat
+ *   con la IANA tz "America/Mexico_City" para que el motor V8 aplique las reglas
+ *   históricas correctas. Si en el futuro el gobierno revertiese el cambio, el
+ *   runtime lo manejaría sin tocar este código.
+ */
+
+export const MX_TZ = 'America/Mexico_City'
+
+/**
+ * Devuelve { year, month } (1-indexed) del instante `date` en zona MX.
+ * Usa Intl para respetar las reglas históricas de la zona sin hardcodear UTC-6.
+ */
+export function getMxYearMonth(date: Date): { year: number; month: number } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: MX_TZ,
+    year: 'numeric',
+    month: 'numeric',
+  }).formatToParts(date)
+
+  const year = Number(parts.find((p) => p.type === 'year')?.value ?? 0)
+  const month = Number(parts.find((p) => p.type === 'month')?.value ?? 0)
+  return { year, month }
+}
+
+/**
+ * Retorna el offset de America/Mexico_City en milisegundos para el instante dado.
+ * Offset = localMX - UTC → negativo para UTC-6 (-21_600_000 ms).
+ */
+export function getMxOffsetMs(utcDate: Date): number {
+  // Formateamos el instante en zona MX y en UTC para calcular la diferencia.
+  const fmt = (tz: string) =>
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(utcDate)
+
+  const parse = (s: string): number => {
+    // Formato: "MM/DD/YYYY, HH:MM:SS"
+    const [datePart, timePart] = s.split(', ')
+    const [mm, dd, yyyy] = datePart.split('/')
+    const [hh, min, sec] = timePart.split(':')
+    return Date.UTC(+yyyy, +mm - 1, +dd, +hh, +min, +sec)
+  }
+
+  const mxMs = parse(fmt(MX_TZ))
+  const utcMs = parse(fmt('UTC'))
+  return mxMs - utcMs // negativo para UTC-6
+}
+
+/**
+ * Retorna el instante UTC que corresponde al primer segundo (00:00:00.000 MX)
+ * del mes `month` (1-indexed) del año `year`, en zona horaria de México.
+ *
+ * Estrategia (sin dependencias externas): construimos el día 1 del mes como si
+ * fuera medianoche UTC y ajustamos por la diferencia de offset entre UTC y MX
+ * en ese punto.
+ */
+export function mxMonthStart(year: number, month: number): Date {
+  const naiveUtcMs = Date.UTC(year, month - 1, 1) // día 1 del mes, 00:00 UTC
+  const offsetMs = getMxOffsetMs(new Date(naiveUtcMs))
+  // El instante real de "00:00 MX" = naiveUTC - offsetMX
+  // (si MX es UTC-6, offsetMs = -6*3600*1000, restamos negativo → sumamos 6h)
+  return new Date(naiveUtcMs - offsetMs)
+}
+
+/**
+ * Límites [from, to] del mes calendario `month`/`year` en zona MX:
+ * `from` = primer instante del mes (00:00:00.000 MX), `to` = último instante
+ * del mes (el ms inmediatamente anterior al inicio del mes siguiente).
+ */
+export function mxMonthBounds(year: number, month: number): { from: Date; to: Date } {
+  const from = mxMonthStart(year, month)
+  const nextMonth = month === 12 ? 1 : month + 1
+  const nextYear = month === 12 ? year + 1 : year
+  const to = new Date(mxMonthStart(nextYear, nextMonth).getTime() - 1)
+  return { from, to }
+}
