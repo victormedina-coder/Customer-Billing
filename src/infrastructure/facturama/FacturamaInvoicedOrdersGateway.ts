@@ -4,11 +4,12 @@
  * InvoicedOrdersGateway (Paso 4).
  *
  * Lista los CFDIs emitidos vía GET /cfdi?type=issued (Basic auth del cliente
- * existente, ver facturamaClient.listarCfdisEmitidos) y, de los vigentes
- * dentro del periodo, extrae `OrderNumber` para poblar `orderReferences`.
- * Esta app no expone el `order.id` de Shopify — por eso `orderIds` siempre
- * es un Set vacío aquí (match por referencia de texto, no por id; ver
- * InvoicedOrdersGateway para la motivación completa).
+ * existente, ver facturamaClient.listarCfdisEmitidos), acotados server-side
+ * al rango del periodo (`dateStart`/`dateEnd`, paginado internamente por el
+ * cliente) y, de los vigentes dentro del periodo, extrae `OrderNumber` para
+ * poblar `orderReferences`. Esta app no expone el `order.id` de Shopify —
+ * por eso `orderIds` siempre es un Set vacío aquí (match por referencia de
+ * texto, no por id; ver InvoicedOrdersGateway para la motivación completa).
  *
  * `storeName` se recibe por conformidad con el puerto pero NO se usa: la
  * cuenta de Facturama es única (no hay filtrado server-side por tienda/marca)
@@ -40,7 +41,7 @@ export class FacturamaInvoicedOrdersGateway implements InvoicedOrdersGateway {
     storeName: string,
     period: GlobalPeriod
   ): Promise<InvoicedOrderKeys> {
-    const items = await listarCfdisEmitidos()
+    const items = await listarCfdisEmitidos(period.rangeMx())
     const inPeriod = this.filterByPeriod(items, period)
 
     const orderReferences = new Set<string>()
@@ -56,10 +57,12 @@ export class FacturamaInvoicedOrdersGateway implements InvoicedOrdersGateway {
   }
 
   /**
-   * Filtrado client-side por `Date` dentro del rango del periodo.
-   * TODO: investigar params de fecha/paginación del listado (verificar
-   * contra sandbox en el Paso 7) — el filtrado por parámetros de servidor
-   * NO está verificado aún.
+   * Filtrado client-side por `Date` dentro del rango del periodo — defensa
+   * en profundidad ADEMÁS del filtro server-side (`dateStart`/`dateEnd`) que
+   * ya aplica `listarCfdisEmitidos`. Se conserva porque la semántica exacta
+   * de esos params (inclusividad de bordes, zona horaria) no está verificada
+   * contra el sandbox; este filtro recorta cualquier exceso que el servidor
+   * llegue a devolver.
    */
   private filterByPeriod(items: FacturamaCfdiListItem[], period: GlobalPeriod): FacturamaCfdiListItem[] {
     const { from, to } = period.rangeMx()

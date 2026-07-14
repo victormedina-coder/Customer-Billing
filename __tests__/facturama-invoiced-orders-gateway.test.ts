@@ -53,7 +53,21 @@ describe('FacturamaInvoicedOrdersGateway.listInvoicedOrderKeys', () => {
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('/cfdi?type=issued')
+    expect(new URL(url).searchParams.get('page')).toBe('0')
     expect((init.headers as Record<string, string>)['Authorization']).toBe(EXPECTED_AUTH)
+  })
+
+  it('pasa el rango del periodo (dateStart/dateEnd) al cliente de Facturama', async () => {
+    const { FacturamaInvoicedOrdersGateway } = await importGateway()
+    const { createGlobalPeriod } = await importPeriod()
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
+
+    await new FacturamaInvoicedOrdersGateway().listInvoicedOrderKeys('tienda-ariat', createGlobalPeriod(2026, 6))
+
+    const [url] = fetchMock.mock.calls[0] as [string]
+    const params = new URL(url).searchParams
+    expect(params.get('dateStart')).toBe('01/06/2026')
+    expect(params.get('dateEnd')).toBe('30/06/2026')
   })
 
   it('filtra por Date dentro del rango del periodo (excluye fuera de rango)', async () => {
