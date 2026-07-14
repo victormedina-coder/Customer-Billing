@@ -674,3 +674,113 @@ describe('getExpeditionPlace', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// describe: listarCfdisEmitidos
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('listarCfdisEmitidos', () => {
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  function pageOf(n: number, offset = 0) {
+    return Array.from({ length: n }, (_, i) => ({ Id: `cfdi-${offset + i}` }))
+  }
+
+  beforeEach(() => {
+    fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubEnv('FACTURAMA_USER', FAKE_USER)
+    vi.stubEnv('FACTURAMA_PASS', FAKE_PASS)
+    vi.stubEnv('FACTURAMA_ENV', 'sandbox')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  it('página 0 con menos de 100 elementos → una sola llamada', async () => {
+    const { listarCfdisEmitidos } = await importClient()
+    fetchMock.mockResolvedValueOnce(jsonResponse(pageOf(5)))
+
+    const result = await listarCfdisEmitidos()
+
+    expect(result).toHaveLength(5)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(new URL(url).searchParams.get('page')).toBe('0')
+  })
+
+  it('página llena (100) sigue paginando; página parcial detiene y acumula todo', async () => {
+    const { listarCfdisEmitidos } = await importClient()
+    fetchMock.mockResolvedValueOnce(jsonResponse(pageOf(100, 0)))
+    fetchMock.mockResolvedValueOnce(jsonResponse(pageOf(40, 100)))
+
+    const result = await listarCfdisEmitidos()
+
+    expect(result).toHaveLength(140)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const [firstUrl] = fetchMock.mock.calls[0] as [string]
+    const [secondUrl] = fetchMock.mock.calls[1] as [string]
+    expect(new URL(firstUrl).searchParams.get('page')).toBe('0')
+    expect(new URL(secondUrl).searchParams.get('page')).toBe('1')
+  })
+
+  it('página vacía (0 elementos) detiene la paginación', async () => {
+    const { listarCfdisEmitidos } = await importClient()
+    fetchMock.mockResolvedValueOnce(jsonResponse(pageOf(100, 0)))
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
+
+    const result = await listarCfdisEmitidos()
+
+    expect(result).toHaveLength(100)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('alcanza el tope de seguridad de páginas → lanza Error en vez de listado incompleto', async () => {
+    const { listarCfdisEmitidos } = await importClient()
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(pageOf(100))))
+
+    await expect(listarCfdisEmitidos()).rejects.toThrow(/tope de seguridad/)
+    expect(fetchMock).toHaveBeenCalledTimes(100)
+  })
+
+  it('sin rango: no manda dateStart/dateEnd (compatibilidad hacia atrás)', async () => {
+    const { listarCfdisEmitidos } = await importClient()
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
+
+    await listarCfdisEmitidos()
+
+    const [url] = fetchMock.mock.calls[0] as [string]
+    const params = new URL(url).searchParams
+    expect(params.has('dateStart')).toBe(false)
+    expect(params.has('dateEnd')).toBe(false)
+  })
+
+  it('con rango: manda dateStart/dateEnd en dd/MM/yyyy según el calendario MX (no UTC)', async () => {
+    const { listarCfdisEmitidos } = await importClient()
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
+
+    // Instantes UTC que representan 00:00 MX del 1-jun-2026 y el último ms de
+    // junio en MX (23:59:59.999 del 30-jun-2026 MX = 01-jul-2026 05:59:59.999
+    // UTC, ver mxMonthBounds/rangeMx). Si se usara getUTCDate() a ciegas, `to`
+    // se leería como 1-jul en vez de 30-jun.
+    const from = new Date('2026-06-01T06:00:00.000Z')
+    const to = new Date('2026-07-01T05:59:59.999Z')
+
+    await listarCfdisEmitidos({ from, to })
+
+    const [url] = fetchMock.mock.calls[0] as [string]
+    const params = new URL(url).searchParams
+    expect(params.get('dateStart')).toBe('01/06/2026')
+    expect(params.get('dateEnd')).toBe('30/06/2026')
+  })
+
+  it('acepta la respuesta envuelta en { Items: [...] } en cada página', async () => {
+    const { listarCfdisEmitidos } = await importClient()
+    fetchMock.mockResolvedValueOnce(jsonResponse({ Items: pageOf(3) }))
+
+    const result = await listarCfdisEmitidos()
+    expect(result).toHaveLength(3)
+  })
+})
