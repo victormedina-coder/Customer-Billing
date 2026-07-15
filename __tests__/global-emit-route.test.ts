@@ -87,6 +87,7 @@ beforeEach(async () => {
 afterEach(() => {
   vi.clearAllMocks()
   vi.unstubAllEnvs()
+  vi.useRealTimers()
 })
 
 describe('POST /api/global/emit', () => {
@@ -155,8 +156,12 @@ describe('POST /api/global/emit', () => {
     expect(json.error.code).toBe('VALIDATION_FAILED')
   })
 
-  it('responde 400 con body inválido (campos faltantes)', async () => {
-    const res = await POST(makePostRequest({}, withSecretHeader()) as never)
+  it('responde 400 con body inválido (solo year, sin month — periodo parcial ambiguo)', async () => {
+    // year/month ahora son opcionales (ver GlobalEmitSchema), pero deben venir
+    // juntos: un body con solo uno de los dos sigue siendo inválido. Un body
+    // {} completo (ambos ausentes) es válido — eso lo cubre el test de
+    // "usa el mes anterior en zona MX" más abajo.
+    const res = await POST(makePostRequest({ year: 2026 }, withSecretHeader()) as never)
     const json = await res.json()
 
     expect(res.status).toBe(400)
@@ -192,6 +197,24 @@ describe('POST /api/global/emit', () => {
     expect(res.status).toBe(200)
     expect(json.report).toEqual(fakeReport)
     expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: 'ariat', dryRun: false })
+  })
+
+  it('body sin year/month → el use case recibe el mes anterior en zona MX (cron sin periodo)', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-15T18:00:00.000Z')) // 15-jul-2026 12:00 MX → mes anterior: junio 2026
+
+    const execute = vi.fn(async () => ({ ok: true, value: makeFakeReport({ year: 2026, month: 6 }) }))
+    vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { execute } as any,
+    )
+
+    const res = await POST(makePostRequest({ dryRun: true }, withSecretHeader()) as never)
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(json.report).toEqual(makeFakeReport({ year: 2026, month: 6 }))
+    expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: undefined, dryRun: true })
   })
 
   it('propaga dryRun: true al use case', async () => {

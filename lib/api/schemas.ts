@@ -75,10 +75,29 @@ export const InvoiceIdParamSchema = z.string().uuid()
  * disparado por cron/operación interna (no por el cliente final), de ahí que
  * year/month se validen como number estricto (sin coerce): quien lo llama
  * controla el JSON que envía.
+ *
+ * year/month son OPCIONALES: el cron de Railway dispara este endpoint con un
+ * body estático (sin periodo), y cuando no vienen el route handler los
+ * resuelve al mes anterior en zona MX (ver `previousMxYearMonth` en
+ * MxCalendar). Deben venir AMBOS o NINGUNO — un periodo parcial (solo year o
+ * solo month) es ambiguo y se rechaza aquí mismo, antes de llegar al handler.
  */
-export const GlobalEmitSchema = z.object({
-  year: z.number().int('El año debe ser un entero').min(2020, 'Año fuera de rango').max(2100, 'Año fuera de rango'),
-  month: z.number().int('El mes debe ser un entero').min(1, 'Mes inválido (1-12)').max(12, 'Mes inválido (1-12)'),
-  storeName: z.string().min(1).max(100).optional(),
-  dryRun: z.boolean().optional().default(false),
-})
+export const GlobalEmitSchema = z
+  .object({
+    year: z.number().int('El año debe ser un entero').min(2020, 'Año fuera de rango').max(2100, 'Año fuera de rango').optional(),
+    month: z.number().int('El mes debe ser un entero').min(1, 'Mes inválido (1-12)').max(12, 'Mes inválido (1-12)').optional(),
+    storeName: z.string().min(1).max(100).optional(),
+    dryRun: z.boolean().optional().default(false),
+  })
+  .superRefine((data, ctx) => {
+    const hasYear = data.year !== undefined
+    const hasMonth = data.month !== undefined
+    if (hasYear !== hasMonth) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'year y month deben venir juntos: ambos presentes (periodo explícito) o ambos ausentes (usa el mes anterior en zona MX).',
+        path: hasYear ? ['month'] : ['year'],
+      })
+    }
+  })
