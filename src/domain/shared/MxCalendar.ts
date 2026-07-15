@@ -92,3 +92,19 @@ export function mxMonthBounds(year: number, month: number): { from: Date; to: Da
   const to = new Date(mxMonthStart(nextYear, nextMonth).getTime() - 1)
   return { from, to }
 }
+
+/**
+ * Retorna el año/mes MX (1-indexed) inmediatamente ANTERIOR al de `now`.
+ *
+ * Pensado para defaultear el periodo de la facturación global mensual cuando
+ * un disparador automático (cron) llama al endpoint sin year/month
+ * explícitos. El cálculo SIEMPRE parte del calendario de México, no de UTC:
+ * cerca de la medianoche UTC (ej. 1-ago 05:30 UTC) el reloj MX todavía marca
+ * el mes previo (31-jul 23:30 MX), así que "el mes anterior" debe seguir
+ * siendo junio — un cálculo ingenuo en UTC habría dado julio, un mes
+ * adelantado respecto al periodo que realmente corresponde facturar.
+ */
+export function previousMxYearMonth(now: Date): { year: number; month: number } {
+  const { year, month } = getMxYearMonth(now)
+  return month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 }
+}

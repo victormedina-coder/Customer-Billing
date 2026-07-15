@@ -10,7 +10,12 @@
  * (header `x-global-secret` vs env `GLOBAL_INVOICE_SECRET`), pensado para ser
  * llamado por un cron/job interno, no por el navegador del cliente final.
  *
- * Recibe: { year: number, month: number, storeName?: string, dryRun?: boolean }
+ * Recibe: { year?: number, month?: number, storeName?: string, dryRun?: boolean }
+ * year/month son opcionales — pensado para que el cron de Railway dispare
+ * este endpoint con un body estático sin periodo; cuando faltan, se resuelven
+ * aquí al mes anterior en zona MX (ver previousMxYearMonth) ANTES de llamar
+ * al use case, que sigue recibiendo siempre year/month explícitos (el
+ * default es responsabilidad de esta capa interface, no de application).
  * Responde: { report: GlobalRunReport } en 200, o error estructurado en 4xx/5xx.
  *
  * Runtime: Node.js (no edge) — usa `crypto` de node y secretos de servidor.
@@ -38,6 +43,7 @@ import { makeEmitGlobalInvoiceUseCase } from '@/src/composition/makeEmitGlobalIn
 import type { GlobalRunErrorCode } from '@/src/application/global/EmitGlobalInvoiceUseCase'
 import { httpError } from '@/src/interface/http/httpError'
 import { enforceRateLimit } from '@/src/interface/http/withRateLimit'
+import { previousMxYearMonth } from '@/src/domain/shared/MxCalendar'
 
 const SECRET_HEADER = 'x-global-secret'
 
@@ -99,7 +105,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const msg = parsed.error.issues.map((issue) => issue.message).join('; ')
     return httpError('VALIDATION_FAILED', msg, 400)
   }
-  const { year, month, storeName, dryRun } = parsed.data
+  const { year: bodyYear, month: bodyMonth, storeName, dryRun } = parsed.data
+
+  // ── 4b. Default de periodo (solo interface — el use case no lo conoce) ────
+  // GlobalEmitSchema ya garantiza que year/month vienen ambos o ninguno.
+  let year: number
+  let month: number
+  if (bodyYear !== undefined && bodyMonth !== undefined) {
+    year = bodyYear
+    month = bodyMonth
+  } else {
+    ;({ year, month } = previousMxYearMonth(new Date()))
+    console.log('[global-emit-route] year/month no vinieron en el body — usando mes anterior en zona MX', {
+      year,
+      month,
+    })
+  }
 
   // ── 5. Orquestación delegada al use case ──────────────────────────────────
   const useCase = makeEmitGlobalInvoiceUseCase()
