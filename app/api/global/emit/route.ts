@@ -10,12 +10,15 @@
  * (header `x-global-secret` vs env `GLOBAL_INVOICE_SECRET`), pensado para ser
  * llamado por un cron/job interno, no por el navegador del cliente final.
  *
- * Recibe: { year?: number, month?: number, storeName?: string, dryRun?: boolean }
+ * Recibe: { year?: number, month?: number, day?: number, storeName?: string, dryRun?: boolean }
  * year/month son opcionales — pensado para que el cron de Railway dispare
  * este endpoint con un body estático sin periodo; cuando faltan, se resuelven
  * aquí al mes anterior en zona MX (ver previousMxYearMonth) ANTES de llamar
  * al use case, que sigue recibiendo siempre year/month explícitos (el
  * default es responsabilidad de esta capa interface, no de application).
+ * day es opcional (R1 — periodicidad diaria): si viene (junto con year/month
+ * explícitos, exigido por GlobalEmitSchema), dispara una corrida DIARIA en
+ * vez de mensual — se pasa tal cual al use case.
  * Responde: { report: GlobalRunReport } en 200, o error estructurado en 4xx/5xx.
  *
  * Runtime: Node.js (no edge) — usa `crypto` de node y secretos de servidor.
@@ -105,7 +108,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const msg = parsed.error.issues.map((issue) => issue.message).join('; ')
     return httpError('VALIDATION_FAILED', msg, 400)
   }
-  const { year: bodyYear, month: bodyMonth, storeName, dryRun } = parsed.data
+  const { year: bodyYear, month: bodyMonth, day, storeName, dryRun } = parsed.data
 
   // ── 4b. Default de periodo (solo interface — el use case no lo conoce) ────
   // GlobalEmitSchema ya garantiza que year/month vienen ambos o ninguno.
@@ -124,7 +127,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // ── 5. Orquestación delegada al use case ──────────────────────────────────
   const useCase = makeEmitGlobalInvoiceUseCase()
-  const result = await useCase.execute({ year, month, storeName, dryRun })
+  const result = await useCase.execute({ year, month, day, storeName, dryRun })
 
   if (!result.ok) {
     const { code, message } = result.error

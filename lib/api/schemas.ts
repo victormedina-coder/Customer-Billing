@@ -71,21 +71,27 @@ export const ResendSchema = z.object({
 export const InvoiceIdParamSchema = z.string().uuid()
 
 /**
- * Body de POST /api/global/emit — facturación global mensual. Endpoint
- * disparado por cron/operación interna (no por el cliente final), de ahí que
- * year/month se validen como number estricto (sin coerce): quien lo llama
- * controla el JSON que envía.
+ * Body de POST /api/global/emit — facturación global (mensual o diaria).
+ * Endpoint disparado por cron/operación interna (no por el cliente final), de
+ * ahí que year/month/day se validen como number estricto (sin coerce): quien
+ * lo llama controla el JSON que envía.
  *
  * year/month son OPCIONALES: el cron de Railway dispara este endpoint con un
  * body estático (sin periodo), y cuando no vienen el route handler los
  * resuelve al mes anterior en zona MX (ver `previousMxYearMonth` en
  * MxCalendar). Deben venir AMBOS o NINGUNO — un periodo parcial (solo year o
  * solo month) es ambiguo y se rechaza aquí mismo, antes de llegar al handler.
+ *
+ * day es OPCIONAL (R1 — periodicidad diaria): si viene, requiere year+month
+ * explícitos también (un día sin periodo completo es ambiguo) y dispara una
+ * corrida DIARIA (Periodicity '01') en vez de mensual. Los modos `relative`
+ * (ej. "yesterday", "current-month") son de R4 — NO se agregan aquí.
  */
 export const GlobalEmitSchema = z
   .object({
     year: z.number().int('El año debe ser un entero').min(2020, 'Año fuera de rango').max(2100, 'Año fuera de rango').optional(),
     month: z.number().int('El mes debe ser un entero').min(1, 'Mes inválido (1-12)').max(12, 'Mes inválido (1-12)').optional(),
+    day: z.number().int('El día debe ser un entero').min(1, 'Día inválido (1-31)').max(31, 'Día inválido (1-31)').optional(),
     storeName: z.string().min(1).max(100).optional(),
     dryRun: z.boolean().optional().default(false),
   })
@@ -98,6 +104,13 @@ export const GlobalEmitSchema = z
         message:
           'year y month deben venir juntos: ambos presentes (periodo explícito) o ambos ausentes (usa el mes anterior en zona MX).',
         path: hasYear ? ['month'] : ['year'],
+      })
+    }
+    if (data.day !== undefined && !(hasYear && hasMonth)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'day requiere year y month explícitos (un día sin periodo completo es ambiguo).',
+        path: ['day'],
       })
     }
   })

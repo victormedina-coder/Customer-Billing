@@ -17,16 +17,18 @@ import type {
   EmitGlobalInvoicePayload,
   EmitGlobalInvoiceResult,
 } from '../../domain/global/ports/GlobalInvoiceStamping'
-import { createGlobalPeriod } from '../../domain/global/GlobalPeriod'
+import { createDailyGlobalPeriod, createGlobalPeriod } from '../../domain/global/GlobalPeriod'
 import { emitirCFDI } from './facturamaClient'
 import { buildGlobalCfdiPayload } from './globalCfdiPayloadBuilder'
 import { resolveExpeditionPlace } from './FacturamaInvoiceService'
 
 export class FacturamaGlobalStamping implements GlobalInvoiceStamping {
   async emitirGlobal(payload: EmitGlobalInvoicePayload): Promise<EmitGlobalInvoiceResult> {
-    const { storeName, periodYear, periodMonth, paymentBucket, orders } = payload
+    const { storeName, periodYear, periodMonth, periodDay, paymentBucket, orders } = payload
 
-    const period = createGlobalPeriod(periodYear, periodMonth)
+    const period = periodDay !== undefined
+      ? createDailyGlobalPeriod(periodYear, periodMonth, periodDay)
+      : createGlobalPeriod(periodYear, periodMonth)
     const expeditionPlace = await resolveExpeditionPlace()
     const cfdiPayload = buildGlobalCfdiPayload(period, paymentBucket, orders, storeName, expeditionPlace)
 

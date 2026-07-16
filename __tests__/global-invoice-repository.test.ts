@@ -251,4 +251,48 @@ describe.skipIf(skip)('DrizzleGlobalInvoiceRepository (integration, Railway test
     const result = await repo.filterInvoicedOrderIds('tienda-ariat', ['order-other-store'])
     expect(result.has('order-other-store')).toBe(true)
   })
+
+  // ── periodDay — sentinela 0=mensual en el UNIQUE compuesto (R1, D3 del plan) ─
+
+  it('un header DIARIO (periodDay=15) y uno MENSUAL (periodDay undefined) del mismo (tienda, año, mes, bucket, chunk) coexisten', async () => {
+    const monthly = await repo.createGlobalHeader(KEY)
+    const daily = await repo.createGlobalHeader({ ...KEY, periodDay: 15 })
+    expect(monthly.created).toBe(true)
+    expect(daily.created).toBe(true)
+  })
+
+  it('dos headers DIARIOS del MISMO día chocan con el UNIQUE (idempotencia diaria)', async () => {
+    const first = await repo.createGlobalHeader({ ...KEY, periodDay: 15 })
+    const second = await repo.createGlobalHeader({ ...KEY, periodDay: 15 })
+    expect(first.created).toBe(true)
+    expect(second.created).toBe(false)
+    if (!second.created) expect(second.reason).toBe('already_exists')
+  })
+
+  it('dos headers DIARIOS de días DISTINTOS del mismo (tienda, año, mes, bucket, chunk) no chocan', async () => {
+    const day15 = await repo.createGlobalHeader({ ...KEY, periodDay: 15 })
+    const day16 = await repo.createGlobalHeader({ ...KEY, periodDay: 16 })
+    expect(day15.created).toBe(true)
+    expect(day16.created).toBe(true)
+  })
+
+  it('createGlobalHeader sin periodDay persiste el sentinela 0 y mapRowToGlobalInvoice lo expone como undefined', async () => {
+    const created = await repo.createGlobalHeader(KEY)
+    expect(created.created).toBe(true)
+    if (!created.created) return
+    expect(created.header.periodDay).toBeUndefined()
+
+    const rows = await cleanupDb!
+      .select()
+      .from(schema.globalInvoices)
+      .where(eq(schema.globalInvoices.id, created.header.id))
+    expect(rows[0].periodDay).toBe(0)
+  })
+
+  it('createGlobalHeader con periodDay persiste el día real y se recupera intacto', async () => {
+    const created = await repo.createGlobalHeader({ ...KEY, periodDay: 15 })
+    expect(created.created).toBe(true)
+    if (!created.created) return
+    expect(created.header.periodDay).toBe(15)
+  })
 })

@@ -26,6 +26,15 @@ export interface GlobalInvoiceIdentity {
   storeName: string
   periodYear: number
   periodMonth: number
+  /**
+   * Día del periodo cuando la periodicidad es DIARIA ('01'); `undefined` en
+   * un periodo MENSUAL ('04') — mismo significado que `GlobalPeriod.day`.
+   * La persistencia (DrizzleGlobalInvoiceRepository) mapea este `undefined`
+   * a un sentinela `0` en la columna `period_day` (NOT NULL) para que el
+   * UNIQUE compuesto siga funcionando como cerrojo anti-doble-timbre — ver
+   * schema.ts y el plan de diseño D3. El sentinela NO se filtra al dominio.
+   */
+  periodDay?: number
   paymentBucket: PaymentBucket
   /** Índice del chunk dentro del periodo/bucket cuando se partió en varios CFDI. */
   chunkIndex: number

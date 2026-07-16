@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildGlobalCfdiPayload } from '../src/infrastructure/facturama/globalCfdiPayloadBuilder'
 import type { CfdiItem } from '../src/infrastructure/facturama/cfdiPayloadBuilder'
-import { createGlobalPeriod } from '../src/domain/global/GlobalPeriod'
+import { createDailyGlobalPeriod, createGlobalPeriod } from '../src/domain/global/GlobalPeriod'
 import type { MonthlyOrder } from '../src/domain/global/ports/MonthlyOrderSource'
 import type { Order, OrderLine } from '../src/domain/orders/Order'
 
@@ -115,6 +115,17 @@ describe('buildGlobalCfdiPayload — GlobalInformation', () => {
       EXPEDITION_PLACE
     )
     expect(payload.GlobalInformation.Months).toBe('12')
+  })
+
+  it('periodo DIARIO: Periodicity "01", Months/Year del mes/año del día (el día NO se codifica, regla SAT verificada)', () => {
+    const payload = buildGlobalCfdiPayload(
+      createDailyGlobalPeriod(2026, 6, 15),
+      'efectivo',
+      [makeMonthlyOrder()],
+      'tienda-ariat',
+      EXPEDITION_PLACE
+    )
+    expect(payload.GlobalInformation).toEqual({ Periodicity: '01', Months: '06', Year: '2026' })
   })
 })
 

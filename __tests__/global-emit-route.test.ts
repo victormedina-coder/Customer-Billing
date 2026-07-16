@@ -232,6 +232,41 @@ describe('POST /api/global/emit', () => {
     expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: undefined, dryRun: true })
   })
 
+  it('body con { year, month, day } válido → llama al use case con day propagado', async () => {
+    const fakeReport = makeFakeReport({ runId: 'run-daily', year: 2026, month: 6, day: 15 })
+    const execute = vi.fn(async () => ({ ok: true, value: fakeReport }))
+    vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { execute } as any,
+    )
+
+    const res = await POST(
+      makePostRequest({ year: 2026, month: 6, day: 15, dryRun: true }, withSecretHeader()) as never,
+    )
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(json.report).toEqual(fakeReport)
+    expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, day: 15, storeName: undefined, dryRun: true })
+  })
+
+  it('responde 400 con { day } solo (sin year/month — ambiguo)', async () => {
+    const res = await POST(makePostRequest({ day: 15 }, withSecretHeader()) as never)
+    const json = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(json.error.code).toBe('VALIDATION_FAILED')
+    expect(compositionMod.makeEmitGlobalInvoiceUseCase).not.toHaveBeenCalled()
+  })
+
+  it('responde 400 con { year, day } sin month', async () => {
+    const res = await POST(makePostRequest({ year: 2026, day: 15 }, withSecretHeader()) as never)
+    const json = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(json.error.code).toBe('VALIDATION_FAILED')
+  })
+
   it('mapea VALIDATION_FAILED del use case a 400', async () => {
     const execute = vi.fn(async () => ({
       ok: false,

@@ -62,3 +62,51 @@ describe('GlobalEmitSchema — year/month opcionales', () => {
     if (result.success) expect(result.data.storeName).toBe('ariat')
   })
 })
+
+describe('GlobalEmitSchema — day opcional (R1, periodicidad diaria)', () => {
+  it('{ year, month, day } válido → pasa y day se conserva', () => {
+    const result = GlobalEmitSchema.safeParse({ year: 2026, month: 6, day: 15 })
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.day).toBe(15)
+  })
+
+  it('{ day } solo (sin year/month) → inválido, mensaje claro', () => {
+    const result = GlobalEmitSchema.safeParse({ day: 15 })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join('; ')
+      expect(messages).toMatch(/day requiere year y month explícitos/)
+    }
+  })
+
+  it('{ year, day } sin month → inválido (día sin periodo completo es ambiguo)', () => {
+    const result = GlobalEmitSchema.safeParse({ year: 2026, day: 15 })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join('; ')
+      expect(messages).toMatch(/day requiere year y month explícitos/)
+    }
+  })
+
+  it('{ month, day } sin year → inválido', () => {
+    const result = GlobalEmitSchema.safeParse({ month: 6, day: 15 })
+    expect(result.success).toBe(false)
+  })
+
+  it('day 0 o day 32 → inválido (rango 1-31)', () => {
+    expect(GlobalEmitSchema.safeParse({ year: 2026, month: 6, day: 0 }).success).toBe(false)
+    expect(GlobalEmitSchema.safeParse({ year: 2026, month: 6, day: 32 }).success).toBe(false)
+  })
+
+  it('sin day (solo year/month) → sigue siendo válido (comportamiento mensual intacto)', () => {
+    const result = GlobalEmitSchema.safeParse({ year: 2026, month: 6 })
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.day).toBeUndefined()
+  })
+
+  it('body vacío {} → sigue válido, day undefined', () => {
+    const result = GlobalEmitSchema.safeParse({})
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.day).toBeUndefined()
+  })
+})

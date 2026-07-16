@@ -10,6 +10,7 @@ function makeRow(overrides: Partial<GlobalInvoiceRow> = {}): GlobalInvoiceRow {
     storeName: overrides.storeName ?? 'tienda-ariat',
     periodYear: overrides.periodYear ?? 2026,
     periodMonth: overrides.periodMonth ?? 6,
+    periodDay: overrides.periodDay ?? 0,
     paymentBucket: overrides.paymentBucket ?? 'debito',
     chunkIndex: overrides.chunkIndex ?? 0,
     facturamaId: overrides.facturamaId !== undefined ? overrides.facturamaId : null,
@@ -61,5 +62,17 @@ describe('mapRowToGlobalInvoice', () => {
   it('no incluye createdAt en el agregado de dominio (no forma parte de GlobalInvoice)', () => {
     const invoice = mapRowToGlobalInvoice(makeRow())
     expect('createdAt' in invoice).toBe(false)
+  })
+})
+
+describe('mapRowToGlobalInvoice — sentinela period_day (D3 del plan de diseño)', () => {
+  it('period_day = 0 (sentinela mensual) se mapea a periodDay undefined en el dominio', () => {
+    const invoice = mapRowToGlobalInvoice(makeRow({ periodDay: 0 }))
+    expect(invoice.periodDay).toBeUndefined()
+  })
+
+  it('period_day > 0 (diario) se mapea tal cual al dominio', () => {
+    const invoice = mapRowToGlobalInvoice(makeRow({ periodDay: 15 }))
+    expect(invoice.periodDay).toBe(15)
   })
 })

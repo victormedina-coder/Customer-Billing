@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createGlobalPeriod } from '../src/domain/global/GlobalPeriod'
+import { createDailyGlobalPeriod, createGlobalPeriod } from '../src/domain/global/GlobalPeriod'
 
 describe('createGlobalPeriod — validación', () => {
   it('month 0 → lanza', () => {
@@ -72,5 +72,68 @@ describe('createGlobalPeriod — rangeMx (bordes de mes en zona MX)', () => {
   it('from y to son consistentes: to > from y to está dentro del mismo mes calendario MX', () => {
     const { from, to } = createGlobalPeriod(2026, 6).rangeMx()
     expect(to.getTime()).toBeGreaterThan(from.getTime())
+  })
+})
+
+describe('createDailyGlobalPeriod — validación', () => {
+  it('day 0 → lanza', () => {
+    expect(() => createDailyGlobalPeriod(2026, 6, 0)).toThrow(/day inválido/)
+  })
+
+  it('day 31 en un mes de 30 días → lanza', () => {
+    expect(() => createDailyGlobalPeriod(2026, 6, 31)).toThrow(/day inválido/)
+  })
+
+  it('day 29 en febrero no bisiesto (2026) → lanza', () => {
+    expect(() => createDailyGlobalPeriod(2026, 2, 29)).toThrow(/day inválido/)
+  })
+
+  it('day 29 en febrero bisiesto (2028) → no lanza', () => {
+    expect(() => createDailyGlobalPeriod(2028, 2, 29)).not.toThrow()
+  })
+
+  it('day no entero → lanza', () => {
+    expect(() => createDailyGlobalPeriod(2026, 6, 15.5)).toThrow(/day inválido/)
+  })
+
+  it('month/year inválidos siguen validándose igual que en el mensual', () => {
+    expect(() => createDailyGlobalPeriod(2026, 13, 1)).toThrow(/month inválido/)
+    expect(() => createDailyGlobalPeriod(1800, 6, 1)).toThrow(/year inválido/)
+  })
+
+  it('day 1 y último día del mes (bordes válidos) → no lanza', () => {
+    expect(() => createDailyGlobalPeriod(2026, 6, 1)).not.toThrow()
+    expect(() => createDailyGlobalPeriod(2026, 6, 30)).not.toThrow()
+  })
+})
+
+describe('createDailyGlobalPeriod — códigos', () => {
+  it('periodicityCode() === "01" (diario, distinto del mensual "04")', () => {
+    expect(createDailyGlobalPeriod(2026, 6, 15).periodicityCode()).toBe('01')
+  })
+
+  it('day queda expuesto en el VO; en el mensual permanece undefined', () => {
+    expect(createDailyGlobalPeriod(2026, 6, 15).day).toBe(15)
+    expect(createGlobalPeriod(2026, 6).day).toBeUndefined()
+  })
+
+  it('monthsCode()/yearString() son el mes/año DEL DÍA (SAT: el día no se codifica en GlobalInformation)', () => {
+    const period = createDailyGlobalPeriod(2026, 6, 15)
+    expect(period.monthsCode()).toBe('06')
+    expect(period.yearString()).toBe('2026')
+  })
+})
+
+describe('createDailyGlobalPeriod — rangeMx (un solo día en zona MX)', () => {
+  it('15-jun-2026: from = 00:00 MX, to = 23:59:59.999 MX del mismo día', () => {
+    const { from, to } = createDailyGlobalPeriod(2026, 6, 15).rangeMx()
+    expect(from.toISOString()).toBe('2026-06-15T06:00:00.000Z')
+    expect(to.toISOString()).toBe('2026-06-16T05:59:59.999Z')
+  })
+
+  it('el rango es de un solo día, NO del mes completo (a diferencia del mensual)', () => {
+    const daily = createDailyGlobalPeriod(2026, 6, 15).rangeMx()
+    const monthly = createGlobalPeriod(2026, 6).rangeMx()
+    expect(daily.to.getTime() - daily.from.getTime()).toBeLessThan(monthly.to.getTime() - monthly.from.getTime())
   })
 })

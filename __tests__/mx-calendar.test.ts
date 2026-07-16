@@ -9,7 +9,47 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { previousMxYearMonth } from '../src/domain/shared/MxCalendar'
+import { mxDayBounds, previousMxYearMonth } from '../src/domain/shared/MxCalendar'
+
+describe('mxDayBounds', () => {
+  it('día normal (15-jun-2026): from = 00:00 MX, to = 23:59:59.999 MX del mismo día', () => {
+    const { from, to } = mxDayBounds(2026, 6, 15)
+    // 00:00 MX = 06:00 UTC (MX es UTC-6 fijo, sin DST desde 2022)
+    expect(from.toISOString()).toBe('2026-06-15T06:00:00.000Z')
+    // 23:59:59.999 MX del 15-jun = 05:59:59.999 UTC del 16-jun
+    expect(to.toISOString()).toBe('2026-06-16T05:59:59.999Z')
+  })
+
+  it('primer día del mes (1-jun-2026)', () => {
+    const { from, to } = mxDayBounds(2026, 6, 1)
+    expect(from.toISOString()).toBe('2026-06-01T06:00:00.000Z')
+    expect(to.toISOString()).toBe('2026-06-02T05:59:59.999Z')
+  })
+
+  it('último día del mes (30-jun-2026): to cruza al 1 de julio en UTC pero el día MX sigue siendo 30', () => {
+    const { from, to } = mxDayBounds(2026, 6, 30)
+    expect(from.toISOString()).toBe('2026-06-30T06:00:00.000Z')
+    expect(to.toISOString()).toBe('2026-07-01T05:59:59.999Z')
+  })
+
+  it('fin de año (31-dic-2026): to cruza al 1 de enero de 2027', () => {
+    const { from, to } = mxDayBounds(2026, 12, 31)
+    expect(from.toISOString()).toBe('2026-12-31T06:00:00.000Z')
+    expect(to.toISOString()).toBe('2027-01-01T05:59:59.999Z')
+  })
+
+  it('29-feb bisiesto (2028)', () => {
+    const { from, to } = mxDayBounds(2028, 2, 29)
+    expect(from.toISOString()).toBe('2028-02-29T06:00:00.000Z')
+    expect(to.toISOString()).toBe('2028-03-01T05:59:59.999Z')
+  })
+
+  it('from y to son consistentes: to > from y el rango dura ~24h', () => {
+    const { from, to } = mxDayBounds(2026, 6, 15)
+    const durationMs = to.getTime() - from.getTime()
+    expect(durationMs).toBe(24 * 60 * 60 * 1000 - 1)
+  })
+})
 
 describe('previousMxYearMonth', () => {
   it('mes normal: julio → junio (mismo año)', () => {

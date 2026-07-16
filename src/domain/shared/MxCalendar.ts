@@ -66,18 +66,42 @@ export function getMxOffsetMs(utcDate: Date): number {
 
 /**
  * Retorna el instante UTC que corresponde al primer segundo (00:00:00.000 MX)
- * del mes `month` (1-indexed) del año `year`, en zona horaria de México.
+ * del día `day` del mes `month` (1-indexed) del año `year`, en zona horaria
+ * de México.
  *
- * Estrategia (sin dependencias externas): construimos el día 1 del mes como si
- * fuera medianoche UTC y ajustamos por la diferencia de offset entre UTC y MX
- * en ese punto.
+ * Estrategia (sin dependencias externas): construimos el día como si fuera
+ * medianoche UTC y ajustamos por la diferencia de offset entre UTC y MX en
+ * ese punto. `mxMonthStart` es el caso `day=1` de esta misma función (DRY).
  */
-export function mxMonthStart(year: number, month: number): Date {
-  const naiveUtcMs = Date.UTC(year, month - 1, 1) // día 1 del mes, 00:00 UTC
+export function mxDayStart(year: number, month: number, day: number): Date {
+  const naiveUtcMs = Date.UTC(year, month - 1, day) // día dado, 00:00 UTC
   const offsetMs = getMxOffsetMs(new Date(naiveUtcMs))
   // El instante real de "00:00 MX" = naiveUTC - offsetMX
   // (si MX es UTC-6, offsetMs = -6*3600*1000, restamos negativo → sumamos 6h)
   return new Date(naiveUtcMs - offsetMs)
+}
+
+/**
+ * Retorna el instante UTC que corresponde al primer segundo (00:00:00.000 MX)
+ * del mes `month` (1-indexed) del año `year`, en zona horaria de México.
+ * Reexpresado como caso `day=1` de `mxDayStart` (DRY) — la firma pública no
+ * cambia.
+ */
+export function mxMonthStart(year: number, month: number): Date {
+  return mxDayStart(year, month, 1)
+}
+
+/**
+ * Límites [from, to] del día `day`/`month`/`year` en zona MX: `from` =
+ * primer instante del día (00:00:00.000 MX), `to` = último instante del día
+ * (el ms inmediatamente anterior al inicio del día siguiente). Usa
+ * `Date.UTC` con día fuera de rango (ej. día 32) para que JS normalice al
+ * mes siguiente — misma técnica que `mxMonthBounds` con el mes.
+ */
+export function mxDayBounds(year: number, month: number, day: number): { from: Date; to: Date } {
+  const from = mxDayStart(year, month, day)
+  const to = new Date(mxDayStart(year, month, day + 1).getTime() - 1)
+  return { from, to }
 }
 
 /**

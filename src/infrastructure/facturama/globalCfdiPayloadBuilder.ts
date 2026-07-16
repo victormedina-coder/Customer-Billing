@@ -27,7 +27,12 @@ import type { CfdiItem, CfdiReceiver, CfdiTax } from './cfdiPayloadBuilder'
 // ─── Tipos Facturama — CFDI global (infraestructura) ─────────────────────────
 
 export interface GlobalInformation {
-  Periodicity: '04'
+  /**
+   * Clave SAT c_Periodicidad: '04' = Mensual, '01' = Diario. El valor sale
+   * de `period.periodicityCode()` — el día NO se codifica aquí (SAT: el día
+   * queda implícito en `FechaEmision`; ver createDailyGlobalPeriod).
+   */
+  Periodicity: '01' | '04'
   Months: string
   Year: string
 }

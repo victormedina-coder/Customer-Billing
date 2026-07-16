@@ -17,6 +17,8 @@ export interface EmitGlobalInvoicePayload {
   storeName: string
   periodYear: number
   periodMonth: number
+  /** Día del periodo cuando es DIARIO; `undefined` en un periodo mensual. */
+  periodDay?: number
   paymentBucket: PaymentBucket
   itemCount: number
   /** Pedidos sobrevivientes del chunk — insumo para construir los Items del CFDI. */

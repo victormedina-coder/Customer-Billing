@@ -68,7 +68,10 @@ class FakeGlobalInvoiceRepository implements GlobalInvoiceRepository {
   private failedOnce = false
 
   private keyOf(k: GlobalInvoiceIdentity): string {
-    return [k.storeName, k.periodYear, k.periodMonth, k.paymentBucket, k.chunkIndex].join('|')
+    // periodDay ?? 0 replica el sentinela de persistencia (D3 del plan de
+    // diseño): un header diario y uno mensual del mismo (store, año, mes,
+    // bucket, chunk) deben coexistir sin chocar en el Map.
+    return [k.storeName, k.periodYear, k.periodMonth, k.periodDay ?? 0, k.paymentBucket, k.chunkIndex].join('|')
   }
 
   async createGlobalHeader(data: CreateGlobalHeaderData): Promise<CreateGlobalHeaderResult> {
@@ -646,6 +649,121 @@ describe('EmitGlobalInvoiceUseCase — stamped_unconfirmed tras timbrado exitoso
     expect(globalRepo.calls.updateGlobalStamp).toBe(2)
     // El CFDI YA se timbró — NO debe haber rollback de membresías ni de header.
     expect(globalRepo.calls.deleteGlobalHeader).toBe(0)
+  })
+})
+
+describe('EmitGlobalInvoiceUseCase — periodicidad DIARIA (R1)', () => {
+  it('con day presente, enumera solo el rango del día (no del mes) en zona MX', async () => {
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [makeMonthlyOrder({ id: 'o1' })], nextCursor: null }])
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource }))
+
+    const result = await useCase.execute({ year: 2026, month: 6, day: 15, dryRun: true })
+
+    expect(result.ok).toBe(true)
+    expect(monthlyOrderSource.calls).toHaveLength(1)
+    const { from, to } = monthlyOrderSource.calls[0]
+    // Rango de UN día en zona MX (00:00 → 23:59:59.999 MX del 15-jun-2026),
+    // NO el mes completo — ver createDailyGlobalPeriod/mxDayBounds.
+    expect(from.toISOString()).toBe('2026-06-15T06:00:00.000Z')
+    expect(to.toISOString()).toBe('2026-06-16T05:59:59.999Z')
+  })
+
+  it('el report incluye day cuando la corrida fue diaria', async () => {
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [], nextCursor: null }])
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource }))
+
+    const result = await useCase.execute({ year: 2026, month: 6, day: 15, dryRun: true })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.day).toBe(15)
+  })
+
+  it('el report NO incluye day en una corrida mensual (comportamiento intacto)', async () => {
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [], nextCursor: null }])
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource }))
+
+    const result = await useCase.execute({ year: 2026, month: 6, dryRun: true })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.day).toBeUndefined()
+  })
+
+  it('day inválido para el mes (ej. 31 en junio) devuelve VALIDATION_FAILED', async () => {
+    const monthlyOrderSource = new FakeMonthlyOrderSource(new Map())
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource }))
+
+    const result = await useCase.execute({ year: 2026, month: 6, day: 31 })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.code).toBe('VALIDATION_FAILED')
+    expect(monthlyOrderSource.calls).toHaveLength(0)
+  })
+
+  it('la identidad del header (global_invoices) lleva periodDay en una corrida diaria', async () => {
+    const order = makeMonthlyOrder({ id: 'order-1' })
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [order], nextCursor: null }])
+    const globalRepo = new FakeGlobalInvoiceRepository()
+
+    const result = await new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, globalRepo })
+    ).execute({ year: 2026, month: 6, day: 15 })
+
+    expect(result.ok).toBe(true)
+    const identity: GlobalInvoiceIdentity = {
+      storeName: STORE, periodYear: 2026, periodMonth: 6, periodDay: 15, paymentBucket: 'efectivo', chunkIndex: 0,
+    }
+    expect(globalRepo.getByIdentity(identity)).toBeDefined()
+  })
+
+  it('un header DIARIO y uno MENSUAL del mismo (store, año, mes, bucket, chunk) coexisten — no colisionan', async () => {
+    const globalRepo = new FakeGlobalInvoiceRepository()
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [makeMonthlyOrder({ id: 'order-1' })], nextCursor: null }])
+    const dailyOrderSource = pageSource(STORE, [{ orders: [makeMonthlyOrder({ id: 'order-2' })], nextCursor: null }])
+
+    const monthlyResult = await new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, globalRepo })
+    ).execute({ year: 2026, month: 6 })
+    const dailyResult = await new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource: dailyOrderSource, globalRepo })
+    ).execute({ year: 2026, month: 6, day: 15 })
+
+    expect(monthlyResult.ok).toBe(true)
+    expect(dailyResult.ok).toBe(true)
+    if (!monthlyResult.ok || !dailyResult.ok) return
+    expect(monthlyResult.value.stores[0].buckets[0].chunks[0].outcome).toBe('emitted')
+    expect(dailyResult.value.stores[0].buckets[0].chunks[0].outcome).toBe('emitted')
+  })
+
+  it('dos corridas diarias del MISMO día → la segunda es idempotente (skipped_idempotent)', async () => {
+    const globalRepo = new FakeGlobalInvoiceRepository()
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [makeMonthlyOrder({ id: 'order-1' })], nextCursor: null }])
+
+    const first = await new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, globalRepo })
+    ).execute({ year: 2026, month: 6, day: 15 })
+    const second = await new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, globalRepo })
+    ).execute({ year: 2026, month: 6, day: 15 })
+
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(second.value.stores[0].buckets[0].chunks[0].outcome).toBe('skipped_idempotent')
+  })
+
+  it('la corrida diaria pasa periodDay al puerto de timbrado (GlobalInvoiceStamping)', async () => {
+    const order = makeMonthlyOrder({ id: 'order-1' })
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [order], nextCursor: null }])
+    const stamping = makeSuccessfulStamping()
+
+    const result = await new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, globalStamping: stamping })
+    ).execute({ year: 2026, month: 6, day: 15 })
+
+    expect(result.ok).toBe(true)
+    expect(stamping.calls[0].periodDay).toBe(15)
   })
 })
 

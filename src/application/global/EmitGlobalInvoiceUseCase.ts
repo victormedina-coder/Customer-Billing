@@ -35,7 +35,7 @@
 import type { Order } from '../../domain/orders/Order'
 import { buildOrderReference } from '../../domain/orders/OrderReference'
 import type { GlobalPeriod } from '../../domain/global/GlobalPeriod'
-import { createGlobalPeriod } from '../../domain/global/GlobalPeriod'
+import { createDailyGlobalPeriod, createGlobalPeriod } from '../../domain/global/GlobalPeriod'
 import type { PaymentBucket } from '../../domain/global/PaymentBucket'
 import type { GlobalInvoiceIdentity } from '../../domain/global/GlobalInvoice'
 import type { NormalizedPayment } from '../../domain/global/PaymentBucketPolicy'
@@ -54,6 +54,12 @@ import type { Result } from '../shared/Result'
 export interface EmitGlobalInvoiceInput {
   year: number
   month: number
+  /**
+   * Día del periodo — presente ⇒ corrida DIARIA (createDailyGlobalPeriod,
+   * Periodicity '01'); ausente ⇒ corrida MENSUAL (createGlobalPeriod,
+   * Periodicity '04', comportamiento histórico intacto).
+   */
+  day?: number
   /** Si se omite, se corre para TODAS las tiendas configuradas (deps.storeNames). */
   storeName?: string
   /** true → ejecuta enumeración/filtro/agrupación/chunking pero no escribe ni timbra. */
@@ -115,6 +121,8 @@ export interface GlobalRunReport {
   runId: string
   year: number
   month: number
+  /** Día de la corrida cuando fue DIARIA; ausente en una corrida mensual. */
+  day?: number
   dryRun: boolean
   stores: StoreReport[]
 }
@@ -192,12 +200,12 @@ export class EmitGlobalInvoiceUseCase {
   }
 
   async execute(input: EmitGlobalInvoiceInput): Promise<Result<GlobalRunReport, GlobalRunError>> {
-    const { year, month, storeName, dryRun = false } = input
+    const { year, month, day, storeName, dryRun = false } = input
     const runId = this.runId
 
     let period: GlobalPeriod
     try {
-      period = createGlobalPeriod(year, month)
+      period = day !== undefined ? createDailyGlobalPeriod(year, month, day) : createGlobalPeriod(year, month)
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e)
       return err({ code: 'VALIDATION_FAILED', message })
@@ -215,16 +223,16 @@ export class EmitGlobalInvoiceUseCase {
       return err({ code: 'STORE_NOT_CONFIGURED', message: 'No hay tiendas configuradas para la facturación global.' })
     }
 
-    console.log('[global-invoice] inicio de corrida', { runId, year, month, stores: targetStores, dryRun })
+    console.log('[global-invoice] inicio de corrida', { runId, year, month, day, stores: targetStores, dryRun })
 
     const stores: StoreReport[] = []
     for (const store of targetStores) {
       stores.push(await this.runStore(store, period, dryRun, runId))
     }
 
-    console.log('[global-invoice] fin de corrida', { runId, year, month })
+    console.log('[global-invoice] fin de corrida', { runId, year, month, day })
 
-    return ok({ runId, year, month, dryRun, stores })
+    return ok({ runId, year, month, day: period.day, dryRun, stores })
   }
 
   // ── Por tienda ────────────────────────────────────────────────────────────
@@ -279,7 +287,7 @@ export class EmitGlobalInvoiceUseCase {
     const { buckets, unmapped } = this.groupByBucket(survivors)
 
     console.log('[global-invoice] tienda enumerada', {
-      runId, store, enumerated: monthlyOrders.length, eligible: eligible.length,
+      runId, store, day: period.day, enumerated: monthlyOrders.length, eligible: eligible.length,
       skippedNonPos, partialRefunds, skippedZeroTotal, excludedAlreadyInvoiced, unmapped: unmapped.length,
     })
 
@@ -406,6 +414,7 @@ export class EmitGlobalInvoiceUseCase {
       storeName: store,
       periodYear: period.year,
       periodMonth: period.month,
+      periodDay: period.day,
       paymentBucket: bucket,
       chunkIndex,
     }
@@ -418,7 +427,7 @@ export class EmitGlobalInvoiceUseCase {
       }
     }
     if (!header.created) {
-      console.log('[global-invoice] chunk salteado (idempotente)', { runId, store, bucket, chunkIndex })
+      console.log('[global-invoice] chunk salteado (idempotente)', { runId, store, day: period.day, bucket, chunkIndex })
       return { chunkIndex, itemCount: chunkOrders.length, outcome: 'skipped_idempotent' }
     }
     const headerId = header.header.id
@@ -450,7 +459,7 @@ export class EmitGlobalInvoiceUseCase {
 
     if (survivors.length === 0) {
       await this.deps.globalRepo.deleteGlobalHeader(headerId)
-      console.log('[global-invoice] chunk vacío tras insert-first, header borrado', { runId, store, bucket, chunkIndex })
+      console.log('[global-invoice] chunk vacío tras insert-first, header borrado', { runId, store, day: period.day, bucket, chunkIndex })
       return { chunkIndex, itemCount: 0, outcome: 'empty', excludedByRace }
     }
 
@@ -460,13 +469,14 @@ export class EmitGlobalInvoiceUseCase {
         storeName: store,
         periodYear: period.year,
         periodMonth: period.month,
+        periodDay: period.day,
         paymentBucket: bucket,
         itemCount: survivors.length,
         orders: survivors,
       })
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e)
-      console.error('[global-invoice] Facturama global falló, rollback', { runId, store, bucket, chunkIndex, error: message })
+      console.error('[global-invoice] Facturama global falló, rollback', { runId, store, day: period.day, bucket, chunkIndex, error: message })
       await this.rollbackChunk(headerId, runId)
       return { chunkIndex, itemCount: survivors.length, outcome: 'rolled_back', error: message, excludedByRace }
     }
@@ -497,7 +507,7 @@ export class EmitGlobalInvoiceUseCase {
     }
 
     console.log('[global-invoice] chunk timbrado', {
-      runId, store, bucket, chunkIndex, uuid: stampResult.uuidCfdi, itemCount: survivors.length,
+      runId, store, day: period.day, bucket, chunkIndex, uuid: stampResult.uuidCfdi, itemCount: survivors.length,
     })
     return { chunkIndex, itemCount: survivors.length, outcome: 'emitted', uuid: stampResult.uuidCfdi, excludedByRace }
   }
