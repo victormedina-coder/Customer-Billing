@@ -80,6 +80,9 @@ describe('FacturamaInvoicedOrdersGateway.listInvoicedOrderKeys', () => {
         { Id: '3', OrderNumber: '#300 1-3', Date: '2026-07-02T10:00:00Z', Status: 'active' }, // fuera (julio)
       ])
     )
+    // listarCfdisEmitidos ahora para por página VACÍA, no por tamaño — la
+    // página 0 trae 3 items, así que pide la página 1, que aquí viene vacía.
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
 
     const result = await new FacturamaInvoicedOrdersGateway().listInvoicedOrderKeys(
       'tienda-ariat',
@@ -100,6 +103,7 @@ describe('FacturamaInvoicedOrdersGateway.listInvoicedOrderKeys', () => {
         { Id: '2', OrderNumber: '#200 1-2', Date: '2026-06-15T10:00:00Z', Status: 'active' },
       ])
     )
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
 
     const result = await new FacturamaInvoicedOrdersGateway().listInvoicedOrderKeys(
       'tienda-ariat',
@@ -119,6 +123,7 @@ describe('FacturamaInvoicedOrdersGateway.listInvoicedOrderKeys', () => {
         { Id: '2', OrderNumber: '#200 1-2', Date: '2026-06-15T10:00:00Z', IsActive: true },
       ])
     )
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
 
     const result = await new FacturamaInvoicedOrdersGateway().listInvoicedOrderKeys(
       'tienda-ariat',
@@ -135,6 +140,7 @@ describe('FacturamaInvoicedOrdersGateway.listInvoicedOrderKeys', () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse([{ Id: '1', Date: '2026-06-15T10:00:00Z', Status: 'active' }])
     )
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
 
     const result = await new FacturamaInvoicedOrdersGateway().listInvoicedOrderKeys(
       'tienda-ariat',
@@ -152,6 +158,7 @@ describe('FacturamaInvoicedOrdersGateway.listInvoicedOrderKeys', () => {
         { Id: '1', OrderNumber: '#WB#1151 87008247993-2-1266', Date: '2026-06-15T10:00:00Z', Status: 'active' },
       ])
     )
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
 
     const result = await new FacturamaInvoicedOrdersGateway().listInvoicedOrderKeys(
       'tienda-ariat',
@@ -170,6 +177,7 @@ describe('FacturamaInvoicedOrdersGateway.listInvoicedOrderKeys', () => {
         { Id: '2', OrderNumber: '#1151 2-1266', Date: '2026-06-20T10:00:00Z', Status: 'active' },
       ])
     )
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
 
     const result = await new FacturamaInvoicedOrdersGateway().listInvoicedOrderKeys(
       'tienda-ariat',
@@ -187,6 +195,7 @@ describe('FacturamaInvoicedOrdersGateway.listInvoicedOrderKeys', () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse([{ Id: '1', OrderNumber: '#100 1-1', Date: '2026-06-15T10:00:00Z', Status: 'active' }])
     )
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
 
     const result = await new FacturamaInvoicedOrdersGateway().listInvoicedOrderKeys(
       'tienda-ariat',
@@ -202,6 +211,7 @@ describe('FacturamaInvoicedOrdersGateway.listInvoicedOrderKeys', () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({ Items: [{ Id: '1', OrderNumber: '#100 1-1', Date: '2026-06-15T10:00:00Z', Status: 'active' }] })
     )
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
 
     const result = await new FacturamaInvoicedOrdersGateway().listInvoicedOrderKeys(
       'tienda-ariat',
@@ -215,6 +225,7 @@ describe('FacturamaInvoicedOrdersGateway.listInvoicedOrderKeys', () => {
     const { FacturamaInvoicedOrdersGateway } = await importGateway()
     const { createGlobalPeriod } = await importPeriod()
     fetchMock.mockResolvedValueOnce(jsonResponse([{ Id: '1', OrderNumber: '#100 1-1', Status: 'active' }]))
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
 
     const result = await new FacturamaInvoicedOrdersGateway().listInvoicedOrderKeys(
       'tienda-ariat',
