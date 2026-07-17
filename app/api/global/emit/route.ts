@@ -10,15 +10,11 @@
  * (header `x-global-secret` vs env `GLOBAL_INVOICE_SECRET`), pensado para ser
  * llamado por un cron/job interno, no por el navegador del cliente final.
  *
- * Recibe: { year?: number, month?: number, day?: number, storeName?: string, dryRun?: boolean }
- * year/month son opcionales — pensado para que el cron de Railway dispare
- * este endpoint con un body estático sin periodo; cuando faltan, se resuelven
- * aquí al mes anterior en zona MX (ver previousMxYearMonth) ANTES de llamar
- * al use case, que sigue recibiendo siempre year/month explícitos (el
- * default es responsabilidad de esta capa interface, no de application).
- * day es opcional (R1 — periodicidad diaria): si viene (junto con year/month
- * explícitos, exigido por GlobalEmitSchema), dispara una corrida DIARIA en
- * vez de mensual — se pasa tal cual al use case.
+ * Recibe: { year?, month?, day?, relative?, storeName?, dryRun? }
+ * (ver GlobalEmitSchema en lib/api/schemas.ts para las reglas de exclusión).
+ * La resolución del periodo (explícito vs relative vs default histórico) es
+ * responsabilidad de ESTA capa interface — el use case siempre recibe
+ * year/month(/day) ya resueltos (ver bloque "Resolución del periodo" abajo).
  * Responde: { report: GlobalRunReport } en 200, o error estructurado en 4xx/5xx.
  *
  * Runtime: Node.js (no edge) — usa `crypto` de node y secretos de servidor.
@@ -46,7 +42,10 @@ import { makeEmitGlobalInvoiceUseCase } from '@/src/composition/makeEmitGlobalIn
 import type { GlobalRunErrorCode } from '@/src/application/global/EmitGlobalInvoiceUseCase'
 import { httpError } from '@/src/interface/http/httpError'
 import { enforceRateLimit } from '@/src/interface/http/withRateLimit'
-import { previousMxYearMonth } from '@/src/domain/shared/MxCalendar'
+// previousMxDay es exclusiva del modo relative:'yesterday' — [DAILY-SCAFFOLDING]
+// test-only, remover junto con ese case y este import (ver plan R5).
+import { currentMxYearMonth, previousMxDay, previousMxYearMonth } from '@/src/domain/shared/MxCalendar'
+import { getEvaluationNow } from '@/src/infrastructure/time/getEvaluationNow'
 
 const SECRET_HEADER = 'x-global-secret'
 
@@ -108,22 +107,44 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const msg = parsed.error.issues.map((issue) => issue.message).join('; ')
     return httpError('VALIDATION_FAILED', msg, 400)
   }
-  const { year: bodyYear, month: bodyMonth, day, storeName, dryRun } = parsed.data
+  const { year: bodyYear, month: bodyMonth, day: bodyDay, relative, storeName, dryRun } = parsed.data
 
-  // ── 4b. Default de periodo (solo interface — el use case no lo conoce) ────
-  // GlobalEmitSchema ya garantiza que year/month vienen ambos o ninguno.
+  // ── 4b. Resolución del periodo (solo interface — el use case no lo conoce) ─
+  // GlobalEmitSchema ya garantiza: year/month vienen ambos o ninguno; day
+  // requiere year+month; relative es excluyente con los componentes
+  // explícitos. Los 6 casos posibles, en orden de precedencia:
   let year: number
   let month: number
+  let day: number | undefined = undefined
+  let resolvedBy: string
+
   if (bodyYear !== undefined && bodyMonth !== undefined) {
+    // 1/2. Explícito diario ({year,month,day}) o mensual ({year,month}).
     year = bodyYear
     month = bodyMonth
+    day = bodyDay
+    resolvedBy = day !== undefined ? 'explicit-daily' : 'explicit-monthly'
+  } else if (relative === 'current-month') {
+    // 3. Relativo mensual, mes en curso — cron de producción (R2).
+    ;({ year, month } = currentMxYearMonth(getEvaluationNow()))
+    resolvedBy = 'relative-current-month'
+  } else if (relative === 'previous-month') {
+    // 4. Relativo mensual, mes anterior — equivalente explícito del default histórico.
+    ;({ year, month } = previousMxYearMonth(getEvaluationNow()))
+    resolvedBy = 'relative-previous-month'
+  } else if (relative === 'yesterday') {
+    // 5. Relativo diario, día de ayer MX — cron de sandbox.
+    // [DAILY-SCAFFOLDING] test-only, remover este case junto con el import de
+    // previousMxDay y la entrada 'yesterday' del enum (ver plan R5).
+    ;({ year, month, day } = previousMxDay(getEvaluationNow()))
+    resolvedBy = 'relative-yesterday'
   } else {
-    ;({ year, month } = previousMxYearMonth(new Date()))
-    console.log('[global-emit-route] year/month no vinieron en el body — usando mes anterior en zona MX', {
-      year,
-      month,
-    })
+    // 6. Body vacío → default histórico: mes anterior en zona MX (comportamiento intacto).
+    ;({ year, month } = previousMxYearMonth(getEvaluationNow()))
+    resolvedBy = 'default-previous-month'
   }
+
+  console.log('[global-emit-route] periodo resuelto', { resolvedBy, year, month, day })
 
   // ── 5. Orquestación delegada al use case ──────────────────────────────────
   const useCase = makeEmitGlobalInvoiceUseCase()

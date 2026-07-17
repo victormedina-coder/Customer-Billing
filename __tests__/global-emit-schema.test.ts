@@ -110,3 +110,70 @@ describe('GlobalEmitSchema — day opcional (R1, periodicidad diaria)', () => {
     if (result.success) expect(result.data.day).toBeUndefined()
   })
 })
+
+describe('GlobalEmitSchema — relative (R4, resolución de defaults para crons)', () => {
+  it("relative: 'current-month' solo → válido", () => {
+    const result = GlobalEmitSchema.safeParse({ relative: 'current-month' })
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.relative).toBe('current-month')
+  })
+
+  it("relative: 'previous-month' solo → válido", () => {
+    const result = GlobalEmitSchema.safeParse({ relative: 'previous-month' })
+    expect(result.success).toBe(true)
+  })
+
+  // [DAILY-SCAFFOLDING] test-only, remover junto con el modo 'yesterday' (ver plan R5).
+  it("relative: 'yesterday' solo → válido", () => {
+    const result = GlobalEmitSchema.safeParse({ relative: 'yesterday' })
+    expect(result.success).toBe(true)
+  })
+
+  it('relative con valor fuera del enum → inválido', () => {
+    const result = GlobalEmitSchema.safeParse({ relative: 'next-month' })
+    expect(result.success).toBe(false)
+  })
+
+  it('relative + year → inválido (mutuamente excluyentes)', () => {
+    const result = GlobalEmitSchema.safeParse({ relative: 'current-month', year: 2026 })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join('; ')
+      expect(messages).toMatch(/relative es excluyente con year\/month\/day/)
+    }
+  })
+
+  it('relative + year + month → inválido (mutuamente excluyentes aunque el par sea válido)', () => {
+    const result = GlobalEmitSchema.safeParse({ relative: 'current-month', year: 2026, month: 6 })
+    expect(result.success).toBe(false)
+  })
+
+  it("relative: 'yesterday' + month → inválido (mutuamente excluyentes)", () => {
+    const result = GlobalEmitSchema.safeParse({ relative: 'yesterday', month: 6 })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join('; ')
+      expect(messages).toMatch(/relative es excluyente con year\/month\/day/)
+    }
+  })
+
+  it('relative + day → inválido', () => {
+    const result = GlobalEmitSchema.safeParse({ relative: 'yesterday', day: 15 })
+    expect(result.success).toBe(false)
+  })
+
+  it('sin relative y sin componentes explícitos (body vacío) → sigue válido', () => {
+    const result = GlobalEmitSchema.safeParse({})
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.relative).toBeUndefined()
+  })
+
+  it('storeName/dryRun se conservan junto con relative', () => {
+    const result = GlobalEmitSchema.safeParse({ relative: 'current-month', storeName: 'ariat', dryRun: true })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.storeName).toBe('ariat')
+      expect(result.data.dryRun).toBe(true)
+    }
+  })
+})

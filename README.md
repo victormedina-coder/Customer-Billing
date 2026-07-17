@@ -223,6 +223,13 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 | `RATE_LIMIT_DOWNLOAD_MAX` / `RATE_LIMIT_DOWNLOAD_WINDOW_SEC` | Límite de `download` por IP (default: 40 / 60s) |
 | `RATE_LIMIT_VALIDATE_MAX` / `RATE_LIMIT_VALIDATE_WINDOW_SEC` | Límite de `lookup` **por folio** (default: 5 / 900s = 15 min) |
 
+### Facturación global (`POST /api/global/emit`)
+
+| Variable | Descripción |
+|---|---|
+| `GLOBAL_INVOICE_SECRET` | Secreto compartido que autentica al cron/job interno que dispara el endpoint (header `x-global-secret`, comparación en tiempo constante). Sin ella, el endpoint responde `503 FEATURE_NOT_CONFIGURED`. |
+| `DEV_NOW_OVERRIDE` | **Solo fuera de producción** (guard duro por `NODE_ENV`, ver `getEvaluationNow`). Fecha ISO para simular el instante "ahora" al resolver periodos `relative` (R4) o la ventana de facturación (R3). **Nunca definir en el `.env` de producción.** |
+
 ### Otros
 
 | Variable | Descripción |
@@ -232,6 +239,26 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 | `NEXT_PUBLIC_LOOKUP_MOCK` | `true` usa `DEMO_TICKETS` en vez de llamar a Shopify en `lookup` (desarrollo sin credenciales) |
 | `INVOICE_WINDOW_MODE` | Modo de la ventana de facturación (default en código: `current-month`) |
 | `TRUSTED_PROXY_COUNT` | Ver grupo de Redis / rate limiting arriba |
+
+## Cron — Facturación Global (Railway)
+
+`POST /api/global/emit` está pensado para dispararse desde un *Scheduled
+Job* de Railway (no desde el navegador). El body soporta periodo explícito
+(`{year, month[, day]}`) o resolución `relative` (`current-month` /
+`previous-month` / `yesterday`), mutuamente excluyente con lo explícito; un
+body vacío usa el default histórico (mes anterior en zona MX). Detalle
+completo de los dos cron jobs (sandbox diario y producción mensual), sus
+bodies y schedules — ver **`docs/11-cron-facturacion-global.md`**.
+
+**Cron de producción (mensual):** schedule `0 3 1 * *` UTC = 21:00 MX del
+último día del mes, con body `{"relative":"current-month"}`. Regla de
+negocio: contabilidad requiere el cierre el mismo día del mes (no el día 1
+de madrugada) porque las tiendas POS no venden después de las 21:00 — ver
+**`docs/adr/ADR-009-corte-mensual-2100.md`**.
+
+> ⚠️ El cron sandbox diario y el modo `relative: 'yesterday'` son
+> **[DAILY-SCAFFOLDING] test-only** — existen solo para probar el timbrado
+> diario en sandbox y se eliminarán antes del PR a `main`.
 
 ## Despliegue (Railway)
 

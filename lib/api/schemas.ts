@@ -76,16 +76,20 @@ export const InvoiceIdParamSchema = z.string().uuid()
  * ahí que year/month/day se validen como number estricto (sin coerce): quien
  * lo llama controla el JSON que envía.
  *
- * year/month son OPCIONALES: el cron de Railway dispara este endpoint con un
- * body estático (sin periodo), y cuando no vienen el route handler los
- * resuelve al mes anterior en zona MX (ver `previousMxYearMonth` en
- * MxCalendar). Deben venir AMBOS o NINGUNO — un periodo parcial (solo year o
- * solo month) es ambiguo y se rechaza aquí mismo, antes de llegar al handler.
+ * year/month son OPCIONALES: deben venir AMBOS o NINGUNO — un periodo
+ * parcial (solo year o solo month) es ambiguo y se rechaza aquí mismo, antes
+ * de llegar al handler.
  *
  * day es OPCIONAL (R1 — periodicidad diaria): si viene, requiere year+month
  * explícitos también (un día sin periodo completo es ambiguo) y dispara una
- * corrida DIARIA (Periodicity '01') en vez de mensual. Los modos `relative`
- * (ej. "yesterday", "current-month") son de R4 — NO se agregan aquí.
+ * corrida DIARIA (Periodicity '01') en vez de mensual.
+ *
+ * relative es OPCIONAL (R4 — resolución de defaults para crons con body
+ * estático): alternativa a year/month/day explícitos, MUTUAMENTE EXCLUYENTE
+ * con ellos. 'current-month'/'previous-month' resuelven a un periodo
+ * MENSUAL; 'yesterday' resuelve a un periodo DIARIO. Cuando ni componentes
+ * explícitos ni relative vienen (body vacío), el route handler aplica el
+ * default histórico: mes anterior en zona MX (`previousMxYearMonth`).
  */
 export const GlobalEmitSchema = z
   .object({
@@ -94,10 +98,30 @@ export const GlobalEmitSchema = z
     day: z.number().int('El día debe ser un entero').min(1, 'Día inválido (1-31)').max(31, 'Día inválido (1-31)').optional(),
     storeName: z.string().min(1).max(100).optional(),
     dryRun: z.boolean().optional().default(false),
+    /**
+     * Resolución relativa del periodo (R4). 'current-month'/'previous-month'
+     * son PERMANENTES (las usará el cron de producción mensual, R2).
+     * 'yesterday' es [DAILY-SCAFFOLDING] test-only, remover antes de
+     * producción (ver plan R5) — exclusiva del bundle de periodicidad DIARIA
+     * (R1, solo para el cron de sandbox). Al retirar el bundle diario, basta
+     * con quitar 'yesterday' del enum, su rama en el superRefine de abajo, y
+     * el case correspondiente en el route — sin tocar el resto.
+     */
+    relative: z.enum(['current-month', 'previous-month', 'yesterday']).optional(),
   })
   .superRefine((data, ctx) => {
     const hasYear = data.year !== undefined
     const hasMonth = data.month !== undefined
+    const hasDay = data.day !== undefined
+    const hasRelative = data.relative !== undefined
+
+    if (hasRelative && (hasYear || hasMonth || hasDay)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'relative es excluyente con year/month/day explícitos: usa uno u otro, no ambos.',
+        path: ['relative'],
+      })
+    }
     if (hasYear !== hasMonth) {
       ctx.addIssue({
         code: 'custom',
@@ -106,7 +130,7 @@ export const GlobalEmitSchema = z
         path: hasYear ? ['month'] : ['year'],
       })
     }
-    if (data.day !== undefined && !(hasYear && hasMonth)) {
+    if (hasDay && !(hasYear && hasMonth)) {
       ctx.addIssue({
         code: 'custom',
         message: 'day requiere year y month explícitos (un día sin periodo completo es ambiguo).',

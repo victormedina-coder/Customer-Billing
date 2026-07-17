@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { mxDayBounds, previousMxYearMonth } from '../src/domain/shared/MxCalendar'
+import { currentMxYearMonth, mxDayBounds, previousMxDay, previousMxYearMonth } from '../src/domain/shared/MxCalendar'
 
 describe('mxDayBounds', () => {
   it('día normal (15-jun-2026): from = 00:00 MX, to = 23:59:59.999 MX del mismo día', () => {
@@ -75,5 +75,61 @@ describe('previousMxYearMonth', () => {
   it('justo después del borde (06:00:00.000 UTC = 00:00 MX del 1-ago): el mes MX ya es agosto, mes anterior julio', () => {
     const result = previousMxYearMonth(new Date('2026-08-01T06:00:00.000Z'))
     expect(result).toEqual({ year: 2026, month: 7 })
+  })
+})
+
+describe('currentMxYearMonth (R4)', () => {
+  it('mes normal: dentro de julio en MX → julio', () => {
+    const result = currentMxYearMonth(new Date('2026-07-15T18:00:00.000Z'))
+    expect(result).toEqual({ year: 2026, month: 7 })
+  })
+
+  it('cerca de medianoche UTC: 1-ago 05:30 UTC todavía es 31-jul en MX → mes en curso es JULIO', () => {
+    const result = currentMxYearMonth(new Date('2026-08-01T05:30:00.000Z'))
+    expect(result).toEqual({ year: 2026, month: 7 })
+  })
+
+  it('justo después del borde (06:00:00.000 UTC = 00:00 MX del 1-ago): mes en curso ya es agosto', () => {
+    const result = currentMxYearMonth(new Date('2026-08-01T06:00:00.000Z'))
+    expect(result).toEqual({ year: 2026, month: 8 })
+  })
+})
+
+// [DAILY-SCAFFOLDING] test-only, remover junto con previousMxDay (ver plan R5).
+describe('previousMxDay (R4 — exclusivo del modo relative:"yesterday", bundle diario)', () => {
+  it('día normal: 16-jun-2026 12:00 MX → ayer es 15-jun-2026', () => {
+    // 16-jun-2026 12:00 MX = 18:00 UTC
+    const result = previousMxDay(new Date('2026-06-16T18:00:00.000Z'))
+    expect(result).toEqual({ year: 2026, month: 6, day: 15 })
+  })
+
+  it('día 1 del mes: 1-jul-2026 12:00 MX → ayer cae en el ÚLTIMO día del mes previo (30-jun)', () => {
+    const result = previousMxDay(new Date('2026-07-01T18:00:00.000Z'))
+    expect(result).toEqual({ year: 2026, month: 6, day: 30 })
+  })
+
+  it('1-ene: 1-ene-2026 12:00 MX → ayer cae en 31-dic del año anterior', () => {
+    const result = previousMxDay(new Date('2026-01-01T18:00:00.000Z'))
+    expect(result).toEqual({ year: 2025, month: 12, day: 31 })
+  })
+
+  it('tras 29-feb bisiesto: 1-mar-2028 12:00 MX → ayer es 29-feb-2028', () => {
+    const result = previousMxDay(new Date('2028-03-01T18:00:00.000Z'))
+    expect(result).toEqual({ year: 2028, month: 2, day: 29 })
+  })
+
+  it('tras 28-feb no bisiesto: 1-mar-2026 12:00 MX → ayer es 28-feb-2026 (no hay 29)', () => {
+    const result = previousMxDay(new Date('2026-03-01T18:00:00.000Z'))
+    expect(result).toEqual({ year: 2026, month: 2, day: 28 })
+  })
+
+  it('borde de TZ: 1-ago 05:30 UTC todavía es 31-jul en MX → ayer es 30-jul, no 31', () => {
+    const result = previousMxDay(new Date('2026-08-01T05:30:00.000Z'))
+    expect(result).toEqual({ year: 2026, month: 7, day: 30 })
+  })
+
+  it('justo después del borde (06:00:00.000 UTC = 00:00 MX del 1-ago): ayer ya es 31-jul', () => {
+    const result = previousMxDay(new Date('2026-08-01T06:00:00.000Z'))
+    expect(result).toEqual({ year: 2026, month: 7, day: 31 })
   })
 })

@@ -217,6 +217,68 @@ describe('POST /api/global/emit', () => {
     expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: undefined, dryRun: true })
   })
 
+  describe("body con relative (R4) — reloj inyectado con vi.setSystemTime", () => {
+    it("relative: 'current-month' resuelve al mes MX EN CURSO (no al anterior)", async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-07-15T18:00:00.000Z')) // 15-jul-2026 12:00 MX → mes en curso: julio 2026
+
+      const execute = vi.fn(async () => ({ ok: true, value: makeFakeReport({ year: 2026, month: 7 }) }))
+      vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { execute } as any,
+      )
+
+      const res = await POST(makePostRequest({ relative: 'current-month', dryRun: true }, withSecretHeader()) as never)
+
+      expect(res.status).toBe(200)
+      expect(execute).toHaveBeenCalledWith({ year: 2026, month: 7, day: undefined, storeName: undefined, dryRun: true })
+    })
+
+    it("relative: 'previous-month' resuelve al mes MX anterior (mismo resultado que el default histórico)", async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-07-15T18:00:00.000Z')) // mes anterior: junio 2026
+
+      const execute = vi.fn(async () => ({ ok: true, value: makeFakeReport({ year: 2026, month: 6 }) }))
+      vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { execute } as any,
+      )
+
+      const res = await POST(makePostRequest({ relative: 'previous-month', dryRun: true }, withSecretHeader()) as never)
+
+      expect(res.status).toBe(200)
+      expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, day: undefined, storeName: undefined, dryRun: true })
+    })
+
+    // [DAILY-SCAFFOLDING] test-only, remover junto con el modo 'yesterday' (ver plan R5).
+    it("relative: 'yesterday' resuelve al día MX de ayer (corrida DIARIA)", async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-07-15T18:00:00.000Z')) // 15-jul-2026 12:00 MX → ayer: 14-jul-2026
+
+      const execute = vi.fn(async () => ({ ok: true, value: makeFakeReport({ year: 2026, month: 7, day: 14 }) }))
+      vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { execute } as any,
+      )
+
+      const res = await POST(makePostRequest({ relative: 'yesterday', dryRun: true }, withSecretHeader()) as never)
+
+      expect(res.status).toBe(200)
+      expect(execute).toHaveBeenCalledWith({ year: 2026, month: 7, day: 14, storeName: undefined, dryRun: true })
+    })
+
+    it('responde 400 con relative + year/month (mutuamente excluyentes) — no llama al use case', async () => {
+      const res = await POST(
+        makePostRequest({ relative: 'current-month', year: 2026, month: 6 }, withSecretHeader()) as never,
+      )
+      const json = await res.json()
+
+      expect(res.status).toBe(400)
+      expect(json.error.code).toBe('VALIDATION_FAILED')
+      expect(compositionMod.makeEmitGlobalInvoiceUseCase).not.toHaveBeenCalled()
+    })
+  })
+
   it('propaga dryRun: true al use case', async () => {
     const execute = vi.fn(async () => ({ ok: true, value: makeFakeReport({ dryRun: true }) }))
     vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
