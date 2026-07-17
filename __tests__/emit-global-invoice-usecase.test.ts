@@ -400,12 +400,37 @@ describe('EmitGlobalInvoiceUseCase — exclusión de ya facturados (unión de ga
     expect(result.ok).toBe(true)
     if (!result.ok) return
     const store = result.value.stores[0]
-    expect(store.excludedAlreadyInvoiced).toBe(2)
+    expect(store.excludedAlreadyInvoiced.count).toBe(2)
     expect(dbGateway.calls).toBe(1)
     expect(facturamaGateway.calls).toBe(1)
     // Solo order-3 sobrevive → cae en un bucket con 1 pedido.
     const totalSurvivingOrders = store.buckets.reduce((acc, b) => acc + b.orders, 0) + store.unmapped.count
     expect(totalSurvivingOrders).toBe(1)
+  })
+
+  it('reporta la identidad de auditoría de cada excluido: order.id, referencia y canal', async () => {
+    const byId = makeMonthlyOrder({ id: 'order-1', orderNumber: '#1' })
+    const byReference = makeMonthlyOrder({ id: 'order-2', orderNumber: '#2', sourceIdentifier: '87008247993-3-2000' })
+    const survivor = makeMonthlyOrder({ id: 'order-3', orderNumber: '#3' })
+
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [byId, byReference, survivor], nextCursor: null }])
+    const reference = buildOrderReference('#2', '87008247993-3-2000')
+
+    const dbGateway = new FakeInvoicedOrdersGateway({ orderIds: new Set(['order-1']), orderReferences: new Set() })
+    const facturamaGateway = new FakeInvoicedOrdersGateway({ orderIds: new Set(), orderReferences: new Set([reference]) })
+
+    const useCase = new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, invoicedOrdersGateways: [dbGateway, facturamaGateway] })
+    )
+
+    const result = await useCase.execute({ year: 2026, month: 6, dryRun: true })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const { orders } = result.value.stores[0].excludedAlreadyInvoiced
+    expect(orders).toHaveLength(2)
+    expect(orders).toContainEqual({ orderId: 'order-1', reference: buildOrderReference('#1', '87008247993-2-1000'), matchedBy: 'db' })
+    expect(orders).toContainEqual({ orderId: 'order-2', reference, matchedBy: 'facturama' })
   })
 })
 

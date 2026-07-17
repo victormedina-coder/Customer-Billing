@@ -104,6 +104,22 @@ export interface UnmappedReport {
   orderIds: string[]
 }
 
+/** Identidad de auditoría de un pedido excluido por ya estar facturado (ver `excludeAlreadyInvoiced`). */
+export interface ExcludedOrderIdentity {
+  /** `order.id` de Shopify (gid). */
+  orderId: string
+  /** Referencia humana (`buildOrderReference`) — la que empata con el canal Facturama, ej. `"#1150 2-1244"`. */
+  reference: string
+  /** Canal que detectó la exclusión: `'db'` (match por `order.id`) o `'facturama'` (match por referencia). */
+  matchedBy: 'db' | 'facturama'
+}
+
+/** Reporte estructurado de exclusión por ya-facturado — mismo patrón que `UnmappedReport`, con identidad para auditoría fiscal. */
+export interface ExcludedAlreadyInvoicedReport {
+  count: number
+  orders: ExcludedOrderIdentity[]
+}
+
 export interface StoreReport {
   store: string
   enumerated: number
@@ -112,7 +128,7 @@ export interface StoreReport {
   partialRefunds: number
   /** Pedidos con total neto 0 (descuento 100%) — no facturables, excluidos antes de clasificar por bucket. */
   skippedZeroTotal: number
-  excludedAlreadyInvoiced: number
+  excludedAlreadyInvoiced: ExcludedAlreadyInvoicedReport
   unmapped: UnmappedReport
   buckets: BucketReport[]
 }
@@ -288,7 +304,10 @@ export class EmitGlobalInvoiceUseCase {
 
     console.log('[global-invoice] tienda enumerada', {
       runId, store, day: period.day, enumerated: monthlyOrders.length, eligible: eligible.length,
-      skippedNonPos, partialRefunds, skippedZeroTotal, excludedAlreadyInvoiced, unmapped: unmapped.length,
+      skippedNonPos, partialRefunds, skippedZeroTotal,
+      excludedAlreadyInvoiced: excludedAlreadyInvoiced.count,
+      excludedAlreadyInvoicedOrders: excludedAlreadyInvoiced.orders,
+      unmapped: unmapped.length,
     })
 
     const bucketReports: BucketReport[] = []
@@ -321,12 +340,19 @@ export class EmitGlobalInvoiceUseCase {
     return all
   }
 
-  /** Excluye la UNIÓN de todos los invoicedOrdersGateways — por id O por referencia. */
+  /**
+   * Excluye la UNIÓN de todos los invoicedOrdersGateways — por id O por
+   * referencia. Registra la identidad de auditoría (order.id + referencia
+   * humana) de cada excluido y el canal que lo detectó, para poder confirmar
+   * en auditoría fiscal QUÉ pedidos se excluyeron y por qué (ver
+   * InvoicedOrdersGateway: `orderIds` es el canal DB, `orderReferences` el
+   * canal Facturama).
+   */
   private async excludeAlreadyInvoiced(
     store: string,
     period: GlobalPeriod,
     candidates: MonthlyOrder[],
-  ): Promise<{ survivors: MonthlyOrder[]; excludedAlreadyInvoiced: number }> {
+  ): Promise<{ survivors: MonthlyOrder[]; excludedAlreadyInvoiced: ExcludedAlreadyInvoicedReport }> {
     const orderIds = new Set<string>()
     const orderReferences = new Set<string>()
     for (const gateway of this.deps.invoicedOrdersGateways) {
@@ -336,18 +362,19 @@ export class EmitGlobalInvoiceUseCase {
     }
 
     const survivors: MonthlyOrder[] = []
-    let excludedAlreadyInvoiced = 0
+    const excludedOrders: ExcludedOrderIdentity[] = []
     for (const monthlyOrder of candidates) {
       const { order } = monthlyOrder
       const reference = buildOrderReference(order.orderNumber, order.sourceIdentifier ?? null)
-      const alreadyInvoiced = orderIds.has(order.id) || orderReferences.has(reference)
-      if (alreadyInvoiced) {
-        excludedAlreadyInvoiced++
+      const matchedById = orderIds.has(order.id)
+      const matchedByReference = orderReferences.has(reference)
+      if (matchedById || matchedByReference) {
+        excludedOrders.push({ orderId: order.id, reference, matchedBy: matchedById ? 'db' : 'facturama' })
         continue
       }
       survivors.push(monthlyOrder)
     }
-    return { survivors, excludedAlreadyInvoiced }
+    return { survivors, excludedAlreadyInvoiced: { count: excludedOrders.length, orders: excludedOrders } }
   }
 
   private groupByBucket(
