@@ -124,7 +124,7 @@ export function StepTicket({
           <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
         </svg>
         <p style={{ fontSize: 12, color: '#6b7280', fontWeight: 600, lineHeight: 1.45, margin: 0 }}>
-          Recuerda que solo puedes facturar consumos del mismo mes. La fecha de la factura será la del día en que la realices.
+          Recuerda que solo puedes facturar consumos del mismo mes, antes de las 21:00 h del último día. La fecha de la factura será la del día en que la realices.
         </p>
       </div>
 

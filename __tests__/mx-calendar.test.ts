@@ -9,7 +9,13 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { currentMxYearMonth, mxDayBounds, previousMxDay, previousMxYearMonth } from '../src/domain/shared/MxCalendar'
+import {
+  currentMxYearMonth,
+  mxDayBounds,
+  mxMonthInvoiceCutoff,
+  previousMxDay,
+  previousMxYearMonth,
+} from '../src/domain/shared/MxCalendar'
 
 describe('mxDayBounds', () => {
   it('día normal (15-jun-2026): from = 00:00 MX, to = 23:59:59.999 MX del mismo día', () => {
@@ -131,5 +137,44 @@ describe('previousMxDay (R4 — exclusivo del modo relative:"yesterday", bundle 
   it('justo después del borde (06:00:00.000 UTC = 00:00 MX del 1-ago): ayer ya es 31-jul', () => {
     const result = previousMxDay(new Date('2026-08-01T06:00:00.000Z'))
     expect(result).toEqual({ year: 2026, month: 7, day: 31 })
+  })
+})
+
+describe('mxMonthInvoiceCutoff (R3 — corte 21:00 MX del último día del mes)', () => {
+  it('junio 2026 (30 días), default 21:00: cutoff = 30-jun 21:00 MX = 01-jul 03:00 UTC', () => {
+    const cutoff = mxMonthInvoiceCutoff(2026, 6)
+    expect(cutoff.toISOString()).toBe('2026-07-01T03:00:00.000Z')
+  })
+
+  it('julio 2026 (31 días), default 21:00: cutoff = 31-jul 21:00 MX = 01-ago 03:00 UTC', () => {
+    const cutoff = mxMonthInvoiceCutoff(2026, 7)
+    expect(cutoff.toISOString()).toBe('2026-08-01T03:00:00.000Z')
+  })
+
+  it('febrero no bisiesto (2026, 28 días): cutoff = 28-feb 21:00 MX = 01-mar 03:00 UTC', () => {
+    const cutoff = mxMonthInvoiceCutoff(2026, 2)
+    expect(cutoff.toISOString()).toBe('2026-03-01T03:00:00.000Z')
+  })
+
+  it('febrero bisiesto (2028, 29 días): cutoff = 29-feb 21:00 MX = 01-mar 03:00 UTC', () => {
+    const cutoff = mxMonthInvoiceCutoff(2028, 2)
+    expect(cutoff.toISOString()).toBe('2028-03-01T03:00:00.000Z')
+  })
+
+  it('diciembre (31 días) cruza al año siguiente: cutoff = 31-dic 21:00 MX = 01-ene 03:00 UTC del año +1', () => {
+    const cutoff = mxMonthInvoiceCutoff(2026, 12)
+    expect(cutoff.toISOString()).toBe('2027-01-01T03:00:00.000Z')
+  })
+
+  it('cutoffHour configurable: 18:00 MX en vez de 21:00', () => {
+    const cutoff = mxMonthInvoiceCutoff(2026, 6, 18)
+    // 30-jun 18:00 MX = 01-jul 00:00 UTC
+    expect(cutoff.toISOString()).toBe('2026-07-01T00:00:00.000Z')
+  })
+
+  it('cutoffHour 0 (medianoche): cutoff = 00:00 MX del ÚLTIMO día del mes (no el inicio del mes siguiente)', () => {
+    // 30-jun 00:00 MX = 30-jun 06:00 UTC — un día antes de mxMonthStart(2026, 7).
+    const cutoff = mxMonthInvoiceCutoff(2026, 6, 0)
+    expect(cutoff.toISOString()).toBe('2026-06-30T06:00:00.000Z')
   })
 })

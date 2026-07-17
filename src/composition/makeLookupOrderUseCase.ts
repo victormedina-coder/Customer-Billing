@@ -13,6 +13,7 @@ import { getOrderSource }    from './orderSource'
 import { isAlreadyInvoiced } from '../infrastructure/db/invoice-repository'
 import { isFullyRefunded }   from '../domain/orders/RefundPolicy'
 import { isWithinInvoiceWindow } from '../domain/eligibility/InvoiceWindowPolicy'
+import { getEvaluationNow } from '../infrastructure/time/getEvaluationNow'
 
 export function makeLookupOrderUseCase(): LookupOrderUseCase {
   const deps: LookupOrderDeps = {
@@ -23,7 +24,10 @@ export function makeLookupOrderUseCase(): LookupOrderUseCase {
       isFullyRefunded: (order) => isFullyRefunded(order),
     },
     windowPolicy: {
-      isWithinInvoiceWindow: (createdAt) => isWithinInvoiceWindow(createdAt),
+      // getEvaluationNow(): una sola fuente de "ahora" en todo el portal (R3/D7)
+      // — en producción siempre new Date() real; fuera de prod respeta
+      // DEV_NOW_OVERRIDE para simular el corte de las 21:00 MX en local.
+      isWithinInvoiceWindow: (createdAt) => isWithinInvoiceWindow(createdAt, getEvaluationNow()),
     },
     repo: {
       isAlreadyInvoiced: (orderId, storeName) => isAlreadyInvoiced(orderId, storeName),

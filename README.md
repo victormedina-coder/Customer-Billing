@@ -238,6 +238,8 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 | `PENDING_TTL_MINUTES` | Minutos de antigüedad tras los cuales una fila `pending` huérfana se libera de forma lazy en `emit` (default: `10`) |
 | `NEXT_PUBLIC_LOOKUP_MOCK` | `true` usa `DEMO_TICKETS` en vez de llamar a Shopify en `lookup` (desarrollo sin credenciales) |
 | `INVOICE_WINDOW_MODE` | Modo de la ventana de facturación (default en código: `current-month`) |
+| `INVOICE_WINDOW_CUTOFF_HOUR` | Hora (0-23, zona MX) del corte de facturación del último día del mes en curso — pasado el corte, la ventana individual se cierra aunque el mes no haya terminado (evita doble factura con la global). Default en código: `21` (decisión de contabilidad 2026-07-16). |
+| `BILLING_CONTACT_EMAIL` | Correo de facturación mostrado en la pantalla de bloqueo del portal cuando la ventana del mes cerró (R3). Sin valor placeholder — lo define el usuario. |
 | `TRUSTED_PROXY_COUNT` | Ver grupo de Redis / rate limiting arriba |
 
 ## Cron — Facturación Global (Railway)

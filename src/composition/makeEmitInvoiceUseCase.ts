@@ -28,6 +28,7 @@ import {
 } from '../infrastructure/db/invoice-repository'
 import { isWithinInvoiceWindow } from '../domain/eligibility/InvoiceWindowPolicy'
 import { isFullyRefunded } from '../domain/orders/RefundPolicy'
+import { getEvaluationNow } from '../infrastructure/time/getEvaluationNow'
 
 const DEFAULT_PENDING_TTL_MINUTES = 10
 
@@ -77,7 +78,9 @@ export function makeEmitInvoiceUseCase(): EmitInvoiceUseCase {
       isFullyRefunded: (order) => isFullyRefunded(order),
     },
     windowPolicy: {
-      isWithinInvoiceWindow: (createdAt) => isWithinInvoiceWindow(createdAt),
+      // getEvaluationNow(): misma fuente de "ahora" que makeLookupOrderUseCase
+      // (R3/D7) — ver comentario ahí.
+      isWithinInvoiceWindow: (createdAt) => isWithinInvoiceWindow(createdAt, getEvaluationNow()),
     },
     pendingTtlMinutes: getPendingTtlMinutes(),
   }

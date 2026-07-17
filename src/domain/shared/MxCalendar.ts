@@ -118,6 +118,26 @@ export function mxMonthBounds(year: number, month: number): { from: Date; to: Da
 }
 
 /**
+ * Retorna el instante UTC del CORTE de facturación del mes `month`/`year` en
+ * zona MX: `cutoffHour` horas del ÚLTIMO día del mes (default 21:00 MX,
+ * decisión de contabilidad 2026-07-16 — ver plan de diseño R2/R3, corte
+ * mensual a las 21:00 porque las tiendas POS no venden después de esa hora).
+ *
+ * DRY sobre `mxMonthStart`: el corte es "medianoche del mes SIGUIENTE menos
+ * (24 − cutoffHour) horas" — evita reimplementar el cálculo de fin de mes
+ * (bisiestos, diciembre→enero) que `mxMonthStart`/`mxMonthBounds` ya
+ * resuelven. Como México es UTC-6 fijo (sin DST desde 2022), restar horas
+ * exactas a un instante UTC siempre aterriza en el mismo punto de reloj MX
+ * sin ambigüedad de huso horario.
+ */
+export function mxMonthInvoiceCutoff(year: number, month: number, cutoffHour: number = 21): Date {
+  const nextMonth = month === 12 ? 1 : month + 1
+  const nextYear = month === 12 ? year + 1 : year
+  const hoursBeforeNextMidnight = 24 - cutoffHour
+  return new Date(mxMonthStart(nextYear, nextMonth).getTime() - hoursBeforeNextMidnight * 60 * 60 * 1000)
+}
+
+/**
  * Retorna el año/mes MX (1-indexed) inmediatamente ANTERIOR al de `now`.
  *
  * Pensado para defaultear el periodo de la facturación global mensual cuando
