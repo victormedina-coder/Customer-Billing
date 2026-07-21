@@ -38,8 +38,19 @@ describe('PaymentBucketPolicy.classify — una sola forma de pago', () => {
     expect(PaymentBucketPolicy.classify([{ gateway: 'mercado_pago', amount: 100 }])).toBe('unmapped')
   })
 
-  it('gateway "transfer" no tiene bucket propio → unmapped', () => {
-    expect(PaymentBucketPolicy.classify([{ gateway: 'transfer', amount: 500 }])).toBe('unmapped')
+  it.each(['transfer', 'transferencia', 'Transferencia'])(
+    'gateway "%s" → credito (decisión finanzas 2026-07-21)',
+    (gateway) => {
+      expect(PaymentBucketPolicy.classify([{ gateway, amount: 500 }])).toBe('credito')
+    }
+  )
+
+  it('transferencia mezclada con efectivo sigue cayendo en credito', () => {
+    const result = PaymentBucketPolicy.classify([
+      { gateway: 'transferencia', amount: 500 },
+      { gateway: 'cash', amount: 100 },
+    ])
+    expect(result).toBe('credito')
   })
 
   it.each(['Tarjeta', 'tarjeta', 'TARJETA'])(

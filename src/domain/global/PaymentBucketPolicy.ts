@@ -18,8 +18,13 @@
  *     débito → credito (NO se suman montos, NO hay tie-break por importe).
  *   - Sin pagos → 'unmapped' (no hay pagos que clasificar).
  *
- * Gateways no mapeados a credito/debito/efectivo (incluye 'transferencia',
- * que no tiene bucket propio, ver PaymentBucket) cuentan como 'unmapped' para
+ * 'transferencia' NO tiene bucket propio en PaymentBucket, pero por decisión
+ * de finanzas/contabilidad (2026-07-21) se globaliza junto con CRÉDITO. El
+ * ajuste vive AQUÍ y no en GatewayPaymentClassification a propósito: el CFDI
+ * individual debe seguir mandando FormaPago SAT '03' para transferencia
+ * (ver GATEWAY_CLASS_TO_SAT_PAYMENT_FORM en cfdiPayloadBuilder.ts).
+ *
+ * El resto de gateways no reconocidos siguen contando como 'unmapped' para
  * efectos de "cuántas formas distintas" hay.
  */
 
@@ -38,6 +43,8 @@ function toBucket(gateway: string): ClassificationResult {
   if (gatewayClass === 'credito' || gatewayClass === 'debito' || gatewayClass === 'efectivo') {
     return gatewayClass
   }
+  //correccion para casos de transferencia, que no tiene bucket propio pero se globaliza con credito
+  if (gatewayClass === 'transferencia') return 'credito'
   return 'unmapped'
 }
 

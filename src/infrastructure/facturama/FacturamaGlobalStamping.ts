@@ -36,7 +36,9 @@ export class FacturamaGlobalStamping implements GlobalInvoiceStamping {
 
     const facturamaId = resp.Id
     const uuidCfdi = resp.Complement?.TaxStamp?.Uuid ?? resp.Uuid ?? ''
+    //Misma composicion que FacturamaInvoiceService.emitir para el individual.
+    const serieFolio = [resp.Series, resp.Folio].filter(Boolean).join('-') || undefined
 
-    return { facturamaId, uuidCfdi }
+    return { facturamaId, uuidCfdi, serieFolio }
   }
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { buildGlobalCfdiPayload } from '../src/infrastructure/facturama/globalCfdiPayloadBuilder'
 import type { CfdiItem } from '../src/infrastructure/facturama/cfdiPayloadBuilder'
 import { createDailyGlobalPeriod, createGlobalPeriod } from '../src/domain/global/GlobalPeriod'
@@ -310,5 +310,86 @@ describe('buildGlobalCfdiPayload — desglose de IVA por pedido (delegado a Fisc
     const sum = payload.Items.reduce((acc, it) => acc + parseFloat(it.Total), 0)
     expect(sum).toBeCloseTo(116 + 480, 0)
     assertItemIdentities(payload.Items)
+  })
+})
+
+describe('buildGlobalCfdiPayload — Serie por marca', () => {
+  const SERIE_ENV_VARS = [
+    'ARIAT_FACTURAMA_SERIE',
+    'STETSON_FACTURAMA_SERIE',
+    'WB_FACTURAMA_SERIE',
+  ] as const
+
+  // El builder lee las series de env: se limpian antes de cada caso para que
+  // un .env local no contamine las aserciones sobre los defaults de código.
+  const originalEnv = new Map<string, string | undefined>()
+
+  beforeEach(() => {
+    for (const key of SERIE_ENV_VARS) {
+      originalEnv.set(key, process.env[key])
+      delete process.env[key]
+    }
+  })
+
+  afterEach(() => {
+    for (const key of SERIE_ENV_VARS) {
+      const original = originalEnv.get(key)
+      if (original === undefined) delete process.env[key]
+      else process.env[key] = original
+    }
+  })
+
+  it.each([
+    ['ariat', 'GDL1'],
+    ['stetson', 'STET'],
+    ['western-brothers', 'WB'],
+  ])('clave de marca "%s" → Serie "%s"', (storeName, expected) => {
+    const payload = buildGlobalCfdiPayload(
+      PERIOD, 'credito', [makeMonthlyOrder()], storeName, EXPEDITION_PLACE
+    )
+    expect(payload.Serie).toBe(expected)
+  })
+
+  it('tienda no mapeada → sin Serie (Facturama asigna la default de la cuenta)', () => {
+    const payload = buildGlobalCfdiPayload(
+      PERIOD, 'credito', [makeMonthlyOrder()], 'marca-desconocida', EXPEDITION_PLACE
+    )
+    expect(payload.Serie).toBeUndefined()
+  })
+
+  it('la env var tiene prioridad sobre el default de código', () => {
+    process.env.ARIAT_FACTURAMA_SERIE = 'TEST1'
+    const payload = buildGlobalCfdiPayload(
+      PERIOD, 'credito', [makeMonthlyOrder()], 'ariat', EXPEDITION_PLACE
+    )
+    expect(payload.Serie).toBe('TEST1')
+  })
+
+  it('env var vacía o solo espacios cae al default de código', () => {
+    process.env.STETSON_FACTURAMA_SERIE = '   '
+    const payload = buildGlobalCfdiPayload(
+      PERIOD, 'credito', [makeMonthlyOrder()], 'stetson', EXPEDITION_PLACE
+    )
+    expect(payload.Serie).toBe('STET')
+  })
+
+  it('el payload NO lleva Folio: lo asigna e incrementa Facturama por Serie', () => {
+    const payload = buildGlobalCfdiPayload(
+      PERIOD, 'credito', [makeMonthlyOrder()], 'ariat', EXPEDITION_PLACE
+    )
+    expect(payload).not.toHaveProperty('Folio')
+    // Y tampoco debe colarse por serialización (Facturama recibe el JSON).
+    expect(JSON.parse(JSON.stringify(payload))).not.toHaveProperty('Folio')
+  })
+
+  it('la Serie no depende del bucket: los 3 buckets de una marca comparten serie', () => {
+    const buckets = ['credito', 'debito', 'efectivo'] as const
+    const series = buckets.map(
+      (bucket) =>
+        buildGlobalCfdiPayload(
+          PERIOD, bucket, [makeMonthlyOrder()], 'western-brothers', EXPEDITION_PLACE
+        ).Serie
+    )
+    expect(series).toEqual(['WB', 'WB', 'WB'])
   })
 })

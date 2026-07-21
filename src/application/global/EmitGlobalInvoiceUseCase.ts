@@ -88,6 +88,7 @@ export interface ChunkReport {
   itemCount: number
   outcome: ChunkOutcome
   uuid?: string
+  serieFolio?: string
   error?: string
   /** Pedidos excluidos de ESTE chunk por perder la carrera del insert-first de membresía. */
   excludedByRace?: number
@@ -529,14 +530,14 @@ export class EmitGlobalInvoiceUseCase {
         })
       }
       return {
-        chunkIndex, itemCount: survivors.length, outcome: 'stamped_unconfirmed', uuid: stampResult.uuidCfdi, excludedByRace,
+        chunkIndex, itemCount: survivors.length, outcome: 'stamped_unconfirmed', uuid: stampResult.uuidCfdi, serieFolio: stampResult.serieFolio, excludedByRace,
       }
     }
 
     console.log('[global-invoice] chunk timbrado', {
-      runId, store, day: period.day, bucket, chunkIndex, uuid: stampResult.uuidCfdi, itemCount: survivors.length,
+      runId, store, day: period.day, bucket, chunkIndex, uuid: stampResult.uuidCfdi, serieFolio: stampResult.serieFolio, itemCount: survivors.length,
     })
-    return { chunkIndex, itemCount: survivors.length, outcome: 'emitted', uuid: stampResult.uuidCfdi, excludedByRace }
+    return { chunkIndex, itemCount: survivors.length, outcome: 'emitted', uuid: stampResult.uuidCfdi, serieFolio: stampResult.serieFolio, excludedByRace }
   }
 
   /** Rollback: borra las membresías del chunk y el header — NUNCA se llama tras timbrar con éxito. */

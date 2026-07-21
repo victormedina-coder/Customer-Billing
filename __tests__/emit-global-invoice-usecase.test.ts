@@ -478,7 +478,9 @@ describe('EmitGlobalInvoiceUseCase — agrupación por bucket (por forma de pago
       { id: 'mixed' },
       [{ gateway: 'cash', amount: 200 }, { gateway: 'debit_card', amount: 300 }]
     )
-    const unmappedOrder = makeMonthlyOrder({ id: 'unmapped-1' }, [{ gateway: 'wire_transfer_unknown', amount: 100 }])
+    // Gateway sin ninguna regla de clasificación. OJO: no usar nombres que
+    // contengan "transfer" — desde 2026-07-21 esos caen en credito, no unmapped.
+    const unmappedOrder = makeMonthlyOrder({ id: 'unmapped-1' }, [{ gateway: 'mercado_pago', amount: 100 }])
 
     const monthlyOrderSource = pageSource(STORE, [{ orders: [mixedPayment, unmappedOrder], nextCursor: null }])
     const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource }))

@@ -39,7 +39,12 @@ export interface GlobalInformation {
 
 export interface GlobalCfdiPayload {
   NameId: string
-  Folio: string
+  Serie?: string
+   /**
+   * NO existe `Folio` a propósito: Facturama lo asigna e incrementa por Serie
+   * (decisión 2026-07-21) — esa es la numeración continua que contabilidad ya
+   * conoce en producción. Mandar uno propio rompería la secuencia.
+   */
   CfdiType: 'I'
   ExpeditionPlace: string
   Exportation: '01'
@@ -89,6 +94,28 @@ const BUCKET_TO_SAT_PAYMENT_FORM: Record<PaymentBucket, string> = {
   credito: '04',
   debito: '28',
   efectivo: '01',
+}
+/**
+ * Serie fiscal por marca. Es lo ÚNICO que identifica la marca en el CFDI
+ * global: el emisor/CSD es el mismo para las tres marcas y el receptor es
+ * genérico, así que sin Serie los comprobantes son indistinguibles en el
+ * panel de Facturama y para contabilidad (hallazgo 2026-07-21).
+ *
+ * Los valores por defecto son la convención YA vigente en la cuenta de
+ * producción (confirmada por contabilidad). Se permite override por env
+ * porque el sandbox puede tener series distintas dadas de alta.
+ */
+const BRAND_SERIE: Record<string, { envVar: string, fallback: string }> = {
+  'ariat':            { envVar: 'ARIAT_FACTURAMA_SERIE',    fallback: 'GDL1'  },
+  'stetson':          { envVar: 'STETSON_FACTURAMA_SERIE',  fallback: 'STET'  },
+  'western-brothers': { envVar: 'WB_FACTURAMA_SERIE',       fallback: 'WB'    },
+}
+
+/** Serie de la marca; undefined si la tienda no está mapeada (Facturama asigna la default). */
+function resolveSerie(storeName: string): string | undefined {
+  const cfg = BRAND_SERIE[storeName]
+  if (!cfg) return undefined
+  return process.env[cfg.envVar]?.trim() || cfg.fallback
 }
 
 /** Redondeo monetario a 2 decimales, igual convención que FiscalCalculator. */
@@ -159,11 +186,10 @@ function buildItemForOrder(order: Order): CfdiItem {
  * Construye el payload del CFDI global a partir del periodo, el bucket de
  * pago y los pedidos sobrevivientes de un chunk. Función pura, sin I/O.
  *
- * `storeName` se recibe por simetría con la identidad del CFDI global
- * (GlobalInvoiceIdentity / EmitGlobalInvoicePayload) aunque el contenido del
- * CFDI en sí no lo necesita hoy: el receptor es genérico y la cuenta de
- * Facturama es única (un solo NameId global, igual que el individual) sin
- * distinción por tienda/marca.
+ * `storeName` (clave de marca: 'ariat' | 'stetson' | 'western-brothers')
+ * resuelve la Serie fiscal del comprobante — es el único dato del CFDI que
+ * distingue la marca, ya que el emisor/CSD y el receptor genérico son
+ * idénticos para las tres.
  */
 export function buildGlobalCfdiPayload(
   period: GlobalPeriod,
@@ -181,14 +207,12 @@ export function buildGlobalCfdiPayload(
     throw new Error('buildGlobalCfdiPayload: orders no puede estar vacío.')
   }
 
-  const folio = String(Date.now()).slice(-8)
   const paymentForm = BUCKET_TO_SAT_PAYMENT_FORM[bucket]
 
   const items = orders.map((monthlyOrder) => buildItemForOrder(monthlyOrder.order))
 
-  return {
+  const payload: GlobalCfdiPayload = {
     NameId: nameId,
-    Folio: folio,
     CfdiType: 'I',
     ExpeditionPlace: expeditionPlace,
     Exportation: '01',
@@ -206,4 +230,9 @@ export function buildGlobalCfdiPayload(
       Year: period.yearString(),
     },
   }
+
+  const serie = resolveSerie(storeName)
+  if (serie) payload.Serie = serie
+
+  return payload
 }
