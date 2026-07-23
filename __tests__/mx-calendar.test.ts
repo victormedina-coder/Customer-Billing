@@ -10,6 +10,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  currentMxDay,
   currentMxYearMonth,
   mxDayBounds,
   mxMonthInvoiceCutoff,
@@ -98,6 +99,34 @@ describe('currentMxYearMonth (R4)', () => {
   it('justo después del borde (06:00:00.000 UTC = 00:00 MX del 1-ago): mes en curso ya es agosto', () => {
     const result = currentMxYearMonth(new Date('2026-08-01T06:00:00.000Z'))
     expect(result).toEqual({ year: 2026, month: 8 })
+  })
+})
+
+// [DAILY-SCAFFOLDING] test-only, remover junto con currentMxDay (ver plan R5).
+describe('currentMxDay (exclusivo del modo relative:"today", bundle diario)', () => {
+  it('día normal: 16-jun-2026 12:00 MX → hoy es 16-jun-2026', () => {
+    // 16-jun-2026 12:00 MX = 18:00 UTC
+    const result = currentMxDay(new Date('2026-06-16T18:00:00.000Z'))
+    expect(result).toEqual({ year: 2026, month: 6, day: 16 })
+  })
+
+  // El caso que motiva la función: a las 21:00 MX el calendario UTC ya avanzó al
+  // día siguiente. Leer UTC facturaría el día equivocado.
+  it('21:00 MX (= 03:00 UTC del día siguiente): devuelve el día MX, NO el UTC', () => {
+    // 03:00 UTC del 24-jul = 21:00 MX del 23-jul
+    const result = currentMxDay(new Date('2026-07-24T03:00:00.000Z'))
+    expect(result).toEqual({ year: 2026, month: 7, day: 23 })
+  })
+
+  it('21:00 MX del último día del mes: sigue en julio (no salta a agosto)', () => {
+    // 03:00 UTC del 1-ago = 21:00 MX del 31-jul — el instante del corte mensual
+    const result = currentMxDay(new Date('2026-08-01T03:00:00.000Z'))
+    expect(result).toEqual({ year: 2026, month: 7, day: 31 })
+  })
+
+  it('medianoche MX exacta (06:00 UTC): ya es el día nuevo', () => {
+    const result = currentMxDay(new Date('2026-07-24T06:00:00.000Z'))
+    expect(result).toEqual({ year: 2026, month: 7, day: 24 })
   })
 })
 

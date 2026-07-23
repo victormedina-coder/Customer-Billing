@@ -247,8 +247,8 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 `POST /api/global/emit` está pensado para dispararse desde un *Scheduled
 Job* de Railway (no desde el navegador). El body soporta periodo explícito
 (`{year, month[, day]}`) o resolución `relative` (`current-month` /
-`previous-month` / `yesterday`), mutuamente excluyente con lo explícito; un
-body vacío usa el default histórico (mes anterior en zona MX). Detalle
+`previous-month` / `yesterday` / `today`), mutuamente excluyente con lo
+explícito; un body vacío usa el default histórico (mes anterior en zona MX). Detalle
 completo de los dos cron jobs (sandbox diario y producción mensual), sus
 bodies y schedules — ver **`docs/11-cron-facturacion-global.md`**.
 
@@ -258,9 +258,22 @@ negocio: contabilidad requiere el cierre el mismo día del mes (no el día 1
 de madrugada) porque las tiendas POS no venden después de las 21:00 — ver
 **`docs/adr/ADR-009-corte-mensual-2100.md`**.
 
-> ⚠️ El cron sandbox diario y el modo `relative: 'yesterday'` son
+**Cron de sandbox (diario):** schedule `0 3 * * *` UTC = **21:00 MX**, con body
+`{"relative":"today"}` — la MISMA hora de corte que producción, y `today` es el
+análogo diario de `current-month`: al correr a las 21:00 el periodo sigue
+abierto, así que el diario ejercita el mismo riesgo del ADR-009 que la mensual
+(pedidos posteriores al corte no entran) en vez de facturar días ya cerrados.
+Pasar a producción es entonces solo `*` → `1` en el día-del-mes y cambiar el
+body a `{"relative":"current-month"}`.
+
+> ⚠️ El cron sandbox diario y los modos `relative: 'yesterday'` / `'today'` son
 > **[DAILY-SCAFFOLDING] test-only** — existen solo para probar el timbrado
 > diario en sandbox y se eliminarán antes del PR a `main`.
+
+> ⚠️ **No dispares el cron dos veces el mismo día MX con `today`.** La clave de
+> idempotencia es `(store, year, month, day, bucket, chunk)`: la segunda corrida
+> cae en `skipped_idempotent` y los pedidos creados ENTRE ambas corridas no se
+> facturan nunca. Una corrida por día.
 
 ## Despliegue (Railway)
 

@@ -101,13 +101,19 @@ export const GlobalEmitSchema = z
     /**
      * Resolución relativa del periodo (R4). 'current-month'/'previous-month'
      * son PERMANENTES (las usará el cron de producción mensual, R2).
-     * 'yesterday' es [DAILY-SCAFFOLDING] test-only, remover antes de
-     * producción (ver plan R5) — exclusiva del bundle de periodicidad DIARIA
-     * (R1, solo para el cron de sandbox). Al retirar el bundle diario, basta
-     * con quitar 'yesterday' del enum, su rama en el superRefine de abajo, y
-     * el case correspondiente en el route — sin tocar el resto.
+     * 'yesterday' y 'today' son [DAILY-SCAFFOLDING] test-only, remover antes
+     * de producción (ver plan R5) — exclusivas del bundle de periodicidad
+     * DIARIA (R1, solo para el cron de sandbox). Diferencia entre ambas:
+     * 'yesterday' factura un día YA CERRADO; 'today' factura el día EN CURSO,
+     * que es el análogo exacto de 'current-month' cuando el cron corre a la
+     * hora de corte (21:00 MX) — el periodo sigue abierto y los pedidos
+     * posteriores al corte no entran (mismo riesgo del ADR-009 que la mensual
+     * de producción, ejercitado a diario).
+     * Al retirar el bundle diario, basta con quitar 'yesterday'/'today' del
+     * enum, su rama en el superRefine de abajo, y los cases correspondientes
+     * en el route — sin tocar el resto.
      */
-    relative: z.enum(['current-month', 'previous-month', 'yesterday']).optional(),
+    relative: z.enum(['current-month', 'previous-month', 'yesterday', 'today']).optional(),
   })
   .superRefine((data, ctx) => {
     const hasYear = data.year !== undefined

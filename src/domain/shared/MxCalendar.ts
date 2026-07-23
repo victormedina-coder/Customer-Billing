@@ -166,8 +166,8 @@ export function currentMxYearMonth(now: Date): { year: number; month: number } {
 
 /**
  * Devuelve { year, month, day } (1-indexed) del instante `date` en zona MX —
- * generaliza `getMxYearMonth` agregando el día. Privada: solo la usa
- * `previousMxDay` (ver nota de scaffolding abajo).
+ * generaliza `getMxYearMonth` agregando el día. Privada: solo la usan
+ * `currentMxDay` y `previousMxDay` (ver nota de scaffolding abajo).
  */
 function getMxYearMonthDay(date: Date): { year: number; month: number; day: number } {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -201,4 +201,22 @@ function getMxYearMonthDay(date: Date): { year: number; month: number; day: numb
 export function previousMxDay(now: Date): { year: number; month: number; day: number } {
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
   return getMxYearMonthDay(yesterday)
+}
+
+/**
+ * [DAILY-SCAFFOLDING] test-only, remover antes de producción (ver plan R5).
+ * Exclusiva del modo `relative: 'today'` del endpoint de facturación global.
+ *
+ * Retorna el día MX (año/mes/día, 1-indexed) EN CURSO al instante `now` — "hoy"
+ * en zona MX.
+ *
+ * Por qué existe además de `previousMxDay`: es el análogo diario EXACTO de
+ * `currentMxYearMonth` (el modo mensual de producción). Con el cron a las 21:00
+ * MX, `current-month` factura un mes que sigue ABIERTO 3 horas más; `today`
+ * reproduce esa misma semántica a escala de día, para que el andamiaje diario
+ * ejercite el mismo riesgo que la corrida mensual real (ADR-009) en vez de
+ * facturar siempre periodos ya cerrados, que es lo que hace `yesterday`.
+ */
+export function currentMxDay(now: Date): { year: number; month: number; day: number } {
+  return getMxYearMonthDay(now)
 }
