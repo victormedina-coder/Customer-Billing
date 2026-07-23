@@ -26,6 +26,8 @@
  *   422 STORE_NOT_CONFIGURED → storeName no está entre las marcas configuradas
  *   429 RATE_LIMITED         → demasiados intentos (defensa en profundidad)
  *   503 FEATURE_NOT_CONFIGURED → GLOBAL_INVOICE_SECRET no está definido
+ *   500 (con { report })   → la corrida terminó pero algún chunk quedó en
+ *                            rolled_back/stamped_unconfirmed (ver summary.hasFailures)
  */
 
 export const runtime = 'nodejs'
@@ -46,6 +48,7 @@ import { enforceRateLimit } from '@/src/interface/http/withRateLimit'
 // test-only, remover junto con ese case y este import (ver plan R5).
 import { currentMxYearMonth, previousMxDay, previousMxYearMonth } from '@/src/domain/shared/MxCalendar'
 import { getEvaluationNow } from '@/src/infrastructure/time/getEvaluationNow'
+import { logger } from '@/src/infrastructure/observability/logger'
 
 const SECRET_HEADER = 'x-global-secret'
 
@@ -74,7 +77,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // ── 0. Feature configurada ────────────────────────────────────────────────
   const secret = process.env.GLOBAL_INVOICE_SECRET
   if (!secret) {
-    console.error('[global-emit-route] GLOBAL_INVOICE_SECRET no configurado — endpoint deshabilitado')
+    logger.error({}, '[global-emit-route] GLOBAL_INVOICE_SECRET no configurado — endpoint deshabilitado')
     return httpError('FEATURE_NOT_CONFIGURED', 'La facturación global no está configurada.', 503)
   }
 
@@ -144,7 +147,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     resolvedBy = 'default-previous-month'
   }
 
-  console.log('[global-emit-route] periodo resuelto', { resolvedBy, year, month, day })
+  logger.info({ resolvedBy, year, month, day }, '[global-emit-route] periodo resuelto')
 
   // ── 5. Orquestación delegada al use case ──────────────────────────────────
   const useCase = makeEmitGlobalInvoiceUseCase()
@@ -155,5 +158,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return httpError(code, message, ERROR_STATUS[code])
   }
 
-  return NextResponse.json({ report: result.value }, { status: 200 })
+  const report = result.value
+
+  // Un chunk en `rolled_back`/`stamped_unconfirmed` es un hueco fiscal: pedidos
+  // elegibles que no quedaron timbrados (o timbrados sin registrar). Se responde
+  // con status de error para que el cron de Railway lo marque como fallido en
+  // vez de pintarlo verde; el reporte COMPLETO viaja igual en el body para
+  // diagnóstico (mismo shape que el 200, solo cambia el status).
+  if (report.summary.hasFailures) {
+    logger.error(
+      { runId: report.runId, year: report.year, month: report.month, day: report.day, summary: report.summary },
+      '[global-emit-route] corrida con fallos — revisar chunks en rolled_back/stamped_unconfirmed',
+    )
+    return NextResponse.json({ report }, { status: 500 })
+  }
+
+  return NextResponse.json({ report }, { status: 200 })
 }

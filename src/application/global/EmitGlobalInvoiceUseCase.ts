@@ -46,6 +46,7 @@ import type { GlobalInvoiceStamping } from '../../domain/global/ports/GlobalInvo
 import type { GlobalInvoiceRepository } from '../../domain/global/ports/GlobalInvoiceRepository'
 import type { InvoicedOrdersGateway } from '../../domain/global/ports/InvoicedOrdersGateway'
 import type { CreateInvoiceData } from '../../infrastructure/db/invoice-repository'
+import type { Logger } from '../../domain/shared/ports/Logger'
 import { ok, err } from '../shared/Result'
 import type { Result } from '../shared/Result'
 
@@ -134,6 +135,34 @@ export interface StoreReport {
   buckets: BucketReport[]
 }
 
+/**
+ * Resumen agregado de la corrida — existe para que el disparador (cron) pueda
+ * decidir éxito/fallo SIN recorrer el árbol store→bucket→chunk, y para que una
+ * alerta pueda engancharse a un solo campo.
+ *
+ * Motivación (2026-07-22): una corrida con los 9 chunks en `rolled_back` viajó
+ * dentro de un HTTP 200 y Railway la pintó verde. En facturación fiscal un
+ * pedido sin timbrar es un hueco silencioso; `hasFailures` es la señal que lo
+ * hace visible.
+ */
+export interface GlobalRunSummary {
+  chunks: number
+  emitted: number
+  rolledBack: number
+  skippedIdempotent: number
+  stampedUnconfirmed: number
+  empty: number
+  dryRun: number
+  ordersEligible: number
+  unmapped: number
+  /**
+   * true si algún chunk quedó en `rolled_back` (no se timbró) o en
+   * `stamped_unconfirmed` (se timbró pero el header no se pudo actualizar —
+   * requiere conciliación manual). Ambos casos exigen intervención.
+   */
+  hasFailures: boolean
+}
+
 export interface GlobalRunReport {
   runId: string
   year: number
@@ -141,7 +170,38 @@ export interface GlobalRunReport {
   /** Día de la corrida cuando fue DIARIA; ausente en una corrida mensual. */
   day?: number
   dryRun: boolean
+  summary: GlobalRunSummary
   stores: StoreReport[]
+}
+
+/** Recorre el árbol store→bucket→chunk y agrega los contadores de la corrida. */
+function computeSummary(stores: StoreReport[]): GlobalRunSummary {
+  const s: GlobalRunSummary = {
+    chunks: 0, emitted: 0, rolledBack: 0, skippedIdempotent: 0,
+    stampedUnconfirmed: 0, empty: 0, dryRun: 0,
+    ordersEligible: 0, unmapped: 0, hasFailures: false,
+  }
+
+  for (const store of stores) {
+    s.ordersEligible += store.eligible
+    s.unmapped += store.unmapped.count
+    for (const bucket of store.buckets) {
+      for (const chunk of bucket.chunks) {
+        s.chunks++
+        switch (chunk.outcome) {
+          case 'emitted':             s.emitted++; break
+          case 'rolled_back':         s.rolledBack++; break
+          case 'skipped_idempotent':  s.skippedIdempotent++; break
+          case 'stamped_unconfirmed': s.stampedUnconfirmed++; break
+          case 'empty':               s.empty++; break
+          case 'dry_run':             s.dryRun++; break
+        }
+      }
+    }
+  }
+
+  s.hasFailures = s.rolledBack > 0 || s.stampedUnconfirmed > 0
+  return s
 }
 
 // ─── Ports mínimos requeridos por este caso de uso ────────────────────────────
@@ -189,12 +249,26 @@ export interface EmitGlobalInvoiceDeps {
   now?: () => Date
   /** uuid de la corrida — inyectable para tests deterministas. Default: crypto.randomUUID(). */
   runId?: string
+  /** Adapter de logging estructurado. Default: console (comportamiento previo al puerto). */
+  logger?: Logger
 }
 
 // ─── Use Case ─────────────────────────────────────────────────────────────────
 
 const DEFAULT_MAX_ITEMS_PER_CHUNK = 250
 const DEFAULT_PENDING_TTL_MINUTES = 10
+
+/**
+ * Logger por defecto cuando no se inyecta uno (tests, o un composition root que
+ * lo omita). Preserva EXACTAMENTE el comportamiento previo a la introducción del
+ * puerto — escribir a console — para que no haya regresión silenciosa de trazas
+ * si alguien construye el use case sin adapter. Producción inyecta pino.
+ */
+const CONSOLE_LOGGER: Logger = {
+  info: (fields, msg) => console.log(msg, fields),
+  warn: (fields, msg) => console.warn(msg, fields),
+  error: (fields, msg) => console.error(msg, fields),
+}
 
 /** Estados de Shopify que representan un cobro efectivamente realizado (ver §b arriba). */
 const PAID_LIKE_STATUSES = new Set(['PAID', 'PARTIALLY_REFUNDED'])
@@ -206,6 +280,7 @@ export class EmitGlobalInvoiceUseCase {
   private readonly pendingTtlMinutes: number
   private readonly now: () => Date
   private readonly runId: string
+  private readonly logger: Logger
 
   constructor(private readonly deps: EmitGlobalInvoiceDeps) {
     this.paymentBucketPolicy = deps.paymentBucketPolicy ?? PaymentBucketPolicy
@@ -214,6 +289,7 @@ export class EmitGlobalInvoiceUseCase {
     this.pendingTtlMinutes = deps.pendingTtlMinutes ?? DEFAULT_PENDING_TTL_MINUTES
     this.now = deps.now ?? (() => new Date())
     this.runId = deps.runId ?? crypto.randomUUID()
+    this.logger = deps.logger ?? CONSOLE_LOGGER
   }
 
   async execute(input: EmitGlobalInvoiceInput): Promise<Result<GlobalRunReport, GlobalRunError>> {
@@ -240,16 +316,18 @@ export class EmitGlobalInvoiceUseCase {
       return err({ code: 'STORE_NOT_CONFIGURED', message: 'No hay tiendas configuradas para la facturación global.' })
     }
 
-    console.log('[global-invoice] inicio de corrida', { runId, year, month, day, stores: targetStores, dryRun })
+    this.logger.info({ runId, year, month, day, stores: targetStores, dryRun }, '[global-invoice] inicio de corrida')
 
     const stores: StoreReport[] = []
     for (const store of targetStores) {
       stores.push(await this.runStore(store, period, dryRun, runId))
     }
 
-    console.log('[global-invoice] fin de corrida', { runId, year, month, day })
+    const summary = computeSummary(stores)
 
-    return ok({ runId, year, month, day: period.day, dryRun, stores })
+    this.logger.info({ runId, year, month, day, summary }, '[global-invoice] fin de corrida')
+
+    return ok({ runId, year, month, day: period.day, dryRun, summary, stores })
   }
 
   // ── Por tienda ────────────────────────────────────────────────────────────
@@ -303,13 +381,13 @@ export class EmitGlobalInvoiceUseCase {
     const { survivors, excludedAlreadyInvoiced } = await this.excludeAlreadyInvoiced(store, period, eligible)
     const { buckets, unmapped } = this.groupByBucket(survivors)
 
-    console.log('[global-invoice] tienda enumerada', {
+    this.logger.info({
       runId, store, day: period.day, enumerated: monthlyOrders.length, eligible: eligible.length,
       skippedNonPos, partialRefunds, skippedZeroTotal,
       excludedAlreadyInvoiced: excludedAlreadyInvoiced.count,
       excludedAlreadyInvoicedOrders: excludedAlreadyInvoiced.orders,
       unmapped: unmapped.length,
-    })
+    }, '[global-invoice] tienda enumerada')
 
     const bucketReports: BucketReport[] = []
     for (const [bucket, bucketOrders] of buckets) {
@@ -455,7 +533,7 @@ export class EmitGlobalInvoiceUseCase {
       }
     }
     if (!header.created) {
-      console.log('[global-invoice] chunk salteado (idempotente)', { runId, store, day: period.day, bucket, chunkIndex })
+      this.logger.info({ runId, store, day: period.day, bucket, chunkIndex }, '[global-invoice] chunk salteado (idempotente)')
       return { chunkIndex, itemCount: chunkOrders.length, outcome: 'skipped_idempotent' }
     }
     const headerId = header.header.id
@@ -487,7 +565,7 @@ export class EmitGlobalInvoiceUseCase {
 
     if (survivors.length === 0) {
       await this.deps.globalRepo.deleteGlobalHeader(headerId)
-      console.log('[global-invoice] chunk vacío tras insert-first, header borrado', { runId, store, day: period.day, bucket, chunkIndex })
+      this.logger.info({ runId, store, day: period.day, bucket, chunkIndex }, '[global-invoice] chunk vacío tras insert-first, header borrado')
       return { chunkIndex, itemCount: 0, outcome: 'empty', excludedByRace }
     }
 
@@ -504,7 +582,7 @@ export class EmitGlobalInvoiceUseCase {
       })
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e)
-      console.error('[global-invoice] Facturama global falló, rollback', { runId, store, day: period.day, bucket, chunkIndex, error: message })
+      this.logger.error({ runId, store, day: period.day, bucket, chunkIndex, error: message }, '[global-invoice] Facturama global falló, rollback')
       await this.rollbackChunk(headerId, runId)
       return { chunkIndex, itemCount: survivors.length, outcome: 'rolled_back', error: message, excludedByRace }
     }
@@ -518,25 +596,25 @@ export class EmitGlobalInvoiceUseCase {
       })
     } catch (dbErr: unknown) {
       const dbMessage = dbErr instanceof Error ? dbErr.message : String(dbErr)
-      console.error('[global-invoice] CFDI global timbrado pero no se pudo actualizar el header (conciliar)', {
+      this.logger.error({
         runId, headerId, error: dbMessage,
-      })
+      }, '[global-invoice] CFDI global timbrado pero no se pudo actualizar el header (conciliar)')
       try {
         await this.deps.globalRepo.updateGlobalStamp(headerId, { status: 'stamped_unconfirmed' })
       } catch (markErr: unknown) {
         const markMessage = markErr instanceof Error ? markErr.message : String(markErr)
-        console.error('[global-invoice] No se pudo marcar el header como stamped_unconfirmed (conciliar manualmente)', {
+        this.logger.error({
           runId, headerId, error: markMessage,
-        })
+        }, '[global-invoice] No se pudo marcar el header como stamped_unconfirmed (conciliar manualmente)')
       }
       return {
         chunkIndex, itemCount: survivors.length, outcome: 'stamped_unconfirmed', uuid: stampResult.uuidCfdi, serieFolio: stampResult.serieFolio, excludedByRace,
       }
     }
 
-    console.log('[global-invoice] chunk timbrado', {
+    this.logger.info({
       runId, store, day: period.day, bucket, chunkIndex, uuid: stampResult.uuidCfdi, serieFolio: stampResult.serieFolio, itemCount: survivors.length,
-    })
+    }, '[global-invoice] chunk timbrado')
     return { chunkIndex, itemCount: survivors.length, outcome: 'emitted', uuid: stampResult.uuidCfdi, serieFolio: stampResult.serieFolio, excludedByRace }
   }
 
@@ -546,13 +624,13 @@ export class EmitGlobalInvoiceUseCase {
       await this.deps.invoiceRepo.deleteByGlobalInvoiceId(headerId)
     } catch (delErr: unknown) {
       const message = delErr instanceof Error ? delErr.message : String(delErr)
-      console.error('[global-invoice] rollback: no se pudieron borrar las membresías', { runId, headerId, error: message })
+      this.logger.error({ runId, headerId, error: message }, '[global-invoice] rollback: no se pudieron borrar las membresías')
     }
     try {
       await this.deps.globalRepo.deleteGlobalHeader(headerId)
     } catch (delErr: unknown) {
       const message = delErr instanceof Error ? delErr.message : String(delErr)
-      console.error('[global-invoice] rollback: no se pudo borrar el header', { runId, headerId, error: message })
+      this.logger.error({ runId, headerId, error: message }, '[global-invoice] rollback: no se pudo borrar el header')
     }
   }
 }

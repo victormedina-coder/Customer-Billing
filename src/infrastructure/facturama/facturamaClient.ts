@@ -13,7 +13,14 @@ import { MX_TZ } from '../../domain/shared/MxCalendar'
 export interface FacturamaCfdiResponse {
   Id: string
   Folio?: string
-  Series?: string
+  /**
+   * Facturama responde `Serie` en SINGULAR — confirmado contra la doc oficial
+   * (POST /3/cfdis, ejemplo `"Serie": "R", "Folio": "1"`) y en vivo el
+   * 2026-07-22: el reporte del cron mostraba `serieFolio:"3"` para un CFDI que
+   * en Facturama era `GDL1 3`, porque el código leía `Series`, que no existe.
+   * `Serie` es también el nombre del atributo en el estándar CFDI 4.0 del SAT.
+   */
+  Serie?: string
   Date?: string
   Complement?: {
     TaxStamp?: {

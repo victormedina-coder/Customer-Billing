@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import type { GlobalRunReport } from '../src/application/global/EmitGlobalInvoiceUseCase'
+import type { GlobalRunReport, GlobalRunSummary } from '../src/application/global/EmitGlobalInvoiceUseCase'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // vi.mock — composition root + rate-limit
@@ -39,12 +39,20 @@ let POST: typeof import('../app/api/global/emit/route')['POST']
 
 const SECRET = 'test-global-secret'
 
+/** Resumen "todo en ceros" — corrida sin chunks, que es el caso base sin fallos. */
+const EMPTY_SUMMARY: GlobalRunSummary = {
+  chunks: 0, emitted: 0, rolledBack: 0, skippedIdempotent: 0,
+  stampedUnconfirmed: 0, empty: 0, dryRun: 0,
+  ordersEligible: 0, unmapped: 0, hasFailures: false,
+}
+
 function makeFakeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
   return {
     runId: 'run-1',
     year: 2026,
     month: 6,
     dryRun: false,
+    summary: EMPTY_SUMMARY,
     stores: [],
     ...overrides,
   }
@@ -197,6 +205,44 @@ describe('POST /api/global/emit', () => {
     expect(res.status).toBe(200)
     expect(json.report).toEqual(fakeReport)
     expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: 'ariat', dryRun: false })
+  })
+
+  // Regresión 2026-07-22: una corrida con los 9 chunks en `rolled_back` (serie
+  // no dada de alta en Facturama) viajó dentro de un HTTP 200 y Railway pintó el
+  // cron en verde — cero CFDIs emitidos y nadie se enteró. El status debe
+  // reflejar el resultado real de la corrida, no solo que el handler terminó.
+  it('summary.hasFailures → responde 500 con el reporte COMPLETO en el body', async () => {
+    const failedSummary: GlobalRunSummary = {
+      ...EMPTY_SUMMARY, chunks: 9, rolledBack: 9, ordersEligible: 37, hasFailures: true,
+    }
+    const fakeReport = makeFakeReport({ runId: 'run-failed', summary: failedSummary })
+    const execute = vi.fn(async () => ({ ok: true, value: fakeReport }))
+    vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { execute } as any,
+    )
+
+    const res = await POST(makePostRequest({ year: 2026, month: 7, day: 21 }, withSecretHeader()) as never)
+    const json = await res.json()
+
+    expect(res.status).toBe(500)
+    // El reporte NO se recorta al fallar: es lo único que permite diagnosticar.
+    expect(json.report).toEqual(fakeReport)
+  })
+
+  it('stamped_unconfirmed (timbrado sin registrar) también marca la corrida como fallida', async () => {
+    const unconfirmedSummary: GlobalRunSummary = {
+      ...EMPTY_SUMMARY, chunks: 3, emitted: 2, stampedUnconfirmed: 1, hasFailures: true,
+    }
+    const execute = vi.fn(async () => ({ ok: true, value: makeFakeReport({ summary: unconfirmedSummary }) }))
+    vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { execute } as any,
+    )
+
+    const res = await POST(makePostRequest({ year: 2026, month: 7 }, withSecretHeader()) as never)
+
+    expect(res.status).toBe(500)
   })
 
   it('body sin year/month → el use case recibe el mes anterior en zona MX (cron sin periodo)', async () => {

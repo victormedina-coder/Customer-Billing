@@ -80,7 +80,7 @@ describe('emitirCFDI', () => {
       Id: 'abc123',
       Complement: { TaxStamp: { Uuid: 'uuid-1', SatSign: 'sello-sat', CfdiSign: 'sello-cfdi' } },
       Issuer: { Rfc: 'XAXX010101000', Name: 'EMISOR', FiscalRegime: '601' },
-      Series: 'GR', Folio: '42', Date: '2026-06-29',
+      Serie: 'GR', Folio: '42', Date: '2026-06-29',
     }
     fetchMock.mockResolvedValueOnce(jsonResponse(fakeCfdiResponse, 200))
 
@@ -100,7 +100,7 @@ describe('emitirCFDI', () => {
       Id: 'fact-id-001',
       Complement: { TaxStamp: { Uuid: 'UUID-STAMP', SatSign: 'SAT-SIGN', CfdiSign: 'CFDI-SIGN' } },
       Issuer: { Rfc: 'AAA010101AAA', Name: 'Test', FiscalRegime: '612' },
-      Series: 'A', Folio: '1', Date: '2026-01-01',
+      Serie: 'A', Folio: '1', Date: '2026-01-01',
     }
     fetchMock.mockResolvedValueOnce(jsonResponse(resp))
 

@@ -828,3 +828,64 @@ describe('EmitGlobalInvoiceUseCase — dryRun no escribe', () => {
     expect(stamping.calls).toHaveLength(0)
   })
 })
+
+// Motivación (2026-07-22): el reporte solo traía el árbol store→bucket→chunk, así
+// que una corrida enteramente fallida era indistinguible de una exitosa sin
+// recorrerlo entero — y el cron la reportaba verde. `summary` es la señal que el
+// disparador lee para decidir éxito/fallo.
+describe('EmitGlobalInvoiceUseCase — summary agregado de la corrida', () => {
+  it('corrida exitosa → cuenta el chunk emitido y hasFailures es false', async () => {
+    const order = makeMonthlyOrder({ id: 'order-1' })
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [order], nextCursor: null }])
+    const useCase = new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, globalStamping: makeSuccessfulStamping() })
+    )
+
+    const result = await useCase.execute({ year: 2026, month: 6 })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const { summary } = result.value
+    expect(summary.chunks).toBe(1)
+    expect(summary.emitted).toBe(1)
+    expect(summary.rolledBack).toBe(0)
+    expect(summary.ordersEligible).toBe(1)
+    expect(summary.hasFailures).toBe(false)
+  })
+
+  it('Facturama falla → rolledBack cuenta y hasFailures es true', async () => {
+    const order = makeMonthlyOrder({ id: 'order-1' })
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [order], nextCursor: null }])
+    const failingStamping = new FakeGlobalInvoiceStamping(async () => {
+      throw new Error('El atributo \'Serie\' debe existir en la sucursal')
+    })
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource, globalStamping: failingStamping }))
+
+    const result = await useCase.execute({ year: 2026, month: 6 })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const { summary } = result.value
+    expect(summary.chunks).toBe(1)
+    expect(summary.emitted).toBe(0)
+    expect(summary.rolledBack).toBe(1)
+    expect(summary.hasFailures).toBe(true)
+  })
+
+  it('stamped_unconfirmed (timbrado sin registrar) también marca hasFailures', async () => {
+    const order = makeMonthlyOrder({ id: 'order-1' })
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [order], nextCursor: null }])
+    const globalRepo = new FakeGlobalInvoiceRepository(true) // falla el primer updateGlobalStamp('emitted')
+    const stamping = new FakeGlobalInvoiceStamping(async () => ({ facturamaId: 'GF-001', uuidCfdi: crypto.randomUUID() }))
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource, globalRepo, globalStamping: stamping }))
+
+    const result = await useCase.execute({ year: 2026, month: 6 })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const { summary } = result.value
+    expect(summary.stampedUnconfirmed).toBe(1)
+    expect(summary.emitted).toBe(0)
+    expect(summary.hasFailures).toBe(true)
+  })
+})

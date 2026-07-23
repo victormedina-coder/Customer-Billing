@@ -24,6 +24,7 @@ import { DrizzleGlobalInvoiceRepository } from '../infrastructure/db/DrizzleGlob
 import { DrizzleInvoicedOrdersGateway } from '../infrastructure/db/DrizzleInvoicedOrdersGateway'
 import { FacturamaInvoicedOrdersGateway } from '../infrastructure/facturama/FacturamaInvoicedOrdersGateway'
 import { listConfiguredBrands } from '../infrastructure/shopify/brands'
+import { logger } from '../infrastructure/observability/logger'
 
 // Funciones del repo de membresías — importadas desde infrastructure/db/
 // directamente para que los vi.mock('.../infrastructure/db/invoice-repository')
@@ -77,6 +78,7 @@ export function makeEmitGlobalInvoiceUseCase(): EmitGlobalInvoiceUseCase {
     storeNames: listConfiguredBrands().map((brand) => brand.key),
     maxItemsPerChunk: getMaxItemsPerChunk(),
     pendingTtlMinutes: getPendingTtlMinutes(),
+    logger,
   }
 
   return new EmitGlobalInvoiceUseCase(deps)

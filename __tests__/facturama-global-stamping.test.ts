@@ -211,10 +211,10 @@ describe('FacturamaGlobalStamping.emitirGlobal — serieFolio de la respuesta', 
     vi.unstubAllEnvs()
   })
 
-  it('Series + Folio de la respuesta se componen como "SERIE-FOLIO"', async () => {
+  it('Serie + Folio de la respuesta se componen como "SERIE-FOLIO"', async () => {
     const { FacturamaGlobalStamping } = await importAdapter()
     fetchMock.mockResolvedValueOnce(
-      jsonResponse({ Id: 'X', Series: 'GDL1', Folio: '7461', Complement: { TaxStamp: { Uuid: 'Y' } } })
+      jsonResponse({ Id: 'X', Serie: 'GDL1', Folio: '7461', Complement: { TaxStamp: { Uuid: 'Y' } } })
     )
 
     const adapter = new FacturamaGlobalStamping()
@@ -223,7 +223,7 @@ describe('FacturamaGlobalStamping.emitirGlobal — serieFolio de la respuesta', 
     expect(result.serieFolio).toBe('GDL1-7461')
   })
 
-  it('solo Folio (sin Series) → se usa el folio a secas', async () => {
+  it('solo Folio (sin Serie) → se usa el folio a secas', async () => {
     const { FacturamaGlobalStamping } = await importAdapter()
     fetchMock.mockResolvedValueOnce(
       jsonResponse({ Id: 'X', Folio: '7461', Complement: { TaxStamp: { Uuid: 'Y' } } })
@@ -235,7 +235,7 @@ describe('FacturamaGlobalStamping.emitirGlobal — serieFolio de la respuesta', 
     expect(result.serieFolio).toBe('7461')
   })
 
-  it('respuesta sin Series ni Folio → serieFolio undefined (nunca cadena vacía)', async () => {
+  it('respuesta sin Serie ni Folio → serieFolio undefined (nunca cadena vacía)', async () => {
     const { FacturamaGlobalStamping } = await importAdapter()
     fetchMock.mockResolvedValueOnce(jsonResponse({ Id: 'X', Complement: { TaxStamp: { Uuid: 'Y' } } }))
 
