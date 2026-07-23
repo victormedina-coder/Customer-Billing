@@ -156,9 +156,15 @@ export interface GlobalRunSummary {
   ordersEligible: number
   unmapped: number
   /**
-   * true si algún chunk quedó en `rolled_back` (no se timbró) o en
-   * `stamped_unconfirmed` (se timbró pero el header no se pudo actualizar —
-   * requiere conciliación manual). Ambos casos exigen intervención.
+   * true si la corrida dejó pedidos elegibles SIN facturar o en estado
+   * inconsistente. Tres causas, todas del mismo tipo (hueco fiscal que exige
+   * intervención humana):
+   *   - `rolledBack`         → el chunk no se timbró.
+   *   - `stampedUnconfirmed` → se timbró pero el header no se actualizó (conciliar).
+   *   - `unmapped`           → la forma de pago no se pudo clasificar, así que el
+   *                            pedido nunca llegó a un bucket ni, por tanto, a un
+   *                            CFDI (decisión 2026-07-23: el `unmapped` debe
+   *                            alertar; antes era un hueco silencioso).
    */
   hasFailures: boolean
 }
@@ -200,7 +206,7 @@ function computeSummary(stores: StoreReport[]): GlobalRunSummary {
     }
   }
 
-  s.hasFailures = s.rolledBack > 0 || s.stampedUnconfirmed > 0
+  s.hasFailures = s.rolledBack > 0 || s.stampedUnconfirmed > 0 || s.unmapped > 0
   return s
 }
 
@@ -388,6 +394,19 @@ export class EmitGlobalInvoiceUseCase {
       excludedAlreadyInvoicedOrders: excludedAlreadyInvoiced.orders,
       unmapped: unmapped.length,
     }, '[global-invoice] tienda enumerada')
+
+    // Un pedido `unmapped` es un HUECO FISCAL, no una curiosidad: su gateway de
+    // pago no se pudo clasificar en ningún bucket, así que NUNCA llega a un CFDI
+    // — ni global (no tiene bucket) ni individual (el cliente no lo pidió). Se
+    // logea a nivel error, con identidad, para que sea accionable sin abrir el
+    // reporte; `summary.hasFailures` lo eleva además al status HTTP de la corrida.
+    if (unmapped.length > 0) {
+      this.logger.error({
+        runId, store, day: period.day, count: unmapped.length,
+        orderIds: unmapped.map((m) => m.order.id),
+        references: unmapped.map((m) => buildOrderReference(m.order.orderNumber, m.order.sourceIdentifier ?? null)),
+      }, '[global-invoice] pedidos con forma de pago NO clasificable — no se facturarán')
+    }
 
     const bucketReports: BucketReport[] = []
     for (const [bucket, bucketOrders] of buckets) {

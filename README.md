@@ -241,6 +241,7 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 | `INVOICE_WINDOW_CUTOFF_HOUR` | Hora (0-23, zona MX) del corte de facturación del último día del mes en curso — pasado el corte, la ventana individual se cierra aunque el mes no haya terminado (evita doble factura con la global). Default en código: `21` (decisión de contabilidad 2026-07-16). |
 | `BILLING_CONTACT_EMAIL` | Correo de facturación mostrado en la pantalla de bloqueo del portal cuando la ventana del mes cerró (R3). Sin valor placeholder — lo define el usuario. |
 | `TRUSTED_PROXY_COUNT` | Ver grupo de Redis / rate limiting arriba |
+| `LOG_LEVEL` | Nivel mínimo del logger estructurado (pino → JSON a stdout, que es lo que recolecta Railway). Valores: `trace`/`debug`/`info`/`warn`/`error`/`fatal`. **Default en código: `info`**, que ya incluye toda la traza operativa de la facturación global (inicio/fin de corrida, enumeración por tienda, cada chunk timbrado) y los `error` accionables (rollback, `unmapped`, conciliación pendiente). Subir a `debug` solo para diagnóstico puntual; bajar a `warn` **oculta el detalle de las corridas exitosas** y deja solo lo que falla. |
 
 ## Cron — Facturación Global (Railway)
 

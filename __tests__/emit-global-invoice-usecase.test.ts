@@ -872,6 +872,36 @@ describe('EmitGlobalInvoiceUseCase — summary agregado de la corrida', () => {
     expect(summary.hasFailures).toBe(true)
   })
 
+  // Decisión 2026-07-23: un `unmapped` es un hueco fiscal (el pedido no llega a
+  // ningún bucket → nunca se factura), así que debe ALERTAR como los demás
+  // fallos, no quedarse como dato informativo del reporte.
+  it('unmapped (forma de pago no clasificable) marca hasFailures aunque todo lo demás timbre', async () => {
+    const mapped = makeMonthlyOrder({ id: 'order-mapped' })
+    const weird = makeMonthlyOrder({ id: 'order-unmapped' })
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [mapped, weird], nextCursor: null }])
+
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({
+      monthlyOrderSource,
+      globalStamping: makeSuccessfulStamping(),
+      paymentBucketPolicy: {
+        classify: (payments) => (payments.length === 0 ? 'unmapped' : 'efectivo'),
+      },
+    }))
+    // `weird` sin pagos → 'unmapped'; `mapped` conserva los suyos → 'efectivo'.
+    weird.payments = []
+
+    const result = await useCase.execute({ year: 2026, month: 6 })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const { summary } = result.value
+    expect(summary.unmapped).toBe(1)
+    expect(summary.emitted).toBe(1)
+    expect(summary.rolledBack).toBe(0)
+    expect(summary.stampedUnconfirmed).toBe(0)
+    expect(summary.hasFailures).toBe(true)
+  })
+
   it('stamped_unconfirmed (timbrado sin registrar) también marca hasFailures', async () => {
     const order = makeMonthlyOrder({ id: 'order-1' })
     const monthlyOrderSource = pageSource(STORE, [{ orders: [order], nextCursor: null }])
