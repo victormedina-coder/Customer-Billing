@@ -17,6 +17,7 @@
  */
 
 import type { Order } from '../../domain/orders/Order'
+import { resolveSerie } from './brandSerie'
 import type { MonthlyOrder } from '../../domain/global/ports/MonthlyOrderSource'
 import type { GlobalPeriod } from '../../domain/global/GlobalPeriod'
 import type { PaymentBucket } from '../../domain/global/PaymentBucket'
@@ -95,29 +96,6 @@ const BUCKET_TO_SAT_PAYMENT_FORM: Record<PaymentBucket, string> = {
   debito: '28',
   efectivo: '01',
 }
-/**
- * Serie fiscal por marca. Es lo ÚNICO que identifica la marca en el CFDI
- * global: el emisor/CSD es el mismo para las tres marcas y el receptor es
- * genérico, así que sin Serie los comprobantes son indistinguibles en el
- * panel de Facturama y para contabilidad (hallazgo 2026-07-21).
- *
- * Los valores por defecto son la convención YA vigente en la cuenta de
- * producción (confirmada por contabilidad). Se permite override por env
- * porque el sandbox puede tener series distintas dadas de alta.
- */
-const BRAND_SERIE: Record<string, { envVar: string, fallback: string }> = {
-  'ariat':            { envVar: 'ARIAT_FACTURAMA_SERIE',    fallback: 'GDL1'  },
-  'stetson':          { envVar: 'STETSON_FACTURAMA_SERIE',  fallback: 'STET'  },
-  'western-brothers': { envVar: 'WB_FACTURAMA_SERIE',       fallback: 'WB'    },
-}
-
-/** Serie de la marca; undefined si la tienda no está mapeada (Facturama asigna la default). */
-function resolveSerie(storeName: string): string | undefined {
-  const cfg = BRAND_SERIE[storeName]
-  if (!cfg) return undefined
-  return process.env[cfg.envVar]?.trim() || cfg.fallback
-}
-
 /** Redondeo monetario a 2 decimales, igual convención que FiscalCalculator. */
 function round2(n: number): number {
   return Math.round(n * 100) / 100

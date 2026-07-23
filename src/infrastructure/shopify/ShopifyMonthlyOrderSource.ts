@@ -198,7 +198,7 @@ export class ShopifyMonthlyOrderSource implements MonthlyOrderSource {
     )
 
     const orders: MonthlyOrder[] = data.orders.edges.map(({ node }) => ({
-      order: normalizeOrder(node, cfg.label),
+      order: normalizeOrder(node, cfg.label, cfg.key),
       payments: normalizePayments(node.transactions),
     }))
 

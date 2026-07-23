@@ -13,6 +13,7 @@ import type { NormalizedOrderWithPayment } from '../../domain/orders/Order'
 import type { FiscalInput } from '../../domain/fiscal/FiscalInput'
 import { FiscalCalculator } from '../../domain/fiscal/FiscalCalculator'
 import { buildOrderReference } from '../../domain/orders/OrderReference'
+import { resolveSerie } from './brandSerie'
 import {
   classifyGateway,
   type GatewayPaymentClass,
@@ -55,7 +56,15 @@ export interface CfdiReceiver {
 
 export interface CfdiPayload {
   NameId: string
-  Folio: string
+  /**
+   * Serie fiscal de la marca (GDL1/STET/WB, ver brandSerie.ts). En producción
+   * hay UNA sola numeración por marca gobernada por su Serie — global e
+   * individual comparten la secuencia (2026-07-23). NO existe `Folio` a
+   * propósito: Facturama lo asigna e incrementa por Serie, igual que el CFDI
+   * global. Se OMITE (opcional) si la marca no se conoce → serie por defecto de
+   * la sucursal.
+   */
+  Serie?: string
   CfdiType: 'I'
   ExpeditionPlace: string
   Exportation: '01'
@@ -121,8 +130,9 @@ export function buildCfdiPayload(
     throw new Error('buildCfdiPayload: expeditionPlace es obligatorio y no puede estar vacío.')
   }
 
-  // Folio: timestamp en ms truncado a 8 dígitos para unicidad razonable
-  const folio = String(Date.now()).slice(-8)
+  // Serie fiscal de la marca — Facturama numera el Folio por Serie (no lo
+  // mandamos nosotros). undefined si la marca no se conoce → serie por defecto.
+  const serie = resolveSerie(order.brand)
 
   const paymentForm = mapPaymentForm(order.paymentGatewayNames)
 
@@ -179,7 +189,7 @@ export function buildCfdiPayload(
 
   return {
     NameId:          nameId,
-    Folio:           folio,
+    ...(serie ? { Serie: serie } : {}),
     CfdiType:        'I',
     ExpeditionPlace: expeditionPlace,
     Exportation:     '01',
