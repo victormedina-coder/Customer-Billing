@@ -130,11 +130,57 @@ export function mxMonthBounds(year: number, month: number): { from: Date; to: Da
  * exactas a un instante UTC siempre aterriza en el mismo punto de reloj MX
  * sin ambigüedad de huso horario.
  */
-export function mxMonthInvoiceCutoff(year: number, month: number, cutoffHour: number = 21): Date {
+export function mxMonthInvoiceCutoff(year: number, month: number, cutoffHour: number = DEFAULT_INVOICE_CUTOFF_HOUR): Date {
   const nextMonth = month === 12 ? 1 : month + 1
   const nextYear = month === 12 ? year + 1 : year
   const hoursBeforeNextMidnight = 24 - cutoffHour
   return new Date(mxMonthStart(nextYear, nextMonth).getTime() - hoursBeforeNextMidnight * 60 * 60 * 1000)
+}
+
+/**
+ * Análogo DIARIO de `mxMonthInvoiceCutoff`: instante UTC del corte del día
+ * `day`/`month`/`year` — `cutoffHour` horas de ESE día en zona MX.
+ *
+ * Misma técnica que el mensual (medianoche del día SIGUIENTE menos
+ * `24 − cutoffHour` horas) para reusar la normalización de `mxDayStart`: un
+ * `day + 1` fuera de rango lo resuelve `Date.UTC` (fin de mes, fin de año,
+ * 29-feb) sin lógica de calendario adicional. Por la misma razón acepta
+ * `day = 0`, que denota el último día del mes anterior.
+ */
+export function mxDayInvoiceCutoff(
+  year: number,
+  month: number,
+  day: number,
+  cutoffHour: number = DEFAULT_INVOICE_CUTOFF_HOUR,
+): Date {
+  const hoursBeforeNextMidnight = 24 - cutoffHour
+  return new Date(mxDayStart(year, month, day + 1).getTime() - hoursBeforeNextMidnight * 60 * 60 * 1000)
+}
+
+/** Hora de corte por defecto (21:00 MX) — decisión de contabilidad 2026-07-16, ADR-009. */
+export const DEFAULT_INVOICE_CUTOFF_HOUR = 21
+
+/**
+ * Hora (0-23, zona MX) del corte de facturación. **Fuente única de verdad**:
+ * la consumen tanto `InvoiceWindowPolicy` (ventana del portal individual)
+ * como `GlobalPeriod` (ventana rodante de la global). Override por env
+ * `INVOICE_WINDOW_CUTOFF_HOUR`; un valor vacío, no numérico o fuera de 0-23
+ * cae al default.
+ *
+ * Vive aquí y no en cada policy porque mover el corte es una decisión de
+ * contabilidad que debe aplicarse en UN lugar: si la ventana individual
+ * cerrara a las 23:00 y la global siguiera barriendo a las 21:00, los
+ * pedidos de esas 2 horas quedarían fuera de ambas vías.
+ *
+ * ⚠️ Cadena vacía NO es 0: `INVOICE_WINDOW_CUTOFF_HOUR=` en el `.env` debe
+ * caer al default, no a medianoche (que equivale a "sin corte"). Por eso el
+ * guardia es `if (!raw)` y no `??` — ver el fallo del probe del 2026-07-23.
+ */
+export function resolveInvoiceCutoffHour(): number {
+  const raw = process.env.INVOICE_WINDOW_CUTOFF_HOUR
+  if (!raw) return DEFAULT_INVOICE_CUTOFF_HOUR
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 23 ? parsed : DEFAULT_INVOICE_CUTOFF_HOUR
 }
 
 /**

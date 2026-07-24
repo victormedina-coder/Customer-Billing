@@ -44,32 +44,63 @@ describe('createGlobalPeriod — códigos', () => {
   })
 })
 
-describe('createGlobalPeriod — rangeMx (bordes de mes en zona MX)', () => {
-  it('junio 2026: from = 2026-06-01T00:00 MX, to = 2026-06-30T23:59:59.999 MX', () => {
+describe('createGlobalPeriod — rangeMx (VENTANA RODANTE anclada al corte, finanzas 2026-07-24)', () => {
+  // El corte por defecto son las 21:00 MX = 03:00 UTC del día siguiente
+  // (MX es UTC-6 fijo, sin DST desde 2022).
+  it('junio 2026: from = corte de MAYO (31-may 21:00 MX), to = corte de junio − 1ms', () => {
     const { from, to } = createGlobalPeriod(2026, 6).rangeMx()
-    // 00:00 MX = 06:00 UTC (MX es UTC-6 fijo, sin DST desde 2022)
-    expect(from.toISOString()).toBe('2026-06-01T06:00:00.000Z')
-    // 23:59:59.999 MX del 30 de junio = 05:59:59.999 UTC del 1 de julio
-    expect(to.toISOString()).toBe('2026-07-01T05:59:59.999Z')
+    expect(from.toISOString()).toBe('2026-06-01T03:00:00.000Z') // 31-may 21:00 MX
+    expect(to.toISOString()).toBe('2026-07-01T02:59:59.999Z')   // 30-jun 20:59:59.999 MX
   })
 
-  it('febrero bisiesto (2028): to cae en 29 de febrero', () => {
+  it('febrero bisiesto (2028): el corte cae el 29 de febrero', () => {
     const { to } = createGlobalPeriod(2028, 2).rangeMx()
-    expect(to.toISOString()).toBe('2028-03-01T05:59:59.999Z')
+    expect(to.toISOString()).toBe('2028-03-01T02:59:59.999Z')
   })
 
-  it('febrero no bisiesto (2026): to cae en 28 de febrero', () => {
+  it('febrero no bisiesto (2026): el corte cae el 28 de febrero', () => {
     const { to } = createGlobalPeriod(2026, 2).rangeMx()
-    expect(to.toISOString()).toBe('2026-03-01T05:59:59.999Z')
+    expect(to.toISOString()).toBe('2026-03-01T02:59:59.999Z')
   })
 
-  it('diciembre → enero: to del periodo de diciembre cruza al 1 de enero del año siguiente', () => {
+  it('diciembre → enero: el corte de diciembre cruza al año siguiente', () => {
     const { from, to } = createGlobalPeriod(2026, 12).rangeMx()
-    expect(from.toISOString()).toBe('2026-12-01T06:00:00.000Z')
-    expect(to.toISOString()).toBe('2027-01-01T05:59:59.999Z')
+    expect(from.toISOString()).toBe('2026-12-01T03:00:00.000Z') // 30-nov 21:00 MX
+    expect(to.toISOString()).toBe('2027-01-01T02:59:59.999Z')   // 31-dic 20:59:59.999 MX
   })
 
-  it('from y to son consistentes: to > from y to está dentro del mismo mes calendario MX', () => {
+  it('enero: el `from` retrocede al corte de DICIEMBRE del año anterior', () => {
+    const { from } = createGlobalPeriod(2026, 1).rangeMx()
+    expect(from.toISOString()).toBe('2026-01-01T03:00:00.000Z') // 31-dic-2025 21:00 MX
+  })
+
+  it('INVARIANTE: periodos consecutivos EMBONAN — sin hueco ni traslape', () => {
+    const junio = createGlobalPeriod(2026, 6).rangeMx()
+    const julio = createGlobalPeriod(2026, 7).rangeMx()
+    const agosto = createGlobalPeriod(2026, 8).rangeMx()
+
+    expect(julio.from.getTime()).toBe(junio.to.getTime() + 1)
+    expect(agosto.from.getTime()).toBe(julio.to.getTime() + 1)
+  })
+
+  it('el ticket post-corte del último día del mes cae en la global del mes SIGUIENTE', () => {
+    // Caso real: venta POS del 31-jul-2026 a las 22:48 MX (= 1-ago 04:48 UTC).
+    // Es la venta que con el rango de mes calendario no entraba en NINGUNA global.
+    const ticket = new Date('2026-08-01T04:48:00.000Z')
+    const julio = createGlobalPeriod(2026, 7).rangeMx()
+    const agosto = createGlobalPeriod(2026, 8).rangeMx()
+
+    expect(ticket > julio.to).toBe(true)
+    expect(ticket >= agosto.from && ticket <= agosto.to).toBe(true)
+  })
+
+  it('la hora de corte es inyectable: con corte a las 23:00 la frontera se recorre 2 h', () => {
+    const { from, to } = createGlobalPeriod(2026, 6, 23).rangeMx()
+    expect(from.toISOString()).toBe('2026-06-01T05:00:00.000Z') // 31-may 23:00 MX
+    expect(to.toISOString()).toBe('2026-07-01T04:59:59.999Z')   // 30-jun 22:59:59.999 MX
+  })
+
+  it('from y to son consistentes: to > from', () => {
     const { from, to } = createGlobalPeriod(2026, 6).rangeMx()
     expect(to.getTime()).toBeGreaterThan(from.getTime())
   })
@@ -124,11 +155,23 @@ describe('createDailyGlobalPeriod — códigos', () => {
   })
 })
 
-describe('createDailyGlobalPeriod — rangeMx (un solo día en zona MX)', () => {
-  it('15-jun-2026: from = 00:00 MX, to = 23:59:59.999 MX del mismo día', () => {
+describe('createDailyGlobalPeriod — rangeMx (ventana rodante de 24 h entre cortes)', () => {
+  it('15-jun-2026: from = corte del día 14 (21:00 MX), to = corte del día 15 − 1ms', () => {
     const { from, to } = createDailyGlobalPeriod(2026, 6, 15).rangeMx()
-    expect(from.toISOString()).toBe('2026-06-15T06:00:00.000Z')
-    expect(to.toISOString()).toBe('2026-06-16T05:59:59.999Z')
+    expect(from.toISOString()).toBe('2026-06-15T03:00:00.000Z') // 14-jun 21:00 MX
+    expect(to.toISOString()).toBe('2026-06-16T02:59:59.999Z')   // 15-jun 20:59:59.999 MX
+  })
+
+  it('día 1: el `from` retrocede al corte del último día del mes ANTERIOR', () => {
+    const { from, to } = createDailyGlobalPeriod(2026, 7, 1).rangeMx()
+    expect(from.toISOString()).toBe('2026-07-01T03:00:00.000Z') // 30-jun 21:00 MX
+    expect(to.toISOString()).toBe('2026-07-02T02:59:59.999Z')   // 1-jul 20:59:59.999 MX
+  })
+
+  it('INVARIANTE: días consecutivos EMBONAN — sin hueco ni traslape', () => {
+    const dia22 = createDailyGlobalPeriod(2026, 7, 22).rangeMx()
+    const dia23 = createDailyGlobalPeriod(2026, 7, 23).rangeMx()
+    expect(dia23.from.getTime()).toBe(dia22.to.getTime() + 1)
   })
 
   it('el rango es de un solo día, NO del mes completo (a diferencia del mensual)', () => {

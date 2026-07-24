@@ -28,7 +28,7 @@
  * GlobalPeriod (src/domain/global/) para la facturación global mensual.
  */
 
-import { getMxYearMonth, mxMonthInvoiceCutoff, mxMonthStart } from '../shared/MxCalendar'
+import { getMxYearMonth, mxMonthInvoiceCutoff, mxMonthStart, resolveInvoiceCutoffHour } from '../shared/MxCalendar'
 
 /** Modos de ventana disponibles. Hoy solo se usa 'current-month'. */
 type InvoiceWindowMode = 'current-month'
@@ -38,22 +38,15 @@ type InvoiceWindowMode = 'current-month'
 const INVOICE_WINDOW_MODE: InvoiceWindowMode =
   (process.env.INVOICE_WINDOW_MODE as InvoiceWindowMode | undefined) ?? 'current-month'
 
-const DEFAULT_CUTOFF_HOUR = 21
-
 /**
  * Hora (0-23, zona MX) del corte de facturación del último día del mes.
- * Punto configurable — mirror de INVOICE_WINDOW_MODE: override por env
- * `INVOICE_WINDOW_CUTOFF_HOUR`, default 21 (decisión de contabilidad
- * 2026-07-16). Un valor fuera de 0-23 o no numérico cae al default.
+ *
+ * La resolución vive en el shared kernel (`resolveInvoiceCutoffHour`) porque
+ * la comparte con `GlobalPeriod`: la ventana del portal individual y la
+ * ventana rodante de la global DEBEN cerrar a la misma hora, o los pedidos
+ * de la franja intermedia quedan fuera de ambas vías (2026-07-24).
  */
-function resolveCutoffHour(): number {
-  const raw = process.env.INVOICE_WINDOW_CUTOFF_HOUR
-  if (!raw) return DEFAULT_CUTOFF_HOUR
-  const parsed = Number(raw)
-  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 23 ? parsed : DEFAULT_CUTOFF_HOUR
-}
-
-const INVOICE_WINDOW_CUTOFF_HOUR: number = resolveCutoffHour()
+const INVOICE_WINDOW_CUTOFF_HOUR: number = resolveInvoiceCutoffHour()
 
 /**
  * Corte de facturación del mes EN CURSO respecto a `now` (zona MX). Único

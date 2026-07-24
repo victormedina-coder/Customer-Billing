@@ -66,7 +66,11 @@ describe('FacturamaInvoicedOrdersGateway.listInvoicedOrderKeys', () => {
 
     const [url] = fetchMock.mock.calls[0] as [string]
     const params = new URL(url).searchParams
-    expect(params.get('dateStart')).toBe('01/06/2026')
+    // Ventana rodante: el periodo de junio arranca en el corte de MAYO
+    // (31-may 21:00 MX), así que dateStart retrocede un día respecto al mes
+    // calendario. Debe coincidir con el rango de la enumeración de pedidos —
+    // si divergieran, la costura entre periodos duplicaría facturas.
+    expect(params.get('dateStart')).toBe('31/05/2026')
     expect(params.get('dateEnd')).toBe('30/06/2026')
   })
 
