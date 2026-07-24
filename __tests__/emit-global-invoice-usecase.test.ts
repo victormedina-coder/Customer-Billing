@@ -337,6 +337,68 @@ describe('EmitGlobalInvoiceUseCase — filtros de elegibilidad', () => {
     expect(store.partialRefunds).toBe(1)
     expect(store.eligible).toBe(2) // partial-refund + normal
   })
+
+  it('identifica al pedido no-pagado y al reembolsado total, con su porqué', async () => {
+    const monthlyOrderSource = pageSource(STORE, [
+      {
+        orders: [
+          makeMonthlyOrder({ id: 'no-paid', financialStatus: 'PENDING' }),
+          makeMonthlyOrder({ id: 'full-refund', total: 116, refundedAmount: 116, financialStatus: 'REFUNDED' }),
+          makeMonthlyOrder({ id: 'normal' }),
+        ],
+        nextCursor: null,
+      },
+    ])
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource }))
+
+    const result = await useCase.execute({ year: 2026, month: 6, dryRun: true })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const store = result.value.stores[0]
+
+    expect(store.skippedUnpaid.count).toBe(1)
+    expect(store.skippedUnpaid.orders[0].orderId).toBe('no-paid')
+    expect(store.skippedUnpaid.orders[0].financialStatus).toBe('PENDING')
+    expect(store.skippedUnpaid.orders[0].reference).toBeTruthy()
+
+    expect(store.skippedFullyRefunded.count).toBe(1)
+    expect(store.skippedFullyRefunded.orders[0].orderId).toBe('full-refund')
+    expect(store.skippedFullyRefunded.orders[0].refundedAmount).toBe(116)
+  })
+
+  it('el reporte concilia: enumerated − descartes − eligible === 0 (invariante)', async () => {
+    const monthlyOrderSource = pageSource(STORE, [
+      {
+        orders: [
+          makeMonthlyOrder({ id: 'no-pos', sourceIdentifier: null }),
+          makeMonthlyOrder({ id: 'no-paid', financialStatus: 'PENDING' }),
+          makeMonthlyOrder({ id: 'full-refund', total: 116, refundedAmount: 116, financialStatus: 'REFUNDED' }),
+          makeMonthlyOrder({ id: 'zero-total', total: 0 }),
+          makeMonthlyOrder({ id: 'normal' }),
+        ],
+        nextCursor: null,
+      },
+    ])
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource }))
+
+    const result = await useCase.execute({ year: 2026, month: 6, dryRun: true })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const store = result.value.stores[0]
+
+    expect(store.unaccounted).toBe(0)
+    expect(
+      store.enumerated
+      - store.skippedNonPos
+      - store.skippedUnpaid.count
+      - store.skippedFullyRefunded.count
+      - store.skippedZeroTotal,
+    ).toBe(store.eligible)
+    expect(result.value.summary.unaccounted).toBe(0)
+    expect(result.value.summary.hasFailures).toBe(false)
+  })
 })
 
 describe('EmitGlobalInvoiceUseCase — pedidos con total 0 (descuento 100%), decisión finanzas 2026-07-10', () => {
@@ -689,10 +751,10 @@ describe('EmitGlobalInvoiceUseCase — periodicidad DIARIA (R1)', () => {
     expect(result.ok).toBe(true)
     expect(monthlyOrderSource.calls).toHaveLength(1)
     const { from, to } = monthlyOrderSource.calls[0]
-    // Rango de UN día en zona MX (00:00 → 23:59:59.999 MX del 15-jun-2026),
-    // NO el mes completo — ver createDailyGlobalPeriod/mxDayBounds.
-    expect(from.toISOString()).toBe('2026-06-15T06:00:00.000Z')
-    expect(to.toISOString()).toBe('2026-06-16T05:59:59.999Z')
+    // Ventana rodante de UN día: del corte del día 14 al corte del día 15
+    // (21:00 MX), NO el mes completo — ver createDailyGlobalPeriod.
+    expect(from.toISOString()).toBe('2026-06-15T03:00:00.000Z')
+    expect(to.toISOString()).toBe('2026-06-16T02:59:59.999Z')
   })
 
   it('el report incluye day cuando la corrida fue diaria', async () => {

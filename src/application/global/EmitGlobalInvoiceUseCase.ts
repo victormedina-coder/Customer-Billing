@@ -122,6 +122,39 @@ export interface ExcludedAlreadyInvoicedReport {
   orders: ExcludedOrderIdentity[]
 }
 
+/**
+ * Identidad de auditoría de un pedido descartado en el filtro de elegibilidad.
+ *
+ * Motivación (2026-07-24): los filtros de "no pagado" y "reembolso total"
+ * descartaban con un `continue` pelón — sin contador y sin identidad. El
+ * síntoma fue un reporte que no concilia (Ariat día 23: 58 − 8 − 1 ≠ 47) y la
+ * imposibilidad de responder QUÉ pedidos faltaban sin abrir Shopify a mano.
+ */
+export interface SkippedOrderIdentity {
+  /** `order.id` de Shopify (gid). */
+  orderId: string
+  /** Referencia humana (`buildOrderReference`), ej. `"#1150 2-1244"`. */
+  reference: string
+  /** Estado de cobro que reportó Shopify en la corrida — el porqué del descarte. */
+  financialStatus: string
+}
+
+export interface SkippedOrdersReport {
+  count: number
+  orders: SkippedOrderIdentity[]
+}
+
+/** Igual que `SkippedOrderIdentity`, con los montos que explican el reembolso total. */
+export interface RefundedOrderIdentity extends SkippedOrderIdentity {
+  total: number
+  refundedAmount: number
+}
+
+export interface RefundedOrdersReport {
+  count: number
+  orders: RefundedOrderIdentity[]
+}
+
 export interface StoreReport {
   store: string
   enumerated: number
@@ -130,9 +163,23 @@ export interface StoreReport {
   partialRefunds: number
   /** Pedidos con total neto 0 (descuento 100%) — no facturables, excluidos antes de clasificar por bucket. */
   skippedZeroTotal: number
+  /** Pedidos sin cobro efectivo (Shopify ≠ PAID / PARTIALLY_REFUNDED). */
+  skippedUnpaid: SkippedOrdersReport
+  /** Pedidos con reembolso TOTAL (`RefundPolicy.isFullyRefunded`). */
+  skippedFullyRefunded: RefundedOrdersReport
   excludedAlreadyInvoiced: ExcludedAlreadyInvoicedReport
   unmapped: UnmappedReport
   buckets: BucketReport[]
+  /**
+   * `enumerated` − (todos los descartes contados) − `eligible`. DEBE ser 0.
+   *
+   * Un valor ≠ 0 significa que existe un filtro que descarta SIN contar — el
+   * defecto de 2026-07-24, cuya única señal era que la resta no daba y nadie
+   * la hacía. Se reporta como número en vez de lanzar excepción para no
+   * abortar una corrida fiscal por un descuadre de auditoría; la señal se
+   * eleva por `summary.hasFailures`.
+   */
+  unaccounted: number
 }
 
 /**
@@ -155,9 +202,11 @@ export interface GlobalRunSummary {
   dryRun: number
   ordersEligible: number
   unmapped: number
+  /** Suma de `StoreReport.unaccounted`. Distinto de 0 ⇒ hay un filtro que descarta en silencio. */
+  unaccounted: number
   /**
    * true si la corrida dejó pedidos elegibles SIN facturar o en estado
-   * inconsistente. Tres causas, todas del mismo tipo (hueco fiscal que exige
+   * inconsistente. Cuatro causas, todas del mismo tipo (hueco fiscal que exige
    * intervención humana):
    *   - `rolledBack`         → el chunk no se timbró.
    *   - `stampedUnconfirmed` → se timbró pero el header no se actualizó (conciliar).
@@ -165,6 +214,9 @@ export interface GlobalRunSummary {
    *                            pedido nunca llegó a un bucket ni, por tanto, a un
    *                            CFDI (decisión 2026-07-23: el `unmapped` debe
    *                            alertar; antes era un hueco silencioso).
+   *   - `unaccounted`        → el reporte no concilia: hay pedidos enumerados que
+   *                            no aparecen ni como descarte contado ni como
+   *                            elegibles (2026-07-24).
    */
   hasFailures: boolean
 }
@@ -185,28 +237,29 @@ function computeSummary(stores: StoreReport[]): GlobalRunSummary {
   const s: GlobalRunSummary = {
     chunks: 0, emitted: 0, rolledBack: 0, skippedIdempotent: 0,
     stampedUnconfirmed: 0, empty: 0, dryRun: 0,
-    ordersEligible: 0, unmapped: 0, hasFailures: false,
+    ordersEligible: 0, unmapped: 0, unaccounted: 0, hasFailures: false,
   }
 
   for (const store of stores) {
     s.ordersEligible += store.eligible
     s.unmapped += store.unmapped.count
+    s.unaccounted += store.unaccounted
     for (const bucket of store.buckets) {
       for (const chunk of bucket.chunks) {
         s.chunks++
         switch (chunk.outcome) {
-          case 'emitted':             s.emitted++; break
-          case 'rolled_back':         s.rolledBack++; break
-          case 'skipped_idempotent':  s.skippedIdempotent++; break
+          case 'emitted': s.emitted++; break
+          case 'rolled_back': s.rolledBack++; break
+          case 'skipped_idempotent': s.skippedIdempotent++; break
           case 'stamped_unconfirmed': s.stampedUnconfirmed++; break
-          case 'empty':               s.empty++; break
-          case 'dry_run':             s.dryRun++; break
+          case 'empty': s.empty++; break
+          case 'dry_run': s.dryRun++; break
         }
       }
     }
   }
 
-  s.hasFailures = s.rolledBack > 0 || s.stampedUnconfirmed > 0 || s.unmapped > 0
+  s.hasFailures = s.rolledBack > 0 || s.stampedUnconfirmed > 0 || s.unmapped > 0 || s.unaccounted !== 0
   return s
 }
 
@@ -344,6 +397,8 @@ export class EmitGlobalInvoiceUseCase {
     let skippedNonPos = 0
     let partialRefunds = 0
     let skippedZeroTotal = 0
+    const skippedUnpaid: SkippedOrderIdentity[] = []
+    const skippedFullyRefunded: RefundedOrderIdentity[] = []
     const eligible: MonthlyOrder[] = []
 
     for (const monthlyOrder of monthlyOrders) {
@@ -355,16 +410,39 @@ export class EmitGlobalInvoiceUseCase {
         continue
       }
 
-      // (b) Solo pagados. Shopify marca un pedido con reembolso PARCIAL como
-      // displayFinancialStatus='PARTIALLY_REFUNDED' (no 'PAID') aunque el
-      // cobro original sí se realizó — por eso el filtro acepta ambos y deja
-      // que RefundPolicy.isFullyRefunded (paso c) sea el único que excluye
-      // por reembolso, evitando que un reembolso parcial (D2: se incluye al
-      // neto) caiga fuera del filtro de "pagado".
-      if (!PAID_LIKE_STATUSES.has(order.financialStatus)) continue
+      // (b) Excluir totalmente reembolsados. Va ANTES del filtro de cobro
+      // porque Shopify marca el reembolso total como financialStatus
+      // 'REFUNDED', que NO es PAID-like: si el orden fuera el inverso, un
+      // reembolso se reportaría como "no pagado". Eso es lo que restaura el
+      // invariante que el comentario de (c) siempre declaró — que
+      // `RefundPolicy.isFullyRefunded` sea el ÚNICO filtro que excluye por
+      // reembolso (2026-07-24: la implementación se había desviado del diseño
+      // documentado, y el descarte silencioso lo mantuvo invisible).
+      if (this.deps.refundPolicy.isFullyRefunded(order)) {
+        skippedFullyRefunded.push({
+          orderId: order.id,
+          reference: buildOrderReference(order.orderNumber, order.sourceIdentifier ?? null),
+          financialStatus: order.financialStatus,
+          total: order.total,
+          refundedAmount: order.refundedAmount,
+        })
+        continue
+      }
 
-      // (c) Excluir totalmente reembolsados.
-      if (this.deps.refundPolicy.isFullyRefunded(order)) continue
+      // (c) Solo pagados. Shopify marca un pedido con reembolso PARCIAL como
+      // displayFinancialStatus='PARTIALLY_REFUNDED' (no 'PAID') aunque el
+      // cobro original sí se realizó — por eso el filtro acepta ambos, para
+      // que un reembolso parcial (D2: se incluye al neto) no caiga fuera del
+      // filtro de "pagado". Lo que llega aquí y no es PAID-like es un pedido
+      // sin cobro efectivo (PENDING, AUTHORIZED, EXPIRED, VOIDED…).
+      if (!PAID_LIKE_STATUSES.has(order.financialStatus)) {
+        skippedUnpaid.push({
+          orderId: order.id,
+          reference: buildOrderReference(order.orderNumber, order.sourceIdentifier ?? null),
+          financialStatus: order.financialStatus,
+        })
+        continue
+      }
 
       // (d) Excluir pedidos con TOTAL neto 0 (descuento 100%) — no
       // facturables (finanzas 2026-07-10). Se evalúa ANTES de agrupar por
@@ -387,13 +465,36 @@ export class EmitGlobalInvoiceUseCase {
     const { survivors, excludedAlreadyInvoiced } = await this.excludeAlreadyInvoiced(store, period, eligible)
     const { buckets, unmapped } = this.groupByBucket(survivors)
 
+    const unaccounted =
+      monthlyOrders.length
+      - skippedNonPos
+      - skippedUnpaid.length
+      - skippedFullyRefunded.length
+      - skippedZeroTotal
+      - eligible.length
+
     this.logger.info({
       runId, store, day: period.day, enumerated: monthlyOrders.length, eligible: eligible.length,
       skippedNonPos, partialRefunds, skippedZeroTotal,
+      skippedUnpaid: skippedUnpaid.length,
+      skippedUnpaidOrders: skippedUnpaid,
+      skippedFullyRefunded: skippedFullyRefunded.length,
+      skippedFullyRefundedOrders: skippedFullyRefunded,
       excludedAlreadyInvoiced: excludedAlreadyInvoiced.count,
       excludedAlreadyInvoicedOrders: excludedAlreadyInvoiced.orders,
       unmapped: unmapped.length,
+      unaccounted,
     }, '[global-invoice] tienda enumerada')
+
+    // El reporte de la global es un documento de conciliación: todo pedido
+    // enumerado debe terminar en exactamente una casilla. Si esta resta no da
+    // cero hay un filtro que descarta sin contar, y el reporte deja de servir
+    // como evidencia ante contabilidad.
+    if (unaccounted !== 0) {
+      this.logger.error({
+        runId, store, day: period.day, unaccounted, enumerated: monthlyOrders.length,
+      }, '[global-invoice] el reporte NO concilia — hay un filtro que descarta sin contar')
+    }
 
     // Un pedido `unmapped` es un HUECO FISCAL, no una curiosidad: su gateway de
     // pago no se pudo clasificar en ningún bucket, así que NUNCA llega a un CFDI
@@ -420,9 +521,12 @@ export class EmitGlobalInvoiceUseCase {
       skippedNonPos,
       partialRefunds,
       skippedZeroTotal,
+      skippedUnpaid: { count: skippedUnpaid.length, orders: skippedUnpaid },
+      skippedFullyRefunded: { count: skippedFullyRefunded.length, orders: skippedFullyRefunded },
       excludedAlreadyInvoiced,
       unmapped: { count: unmapped.length, orderIds: unmapped.map((mo) => mo.order.id) },
       buckets: bucketReports,
+      unaccounted,
     }
   }
 

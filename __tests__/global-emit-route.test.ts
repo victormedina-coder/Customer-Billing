@@ -43,7 +43,7 @@ const SECRET = 'test-global-secret'
 const EMPTY_SUMMARY: GlobalRunSummary = {
   chunks: 0, emitted: 0, rolledBack: 0, skippedIdempotent: 0,
   stampedUnconfirmed: 0, empty: 0, dryRun: 0,
-  ordersEligible: 0, unmapped: 0, hasFailures: false,
+  ordersEligible: 0, unmapped: 0, unaccounted: 0, hasFailures: false,
 }
 
 function makeFakeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
