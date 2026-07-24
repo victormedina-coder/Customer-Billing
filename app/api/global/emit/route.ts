@@ -50,6 +50,8 @@ import { enforceRateLimit } from '@/src/interface/http/withRateLimit'
 import { currentMxDay, currentMxYearMonth, previousMxDay, previousMxYearMonth } from '@/src/domain/shared/MxCalendar'
 import { getEvaluationNow } from '@/src/infrastructure/time/getEvaluationNow'
 import { logger } from '@/src/infrastructure/observability/logger'
+import { makeRunReportNotifier } from '@/src/composition/makeRunReportNotifier'
+import { shouldEmailRunReport } from '@/src/application/global/RunReportEmailPolicy'
 
 const SECRET_HEADER = 'x-global-secret'
 
@@ -170,6 +172,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   const report = result.value
+
+  // ── 5b. Aviso por correo (best-effort) ────────────────────────────────────
+  // NUNCA puede afectar la corrida fiscal: la facturación ya ocurrió arriba.
+  // Un fallo del SMTP se registra y se ignora; el status HTTP lo sigue
+  // decidiendo hasFailures. Se envía DESPUÉS de resolver el reporte para que
+  // el correo de fallo (hasFailures) también salga.
+  if (shouldEmailRunReport(report)) {
+    try {
+      await makeRunReportNotifier().notify(report)
+    } catch (err) {
+      logger.error(
+        { runId: report.runId, err: (err as Error).message },
+        '[global-emit-route] fallo al enviar el aviso por correo — la corrida NO se ve afectada',
+      )
+    }
+  }
 
   // Un chunk en `rolled_back`/`stamped_unconfirmed` es un hueco fiscal: pedidos
   // elegibles que no quedaron timbrados (o timbrados sin registrar). Se responde
