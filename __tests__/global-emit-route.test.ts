@@ -33,6 +33,17 @@ vi.mock('../src/composition/makeEmitGlobalInvoiceUseCase', () => ({
   makeEmitGlobalInvoiceUseCase: vi.fn(),
 }))
 
+// El aviso por correo es un efecto de RED que el route dispara tras resolver el
+// reporte. Se mockea aquí para que estos tests (resolución de periodo) no abran
+// una conexión SMTP real: si el .env trae SMTP_*, makeRunReportNotifier
+// construye un transporte de nodemailer de verdad, y en las corridas MENSUALES
+// —que sí emiten correo— con vi.useFakeTimers() los timers de nodemailer quedan
+// congelados y el envío cuelga hasta el timeout. El comportamiento del correo
+// tiene su propia suite en run-report-notifier.test.ts.
+vi.mock('../src/composition/makeRunReportNotifier', () => ({
+  makeRunReportNotifier: vi.fn(() => ({ notify: vi.fn(async () => {}) })),
+}))
+
 let rateLimitMod: typeof import('../src/infrastructure/rate-limit')
 let compositionMod: typeof import('../src/composition/makeEmitGlobalInvoiceUseCase')
 let POST: typeof import('../app/api/global/emit/route')['POST']
@@ -42,7 +53,7 @@ const SECRET = 'test-global-secret'
 /** Resumen "todo en ceros" — corrida sin chunks, que es el caso base sin fallos. */
 const EMPTY_SUMMARY: GlobalRunSummary = {
   chunks: 0, emitted: 0, rolledBack: 0, skippedIdempotent: 0,
-  stampedUnconfirmed: 0, empty: 0, dryRun: 0,
+  skippedUnpaid: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0,
   ordersEligible: 0, unmapped: 0, unaccounted: 0, hasFailures: false,
 }
 

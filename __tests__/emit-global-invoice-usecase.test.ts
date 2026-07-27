@@ -365,6 +365,9 @@ describe('EmitGlobalInvoiceUseCase — filtros de elegibilidad', () => {
     expect(store.skippedFullyRefunded.count).toBe(1)
     expect(store.skippedFullyRefunded.orders[0].orderId).toBe('full-refund')
     expect(store.skippedFullyRefunded.orders[0].refundedAmount).toBe(116)
+
+    expect(result.value.summary.skippedUnpaid).toBe(1)
+    expect(result.value.summary.hasFailures).toBe(true)
   })
 
   it('el reporte concilia: enumerated − descartes − eligible === 0 (invariante)', async () => {
@@ -397,7 +400,7 @@ describe('EmitGlobalInvoiceUseCase — filtros de elegibilidad', () => {
       - store.skippedZeroTotal,
     ).toBe(store.eligible)
     expect(result.value.summary.unaccounted).toBe(0)
-    expect(result.value.summary.hasFailures).toBe(false)
+    expect(result.value.summary.hasFailures).toBe(true)
   })
 })
 

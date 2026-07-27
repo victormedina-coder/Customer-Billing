@@ -35,7 +35,7 @@ function makeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
     dryRun: false,
     summary: {
       chunks: 1, emitted: 1, rolledBack: 0, skippedIdempotent: 0, stampedUnconfirmed: 0,
-      empty: 0, dryRun: 0, ordersEligible: 1, unmapped: 0, unaccounted: 0, hasFailures: false,
+      empty: 0, dryRun: 0, ordersEligible: 1, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false,
     },
     stores: [makeStore()],
     ...overrides,

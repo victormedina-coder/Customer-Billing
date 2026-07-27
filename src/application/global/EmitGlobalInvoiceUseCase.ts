@@ -204,6 +204,8 @@ export interface GlobalRunSummary {
   unmapped: number
   /** Suma de `StoreReport.unaccounted`. Distinto de 0 ⇒ hay un filtro que descarta en silencio. */
   unaccounted: number
+  /** Suma de `StoreReport.skippedUnpaid.count` — pedidos POS sin cobro efectivo (finanzas 2026-07-24: alerta). */
+  skippedUnpaid:number
   /**
    * true si la corrida dejó pedidos elegibles SIN facturar o en estado
    * inconsistente. Cuatro causas, todas del mismo tipo (hueco fiscal que exige
@@ -217,6 +219,9 @@ export interface GlobalRunSummary {
    *   - `unaccounted`        → el reporte no concilia: hay pedidos enumerados que
    *                            no aparecen ni como descarte contado ni como
    *                            elegibles (2026-07-24).
+   *   - `skippedUnpaid`      → un pedido POS quedó sin cobro efectivo (PENDING,
+   *                            etc.); debe revisarse (finanzas 2026-07-24: un POS
+   *                            sin pagar es anomalía, no ruido).
    */
   hasFailures: boolean
 }
@@ -237,13 +242,14 @@ function computeSummary(stores: StoreReport[]): GlobalRunSummary {
   const s: GlobalRunSummary = {
     chunks: 0, emitted: 0, rolledBack: 0, skippedIdempotent: 0,
     stampedUnconfirmed: 0, empty: 0, dryRun: 0,
-    ordersEligible: 0, unmapped: 0, unaccounted: 0, hasFailures: false,
+    ordersEligible: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false,
   }
 
   for (const store of stores) {
     s.ordersEligible += store.eligible
     s.unmapped += store.unmapped.count
     s.unaccounted += store.unaccounted
+    s.skippedUnpaid += store.skippedUnpaid.count
     for (const bucket of store.buckets) {
       for (const chunk of bucket.chunks) {
         s.chunks++
@@ -259,7 +265,7 @@ function computeSummary(stores: StoreReport[]): GlobalRunSummary {
     }
   }
 
-  s.hasFailures = s.rolledBack > 0 || s.stampedUnconfirmed > 0 || s.unmapped > 0 || s.unaccounted !== 0
+  s.hasFailures = s.rolledBack > 0 || s.stampedUnconfirmed > 0 || s.unmapped > 0 || s.unaccounted !== 0 ||s.skippedUnpaid > 0
   return s
 }
 

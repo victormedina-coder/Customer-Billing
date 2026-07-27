@@ -35,6 +35,13 @@ export function makeRunReportNotifier(): RunReportNotifier {
     port,
     secure: port === 465,
     auth: { user, pass },
+    // Cota dura a la conexión: el aviso NUNCA debe atorar la corrida fiscal.
+    // Sin estos límites, un SMTP mal configurado o caído deja el `await
+    // notify()` colgado hasta los defaults largos de nodemailer. Con la cota,
+    // falla rápido y el try/catch del route lo registra sin bloquear el cron.
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000,
   })
 
   return new SmtpRunReportNotifier(transport, { from, to })
