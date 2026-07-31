@@ -203,7 +203,6 @@ describe('buildGlobalCfdiPayload — ClaveProdServ/ClaveUnidad fijas (normativas
     const payload = buildGlobalCfdiPayload(PERIOD, 'credito', [makeMonthlyOrder()], 'tienda-ariat', EXPEDITION_PLACE)
     expect(payload.Items[0].ProductCode).toBe('01010101')
     expect(payload.Items[0].UnitCode).toBe('ACT')
-    expect(payload.Items[0].Unit).toBe('Actividad')
   })
 
   it('IGNORA las env FACTURAMA_DEFAULT_PRODUCT_CODE/UNIT_CODE del flujo individual, aunque estén seteadas a otros valores', () => {

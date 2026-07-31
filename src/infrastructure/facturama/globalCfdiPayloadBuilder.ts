@@ -75,7 +75,6 @@ const GENERIC_RECEIVER: CfdiReceiver = {
  */
 const GLOBAL_PRODUCT_CODE = '01010101'
 const GLOBAL_UNIT_CODE = 'ACT'
-const GLOBAL_UNIT_NAME = 'Actividad'
 
 /**
  * Tasa de IVA FIJA del CFDI global — decisión del contador (2026-07-13, D1):
@@ -129,7 +128,6 @@ function buildItemForOrder(order: Order): CfdiItem {
     ProductCode: GLOBAL_PRODUCT_CODE,
     IdentificationNumber: identificationNumber,
     Description: 'Venta',
-    Unit: GLOBAL_UNIT_NAME,
     UnitCode: GLOBAL_UNIT_CODE,
     UnitPrice: String(subtotalSinIVA),
     Quantity: '1',

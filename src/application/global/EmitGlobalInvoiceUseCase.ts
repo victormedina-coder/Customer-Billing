@@ -208,7 +208,7 @@ export interface GlobalRunSummary {
   skippedUnpaid:number
   /**
    * true si la corrida dejó pedidos elegibles SIN facturar o en estado
-   * inconsistente. Cuatro causas, todas del mismo tipo (hueco fiscal que exige
+   * inconsistente. Cinco causas, todas del mismo tipo (hueco fiscal que exige
    * intervención humana):
    *   - `rolledBack`         → el chunk no se timbró.
    *   - `stampedUnconfirmed` → se timbró pero el header no se actualizó (conciliar).

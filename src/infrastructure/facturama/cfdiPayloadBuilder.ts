@@ -34,7 +34,6 @@ export interface CfdiItem {
   ProductCode: string
   IdentificationNumber: string
   Description: string
-  Unit: string
   UnitCode: string
   UnitPrice: string
   Quantity: string
@@ -124,7 +123,6 @@ export function buildCfdiPayload(
   // CFDI GLOBAL, que usa las claves normativas fijas de globalCfdiPayloadBuilder.ts.
   const defaultProdCode = process.env.FACTURAMA_DEFAULT_PRODUCT_CODE ?? '53102500'
   const defaultUnitCode = process.env.FACTURAMA_DEFAULT_UNIT_CODE ?? 'H87'
-  const defaultUnitName = 'Pieza'
 
   if (!expeditionPlace.trim()) {
     throw new Error('buildCfdiPayload: expeditionPlace es obligatorio y no puede estar vacío.')
@@ -156,7 +154,6 @@ export function buildCfdiPayload(
       ProductCode:          defaultProdCode,
       IdentificationNumber: line.productCode || String(index + 1).padStart(3, '0'),
       Description:          line.description,
-      Unit:                 defaultUnitName,
       UnitCode:             defaultUnitCode,
       UnitPrice:            String(lb.unitPriceSinIva),
       Quantity:             String(lb.quantity),

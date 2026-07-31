@@ -428,11 +428,6 @@ describe('buildCfdiPayload — ClaveProdServ/ClaveUnidad genéricas', () => {
     }
   })
 
-  it('Unit === "Pieza" (nombre consistente con H87)', () => {
-    const payload = buildCfdiPayload(order, fiscal, EXPEDITION_PLACE)
-    expect(payload.Items[0].Unit).toBe('Pieza')
-  })
-
   it('respeta override por env de FACTURAMA_DEFAULT_PRODUCT_CODE/UNIT_CODE', () => {
     const prevProd = process.env.FACTURAMA_DEFAULT_PRODUCT_CODE
     const prevUnit = process.env.FACTURAMA_DEFAULT_UNIT_CODE
