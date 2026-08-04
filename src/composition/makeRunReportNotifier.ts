@@ -8,6 +8,7 @@
  */
 
 import nodemailer from 'nodemailer'
+import type SMTPTransport from 'nodemailer/lib/smtp-transport'
 import type { RunReportNotifier } from '../application/global/ports/RunReportNotifier'
 import { SmtpRunReportNotifier } from '../infrastructure/notifications/SmtpRunReportNotifier'
 import { logger } from '../infrastructure/observability/logger'
@@ -35,6 +36,11 @@ export function makeRunReportNotifier(): RunReportNotifier {
     port,
     secure: port === 465,
     auth: { user, pass },
+    // Forzar IPv4: en Railway (y en redes sin ruta IPv6) el DNS resuelve
+    // smtp.gmail.com a una dirección IPv6 y la conexión muere con
+    // `ENETUNREACH ...:587` ANTES de autenticar — el aviso nunca sale. Gmail
+    // responde igual por IPv4, así que se fija la familia a 4 (2026-08-03).
+    family: 4,
     // Cota dura a la conexión: el aviso NUNCA debe atorar la corrida fiscal.
     // Sin estos límites, un SMTP mal configurado o caído deja el `await
     // notify()` colgado hasta los defaults largos de nodemailer. Con la cota,
@@ -42,7 +48,9 @@ export function makeRunReportNotifier(): RunReportNotifier {
     connectionTimeout: 10_000,
     greetingTimeout: 10_000,
     socketTimeout: 15_000,
-  })
+    // `family` es válida en runtime (se pasa al socket TCP) pero no está en los
+    // tipos de esta versión de nodemailer → cast puntual al tipo de opciones SMTP.
+  } as SMTPTransport.Options)
 
   return new SmtpRunReportNotifier(transport, { from, to })
 }
