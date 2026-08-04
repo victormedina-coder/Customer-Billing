@@ -1,20 +1,20 @@
 /**
  * Decide si una corrida amerita aviso por correo. Pura y testeable.
  *
- * - MENSUAL: siempre. Es el cierre contable, se archiva.
- * - DIARIA: solo si hay algo que atender. Un correo diario que siempre dice
- *   "todo bien" deja de leerse, y entonces no sirve el día que trae la
- *   novedad. `skippedUnpaid` se incluye a propósito aunque NO esté en
- *   `hasFailures`: un POS sin pago es anomalía operativa (finanzas lo está
- *   analizando), y el aviso es justo el canal para que lo revisen.
+ * Decisión de finanzas (2026-08-03): SIEMPRE se envía, en TODA corrida global
+ * —mensual o diaria de sandbox—, haya error o no. El correo es el registro de
+ * resultado de cada corrida; finanzas quiere verlo siempre, no solo cuando algo
+ * falla. Antes la diaria solo enviaba con novedad (error o POS sin pagar); se
+ * quitó ese filtro para que cada corrida de prueba también produzca su correo
+ * verificable, y para que producción nunca omita el aviso de un cierre.
  *
- * Si finanzas pide el diario SIEMPRE, este es el único punto a cambiar.
+ * Se CONSERVA la función (en vez de borrar la llamada del route) como punto
+ * ÚNICO de decisión: si en el futuro finanzas pide volver a filtrar, este es el
+ * único lugar a tocar.
  */
 
 import { GlobalRunReport } from "./EmitGlobalInvoiceUseCase"
 
-export function shouldEmailRunReport(report: GlobalRunReport): boolean {
-    if(report.day === undefined) return true
-    if(report.summary.hasFailures) return true
-    return report.stores.some((s) => s.skippedUnpaid.count > 0)
+export function shouldEmailRunReport(_report: GlobalRunReport): boolean {
+    return true
 }

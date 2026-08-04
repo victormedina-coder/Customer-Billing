@@ -43,18 +43,20 @@ function makeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
 }
 
 describe('formatGlobalRunReportEmail', () => {
-  it('veredicto ✅ y folio+uuid en el cuerpo cuando no hay fallos', () => {
+  it('veredicto ✅, desglose y folio+UUID de auditoría en el cuerpo', () => {
     const { subject, text, html } = formatGlobalRunReportEmail(makeReport())
     expect(subject).toContain('✅')
-    expect(subject).toContain('2026-07-23')
+    expect(subject).toContain('23 Julio 2026')
+    expect(text).toContain('Veredicto: OK')
+    expect(text).toContain('1 pedido')
     expect(text).toContain('GDL1-7')
     expect(text).toContain('uuid-abc')
     expect(html).toContain('<pre')
   })
 
-  it('el asunto DIARIO trae el día; el MENSUAL solo año-mes', () => {
-    expect(formatGlobalRunReportEmail(makeReport()).subject).toContain('2026-07-23')
-    expect(formatGlobalRunReportEmail(makeReport({ day: undefined })).subject).toContain('2026-07 ')
+  it('el asunto DIARIO trae el día; el MENSUAL el mes en palabras', () => {
+    expect(formatGlobalRunReportEmail(makeReport()).subject).toContain('23 Julio 2026')
+    expect(formatGlobalRunReportEmail(makeReport({ day: undefined })).subject).toContain('Julio 2026')
     expect(formatGlobalRunReportEmail(makeReport({ day: undefined })).subject).not.toContain('undefined')
   })
 
@@ -78,6 +80,75 @@ describe('formatGlobalRunReportEmail', () => {
   it('marca el simulacro en el asunto', () => {
     const { subject } = formatGlobalRunReportEmail(makeReport({ dryRun: true }))
     expect(subject).toContain('[SIMULACRO]')
+  })
+})
+
+describe('formatGlobalRunReportEmail — totales de PEDIDOS (no CFDIs)', () => {
+  // 3 marcas × 3 buckets = 9 CFDIs pero 50 PEDIDOS. El correo debe contar
+  // pedidos (Σ itemCount de chunks emitidos), NO summary.emitted (= 9 CFDIs).
+  function billedStore(store: string, ef: number, cr: number, de: number): StoreReport {
+    return makeStore({
+      store,
+      buckets: [
+        { bucket: 'efectivo', orders: ef, chunks: [{ chunkIndex: 0, itemCount: ef, outcome: 'emitted', uuid: `u-${store}-ef`, serieFolio: `${store}-1`, excludedByRace: 0 }] },
+        { bucket: 'credito', orders: cr, chunks: [{ chunkIndex: 0, itemCount: cr, outcome: 'emitted', uuid: `u-${store}-cr`, serieFolio: `${store}-2`, excludedByRace: 0 }] },
+        { bucket: 'debito', orders: de, chunks: [{ chunkIndex: 0, itemCount: de, outcome: 'emitted', uuid: `u-${store}-de`, serieFolio: `${store}-3`, excludedByRace: 0 }] },
+      ],
+    })
+  }
+
+  const report = makeReport({
+    day: undefined,
+    summary: { chunks: 9, emitted: 9, rolledBack: 0, skippedIdempotent: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0, ordersEligible: 50, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false },
+    stores: [billedStore('western-brothers', 3, 12, 5), billedStore('stetson', 8, 9, 3), billedStore('ariat', 2, 6, 2)],
+  })
+
+  it('el asunto cuenta 50 PEDIDOS, no 9 CFDIs', () => {
+    const { subject } = formatGlobalRunReportEmail(report)
+    expect(subject).toContain('50 pedidos facturados')
+    expect(subject).not.toContain('9 pedidos')
+  })
+
+  it('desglosa pedidos por marca y forma de pago', () => {
+    const { text } = formatGlobalRunReportEmail(report)
+    expect(text).toContain('Western Brothers')
+    expect(text).toContain('20 pedidos')
+    expect(text).toContain('efectivo  3 · crédito 12 · débito  5')
+    expect(text).toContain('Stetson')
+    expect(text).toContain('Ariat')
+    expect(text).toContain('Pedidos facturados')
+  })
+})
+
+describe('formatGlobalRunReportEmail — excluidos, errores e idempotencia', () => {
+  it('muestra los ya facturados (excluidos) con total y por marca', () => {
+    const store = makeStore({ store: 'ariat', buckets: [], excludedAlreadyInvoiced: { count: 8, orders: [] } })
+    const { text } = formatGlobalRunReportEmail(makeReport({ day: undefined, stores: [store] }))
+    expect(text).toContain('Total 8')
+    expect(text).toContain('Ariat 8')
+  })
+
+  it('reporta un CFDI fallido por grupo (marca/forma de pago) con el motivo', () => {
+    const store = makeStore({
+      store: 'ariat',
+      buckets: [{ bucket: 'credito', orders: 45, chunks: [{ chunkIndex: 0, itemCount: 45, outcome: 'rolled_back', error: 'Base x Rate != Total', excludedByRace: 0 }] }],
+    })
+    const summary = { ...makeReport().summary, hasFailures: true, rolledBack: 1 }
+    const { subject, text } = formatGlobalRunReportEmail(makeReport({ day: undefined, summary, stores: [store] }))
+    expect(subject).toContain('🔴')
+    expect(text).toContain('45 pedido(s) NO se facturaron')
+    expect(text).toContain('Ariat / crédito — 45 pedidos — "Base x Rate != Total"')
+  })
+
+  it('caso idempotente: 0 pedidos nuevos y nota explicativa (no lo trata como error)', () => {
+    const store = makeStore({
+      store: 'ariat',
+      buckets: [{ bucket: 'efectivo', orders: 10, chunks: [{ chunkIndex: 0, itemCount: 10, outcome: 'skipped_idempotent', excludedByRace: 0 }] }],
+    })
+    const { subject, text } = formatGlobalRunReportEmail(makeReport({ day: undefined, stores: [store] }))
+    expect(subject).toContain('0 pedidos facturados')
+    expect(text).toContain('idempotencia')
+    expect(text).toContain('no facturó nada nuevo')
   })
 })
 
@@ -108,8 +179,8 @@ describe('shouldEmailRunReport', () => {
     expect(shouldEmailRunReport(makeReport({ day: undefined }))).toBe(true)
   })
 
-  it('diaria limpia: NO envía', () => {
-    expect(shouldEmailRunReport(makeReport())).toBe(false)
+  it('diaria limpia: TAMBIÉN envía (decisión finanzas 2026-08-03: siempre)', () => {
+    expect(shouldEmailRunReport(makeReport())).toBe(true)
   })
 
   it('diaria con fallos: envía', () => {
