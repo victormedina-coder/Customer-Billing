@@ -31,16 +31,11 @@ export function makeRunReportNotifier(): RunReportNotifier {
     return new NoOpRunReportNotifier()
   }
 
-  const transport = nodemailer.createTransport({
+  const options = {
     host,
     port,
     secure: port === 465,
     auth: { user, pass },
-    // Forzar IPv4: en Railway (y en redes sin ruta IPv6) el DNS resuelve
-    // smtp.gmail.com a una dirección IPv6 y la conexión muere con
-    // `ENETUNREACH ...:587` ANTES de autenticar — el aviso nunca sale. Gmail
-    // responde igual por IPv4, así que se fija la familia a 4 (2026-08-03).
-    family: 4,
     // Cota dura a la conexión: el aviso NUNCA debe atorar la corrida fiscal.
     // Sin estos límites, un SMTP mal configurado o caído deja el `await
     // notify()` colgado hasta los defaults largos de nodemailer. Con la cota,
@@ -48,9 +43,19 @@ export function makeRunReportNotifier(): RunReportNotifier {
     connectionTimeout: 10_000,
     greetingTimeout: 10_000,
     socketTimeout: 15_000,
-    // `family` es válida en runtime (se pasa al socket TCP) pero no está en los
-    // tipos de esta versión de nodemailer → cast puntual al tipo de opciones SMTP.
-  } as SMTPTransport.Options)
+  } as SMTPTransport.Options
+
+  // Familia IP de la conexión SMTP — configurable por entorno porque el
+  // ruteo saliente difiere por host (2026-08-03):
+  //   SMTP_FAMILY=4  → fuerza IPv4 (local / redes SIN ruta IPv6; evita ENETUNREACH a IPv6)
+  //   SMTP_FAMILY=6  → fuerza IPv6 (Railway con "Outbound IPv6" habilitado)
+  //   (sin definir)  → dual-stack, lo decide Node
+  // `family` es válida en runtime (va al socket TCP) pero no está en los tipos
+  // de esta versión de nodemailer → asignación con cast puntual.
+  const smtpFamily = process.env.SMTP_FAMILY?.trim()
+  if (smtpFamily) (options as { family?: number }).family = Number(smtpFamily)
+
+  const transport = nodemailer.createTransport(options)
 
   return new SmtpRunReportNotifier(transport, { from, to })
 }
