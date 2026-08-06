@@ -36,6 +36,10 @@ export function makeRunReportNotifier(): RunReportNotifier {
     port,
     secure: port === 465,
     auth: { user, pass },
+    // Fuerza STARTTLS en 587: sin esto, si el servidor no ofreciera STARTTLS,
+    // nodemailer degradaría a texto plano y enviaría las credenciales en claro.
+    // Con secure:true (465) es redundante e inofensivo. (fable-security M-3)
+    requireTLS: true,
     // Cota dura a la conexión: el aviso NUNCA debe atorar la corrida fiscal.
     // Sin estos límites, un SMTP mal configurado o caído deja el `await
     // notify()` colgado hasta los defaults largos de nodemailer. Con la cota,
