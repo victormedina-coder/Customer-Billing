@@ -10,11 +10,11 @@
  * (header `x-global-secret` vs env `GLOBAL_INVOICE_SECRET`), pensado para ser
  * llamado por un cron/job interno, no por el navegador del cliente final.
  *
- * Recibe: { year?, month?, day?, relative?, storeName?, dryRun? }
+ * Recibe: { year?, month?, relative?, storeName?, dryRun? }
  * (ver GlobalEmitSchema en lib/api/schemas.ts para las reglas de exclusión).
  * La resolución del periodo (explícito vs relative vs default histórico) es
  * responsabilidad de ESTA capa interface — el use case siempre recibe
- * year/month(/day) ya resueltos (ver bloque "Resolución del periodo" abajo).
+ * year/month ya resueltos (ver bloque "Resolución del periodo" abajo).
  * Responde: { report: GlobalRunReport } en 200, o error estructurado en 4xx/5xx.
  *
  * Runtime: Node.js (no edge) — usa `crypto` de node y secretos de servidor.
@@ -44,10 +44,7 @@ import { makeEmitGlobalInvoiceUseCase } from '@/src/composition/makeEmitGlobalIn
 import type { GlobalRunErrorCode } from '@/src/application/global/EmitGlobalInvoiceUseCase'
 import { httpError } from '@/src/interface/http/httpError'
 import { enforceRateLimit } from '@/src/interface/http/withRateLimit'
-// previousMxDay/currentMxDay son exclusivas de los modos relative:'yesterday' y
-// 'today' — [DAILY-SCAFFOLDING] test-only, remover junto con esos cases y este
-// import (ver plan R5).
-import { currentMxDay, currentMxYearMonth, previousMxDay, previousMxYearMonth } from '@/src/domain/shared/MxCalendar'
+import { currentMxYearMonth, previousMxYearMonth } from '@/src/domain/shared/MxCalendar'
 import { getEvaluationNow } from '@/src/infrastructure/time/getEvaluationNow'
 import { logger } from '@/src/infrastructure/observability/logger'
 import { makeRunReportNotifier } from '@/src/composition/makeRunReportNotifier'
@@ -113,58 +110,40 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const msg = parsed.error.issues.map((issue) => issue.message).join('; ')
     return httpError('VALIDATION_FAILED', msg, 400)
   }
-  const { year: bodyYear, month: bodyMonth, day: bodyDay, relative, storeName, dryRun } = parsed.data
+  const { year: bodyYear, month: bodyMonth, relative, storeName, dryRun } = parsed.data
 
   // ── 4b. Resolución del periodo (solo interface — el use case no lo conoce) ─
-  // GlobalEmitSchema ya garantiza: year/month vienen ambos o ninguno; day
-  // requiere year+month; relative es excluyente con los componentes
-  // explícitos. Los 7 casos posibles, en orden de precedencia:
+  // GlobalEmitSchema ya garantiza: year/month vienen ambos o ninguno; relative
+  // es excluyente con los componentes explícitos. Los 4 casos posibles, en
+  // orden de precedencia:
   let year: number
   let month: number
-  let day: number | undefined = undefined
   let resolvedBy: string
 
   if (bodyYear !== undefined && bodyMonth !== undefined) {
-    // 1/2. Explícito diario ({year,month,day}) o mensual ({year,month}).
+    // 1. Explícito mensual ({year,month}).
     year = bodyYear
     month = bodyMonth
-    day = bodyDay
-    resolvedBy = day !== undefined ? 'explicit-daily' : 'explicit-monthly'
+    resolvedBy = 'explicit-monthly'
   } else if (relative === 'current-month') {
-    // 3. Relativo mensual, mes en curso — cron de producción (R2).
+    // 2. Relativo mensual, mes en curso — cron de producción (R2).
     ;({ year, month } = currentMxYearMonth(getEvaluationNow()))
     resolvedBy = 'relative-current-month'
   } else if (relative === 'previous-month') {
-    // 4. Relativo mensual, mes anterior — equivalente explícito del default histórico.
+    // 3. Relativo mensual, mes anterior — equivalente explícito del default histórico.
     ;({ year, month } = previousMxYearMonth(getEvaluationNow()))
     resolvedBy = 'relative-previous-month'
-  } else if (relative === 'yesterday') {
-    // 5. Relativo diario, día de ayer MX — periodo YA CERRADO.
-    // [DAILY-SCAFFOLDING] test-only, remover este case junto con el import de
-    // previousMxDay y la entrada 'yesterday' del enum (ver plan R5).
-    ;({ year, month, day } = previousMxDay(getEvaluationNow()))
-    resolvedBy = 'relative-yesterday'
-  } else if (relative === 'today') {
-    // 6. Relativo diario, día MX EN CURSO — cron de sandbox a la hora de corte.
-    // Análogo exacto de 'current-month' (caso 3): con el cron a las 21:00 MX el
-    // periodo sigue ABIERTO, así que los pedidos posteriores al corte no entran
-    // — mismo comportamiento (y mismo riesgo, ADR-009) que la mensual de
-    // producción, pero ejercitado a diario en vez de una vez al mes.
-    // [DAILY-SCAFFOLDING] test-only, remover este case junto con el import de
-    // currentMxDay y la entrada 'today' del enum (ver plan R5).
-    ;({ year, month, day } = currentMxDay(getEvaluationNow()))
-    resolvedBy = 'relative-today'
   } else {
-    // 7. Body vacío → default histórico: mes anterior en zona MX (comportamiento intacto).
+    // 4. Body vacío → default histórico: mes anterior en zona MX (comportamiento intacto).
     ;({ year, month } = previousMxYearMonth(getEvaluationNow()))
     resolvedBy = 'default-previous-month'
   }
 
-  logger.info({ resolvedBy, year, month, day }, '[global-emit-route] periodo resuelto')
+  logger.info({ resolvedBy, year, month }, '[global-emit-route] periodo resuelto')
 
   // ── 5. Orquestación delegada al use case ──────────────────────────────────
   const useCase = makeEmitGlobalInvoiceUseCase()
-  const result = await useCase.execute({ year, month, day, storeName, dryRun })
+  const result = await useCase.execute({ year, month, storeName, dryRun })
 
   if (!result.ok) {
     const { code, message } = result.error

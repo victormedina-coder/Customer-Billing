@@ -202,67 +202,14 @@ export function previousMxYearMonth(now: Date): { year: number; month: number } 
 /**
  * Retorna el año/mes MX (1-indexed) del instante `now` — el mes calendario
  * EN CURSO. Nombre explícito (alias de `getMxYearMonth`) para usarse junto a
- * `previousMxYearMonth`/`previousMxDay` en la resolución de periodos
- * relativos del endpoint de facturación global (R4 — modo
- * `relative: 'current-month'`).
+ * `previousMxYearMonth` en la resolución de periodos relativos del endpoint
+ * de facturación global (R4 — modo `relative: 'current-month'`).
  */
 export function currentMxYearMonth(now: Date): { year: number; month: number } {
   return getMxYearMonth(now)
 }
 
-/**
- * Devuelve { year, month, day } (1-indexed) del instante `date` en zona MX —
- * generaliza `getMxYearMonth` agregando el día. Privada: solo la usan
- * `currentMxDay` y `previousMxDay` (ver nota de scaffolding abajo).
- */
-function getMxYearMonthDay(date: Date): { year: number; month: number; day: number } {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: MX_TZ,
-    year: 'numeric',
-    month: 'numeric',
-    day: 'numeric',
-  }).formatToParts(date)
-
-  const year = Number(parts.find((p) => p.type === 'year')?.value ?? 0)
-  const month = Number(parts.find((p) => p.type === 'month')?.value ?? 0)
-  const day = Number(parts.find((p) => p.type === 'day')?.value ?? 0)
-  return { year, month, day }
-}
-
-/**
- * [DAILY-SCAFFOLDING] test-only, remover antes de producción (ver plan R5).
- * Exclusiva del modo `relative: 'yesterday'` del endpoint de facturación
- * global (bundle de periodicidad DIARIA, R1) — no la usa ningún otro flujo.
- * Al retirar el bundle diario, esta función y `getMxYearMonthDay` (su único
- * consumidor) se eliminan juntas sin tocar el resto de este archivo.
- *
- * Retorna el día MX (año/mes/día, 1-indexed) inmediatamente ANTERIOR al de
- * `now` — "ayer" en zona MX. Resta 24h exactas al instante UTC y lee los
- * componentes de calendario MX del resultado: como México es UTC-6 fijo
- * (sin DST desde 2022), restar 24h SIEMPRE cae en el día calendario MX
- * anterior sin importar la hora de `now`, así que los bordes de fin de
- * mes/año/29-feb se resuelven solos vía aritmética nativa de `Date` — no
- * hace falta lógica especial de calendario aquí.
- */
-export function previousMxDay(now: Date): { year: number; month: number; day: number } {
-  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-  return getMxYearMonthDay(yesterday)
-}
-
-/**
- * [DAILY-SCAFFOLDING] test-only, remover antes de producción (ver plan R5).
- * Exclusiva del modo `relative: 'today'` del endpoint de facturación global.
- *
- * Retorna el día MX (año/mes/día, 1-indexed) EN CURSO al instante `now` — "hoy"
- * en zona MX.
- *
- * Por qué existe además de `previousMxDay`: es el análogo diario EXACTO de
- * `currentMxYearMonth` (el modo mensual de producción). Con el cron a las 21:00
- * MX, `current-month` factura un mes que sigue ABIERTO 3 horas más; `today`
- * reproduce esa misma semántica a escala de día, para que el andamiaje diario
- * ejercite el mismo riesgo que la corrida mensual real (ADR-009) en vez de
- * facturar siempre periodos ya cerrados, que es lo que hace `yesterday`.
- */
-export function currentMxDay(now: Date): { year: number; month: number; day: number } {
-  return getMxYearMonthDay(now)
-}
+// [R5] Se eliminaron `getMxYearMonthDay`, `previousMxDay` y `currentMxDay`
+// (andamiaje de disparo diario del endpoint global). La periodicidad diaria
+// sobrevive como capacidad LATENTE del motor (createDailyGlobalPeriod), pero
+// el endpoint quedó monthly-only, así que estos helpers ya no se necesitan.

@@ -233,7 +233,7 @@ describe('POST /api/global/emit', () => {
       { execute } as any,
     )
 
-    const res = await POST(makePostRequest({ year: 2026, month: 7, day: 21 }, withSecretHeader()) as never)
+    const res = await POST(makePostRequest({ year: 2026, month: 7 }, withSecretHeader()) as never)
     const json = await res.json()
 
     expect(res.status).toBe(500)
@@ -288,7 +288,7 @@ describe('POST /api/global/emit', () => {
       const res = await POST(makePostRequest({ relative: 'current-month', dryRun: true }, withSecretHeader()) as never)
 
       expect(res.status).toBe(200)
-      expect(execute).toHaveBeenCalledWith({ year: 2026, month: 7, day: undefined, storeName: undefined, dryRun: true })
+      expect(execute).toHaveBeenCalledWith({ year: 2026, month: 7, storeName: undefined, dryRun: true })
     })
 
     it("relative: 'previous-month' resuelve al mes MX anterior (mismo resultado que el default histórico)", async () => {
@@ -304,60 +304,7 @@ describe('POST /api/global/emit', () => {
       const res = await POST(makePostRequest({ relative: 'previous-month', dryRun: true }, withSecretHeader()) as never)
 
       expect(res.status).toBe(200)
-      expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, day: undefined, storeName: undefined, dryRun: true })
-    })
-
-    // [DAILY-SCAFFOLDING] test-only, remover junto con el modo 'yesterday' (ver plan R5).
-    it("relative: 'yesterday' resuelve al día MX de ayer (corrida DIARIA)", async () => {
-      vi.useFakeTimers()
-      vi.setSystemTime(new Date('2026-07-15T18:00:00.000Z')) // 15-jul-2026 12:00 MX → ayer: 14-jul-2026
-
-      const execute = vi.fn(async () => ({ ok: true, value: makeFakeReport({ year: 2026, month: 7, day: 14 }) }))
-      vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        { execute } as any,
-      )
-
-      const res = await POST(makePostRequest({ relative: 'yesterday', dryRun: true }, withSecretHeader()) as never)
-
-      expect(res.status).toBe(200)
-      expect(execute).toHaveBeenCalledWith({ year: 2026, month: 7, day: 14, storeName: undefined, dryRun: true })
-    })
-
-    // [DAILY-SCAFFOLDING] test-only, remover junto con el modo 'today' (ver plan R5).
-    it("relative: 'today' resuelve al día MX EN CURSO (no a ayer)", async () => {
-      vi.useFakeTimers()
-      vi.setSystemTime(new Date('2026-07-15T18:00:00.000Z')) // 15-jul-2026 12:00 MX → hoy: 15-jul-2026
-
-      const execute = vi.fn(async () => ({ ok: true, value: makeFakeReport({ year: 2026, month: 7, day: 15 }) }))
-      vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        { execute } as any,
-      )
-
-      const res = await POST(makePostRequest({ relative: 'today', dryRun: true }, withSecretHeader()) as never)
-
-      expect(res.status).toBe(200)
-      expect(execute).toHaveBeenCalledWith({ year: 2026, month: 7, day: 15, storeName: undefined, dryRun: true })
-    })
-
-    // El caso que motiva el modo: el cron corre a las 21:00 MX, que en UTC ya es
-    // el día siguiente. 'today' debe resolver al día MX que está cerrando (23),
-    // NO al día UTC (24) — si leyera el calendario UTC facturaría el día equivocado.
-    it("relative: 'today' a las 21:00 MX (= 03:00 UTC del día siguiente) resuelve al día MX que cierra", async () => {
-      vi.useFakeTimers()
-      vi.setSystemTime(new Date('2026-07-24T03:00:00.000Z')) // 03:00 UTC 24-jul = 21:00 MX 23-jul
-
-      const execute = vi.fn(async () => ({ ok: true, value: makeFakeReport({ year: 2026, month: 7, day: 23 }) }))
-      vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        { execute } as any,
-      )
-
-      const res = await POST(makePostRequest({ relative: 'today', dryRun: true }, withSecretHeader()) as never)
-
-      expect(res.status).toBe(200)
-      expect(execute).toHaveBeenCalledWith({ year: 2026, month: 7, day: 23, storeName: undefined, dryRun: true })
+      expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: undefined, dryRun: true })
     })
 
     it('responde 400 con relative + year/month (mutuamente excluyentes) — no llama al use case', async () => {
@@ -387,40 +334,6 @@ describe('POST /api/global/emit', () => {
     expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: undefined, dryRun: true })
   })
 
-  it('body con { year, month, day } válido → llama al use case con day propagado', async () => {
-    const fakeReport = makeFakeReport({ runId: 'run-daily', year: 2026, month: 6, day: 15 })
-    const execute = vi.fn(async () => ({ ok: true, value: fakeReport }))
-    vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { execute } as any,
-    )
-
-    const res = await POST(
-      makePostRequest({ year: 2026, month: 6, day: 15, dryRun: true }, withSecretHeader()) as never,
-    )
-    const json = await res.json()
-
-    expect(res.status).toBe(200)
-    expect(json.report).toEqual(fakeReport)
-    expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, day: 15, storeName: undefined, dryRun: true })
-  })
-
-  it('responde 400 con { day } solo (sin year/month — ambiguo)', async () => {
-    const res = await POST(makePostRequest({ day: 15 }, withSecretHeader()) as never)
-    const json = await res.json()
-
-    expect(res.status).toBe(400)
-    expect(json.error.code).toBe('VALIDATION_FAILED')
-    expect(compositionMod.makeEmitGlobalInvoiceUseCase).not.toHaveBeenCalled()
-  })
-
-  it('responde 400 con { year, day } sin month', async () => {
-    const res = await POST(makePostRequest({ year: 2026, day: 15 }, withSecretHeader()) as never)
-    const json = await res.json()
-
-    expect(res.status).toBe(400)
-    expect(json.error.code).toBe('VALIDATION_FAILED')
-  })
 
   it('mapea VALIDATION_FAILED del use case a 400', async () => {
     const execute = vi.fn(async () => ({

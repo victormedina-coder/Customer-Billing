@@ -71,60 +71,43 @@ export const ResendSchema = z.object({
 export const InvoiceIdParamSchema = z.string().uuid()
 
 /**
- * Body de POST /api/global/emit — facturación global (mensual o diaria).
+ * Body de POST /api/global/emit — facturación global mensual.
  * Endpoint disparado por cron/operación interna (no por el cliente final), de
- * ahí que year/month/day se validen como number estricto (sin coerce): quien
- * lo llama controla el JSON que envía.
+ * ahí que year/month se validen como number estricto (sin coerce): quien lo
+ * llama controla el JSON que envía.
  *
  * year/month son OPCIONALES: deben venir AMBOS o NINGUNO — un periodo
  * parcial (solo year o solo month) es ambiguo y se rechaza aquí mismo, antes
  * de llegar al handler.
  *
- * day es OPCIONAL (R1 — periodicidad diaria): si viene, requiere year+month
- * explícitos también (un día sin periodo completo es ambiguo) y dispara una
- * corrida DIARIA (Periodicity '01') en vez de mensual.
- *
  * relative es OPCIONAL (R4 — resolución de defaults para crons con body
- * estático): alternativa a year/month/day explícitos, MUTUAMENTE EXCLUYENTE
- * con ellos. 'current-month'/'previous-month' resuelven a un periodo
- * MENSUAL; 'yesterday' resuelve a un periodo DIARIO. Cuando ni componentes
- * explícitos ni relative vienen (body vacío), el route handler aplica el
- * default histórico: mes anterior en zona MX (`previousMxYearMonth`).
+ * estático): alternativa a year/month explícitos, MUTUAMENTE EXCLUYENTE con
+ * ellos. 'current-month'/'previous-month' resuelven a un periodo MENSUAL.
+ * Cuando ni componentes explícitos ni relative vienen (body vacío), el route
+ * handler aplica el default histórico: mes anterior en zona MX
+ * (`previousMxYearMonth`).
  */
 export const GlobalEmitSchema = z
   .object({
     year: z.number().int('El año debe ser un entero').min(2020, 'Año fuera de rango').max(2100, 'Año fuera de rango').optional(),
     month: z.number().int('El mes debe ser un entero').min(1, 'Mes inválido (1-12)').max(12, 'Mes inválido (1-12)').optional(),
-    day: z.number().int('El día debe ser un entero').min(1, 'Día inválido (1-31)').max(31, 'Día inválido (1-31)').optional(),
     storeName: z.string().min(1).max(100).optional(),
     dryRun: z.boolean().optional().default(false),
     /**
      * Resolución relativa del periodo (R4). 'current-month'/'previous-month'
-     * son PERMANENTES (las usará el cron de producción mensual, R2).
-     * 'yesterday' y 'today' son [DAILY-SCAFFOLDING] test-only, remover antes
-     * de producción (ver plan R5) — exclusivas del bundle de periodicidad
-     * DIARIA (R1, solo para el cron de sandbox). Diferencia entre ambas:
-     * 'yesterday' factura un día YA CERRADO; 'today' factura el día EN CURSO,
-     * que es el análogo exacto de 'current-month' cuando el cron corre a la
-     * hora de corte (21:00 MX) — el periodo sigue abierto y los pedidos
-     * posteriores al corte no entran (mismo riesgo del ADR-009 que la mensual
-     * de producción, ejercitado a diario).
-     * Al retirar el bundle diario, basta con quitar 'yesterday'/'today' del
-     * enum, su rama en el superRefine de abajo, y los cases correspondientes
-     * en el route — sin tocar el resto.
+     * son PERMANENTES (las usa el cron de producción mensual, R2).
      */
-    relative: z.enum(['current-month', 'previous-month', 'yesterday', 'today']).optional(),
+    relative: z.enum(['current-month', 'previous-month']).optional(),
   })
   .superRefine((data, ctx) => {
     const hasYear = data.year !== undefined
     const hasMonth = data.month !== undefined
-    const hasDay = data.day !== undefined
     const hasRelative = data.relative !== undefined
 
-    if (hasRelative && (hasYear || hasMonth || hasDay)) {
+    if (hasRelative && (hasYear || hasMonth)) {
       ctx.addIssue({
         code: 'custom',
-        message: 'relative es excluyente con year/month/day explícitos: usa uno u otro, no ambos.',
+        message: 'relative es excluyente con year/month explícitos: usa uno u otro, no ambos.',
         path: ['relative'],
       })
     }
@@ -134,13 +117,6 @@ export const GlobalEmitSchema = z
         message:
           'year y month deben venir juntos: ambos presentes (periodo explícito) o ambos ausentes (usa el mes anterior en zona MX).',
         path: hasYear ? ['month'] : ['year'],
-      })
-    }
-    if (hasDay && !(hasYear && hasMonth)) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'day requiere year y month explícitos (un día sin periodo completo es ambiguo).',
-        path: ['day'],
       })
     }
   })
