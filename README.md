@@ -223,6 +223,13 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 | `RATE_LIMIT_DOWNLOAD_MAX` / `RATE_LIMIT_DOWNLOAD_WINDOW_SEC` | Límite de `download` por IP (default: 40 / 60s) |
 | `RATE_LIMIT_VALIDATE_MAX` / `RATE_LIMIT_VALIDATE_WINDOW_SEC` | Límite de `lookup` **por folio** (default: 5 / 900s = 15 min) |
 
+### Facturación global (`POST /api/global/emit`)
+
+| Variable | Descripción |
+|---|---|
+| `GLOBAL_INVOICE_SECRET` | Secreto compartido que autentica al cron/job interno que dispara el endpoint (header `x-global-secret`, comparación en tiempo constante). Sin ella, el endpoint responde `503 FEATURE_NOT_CONFIGURED`. |
+| `DEV_NOW_OVERRIDE` | **Solo fuera de producción** (guard duro por `NODE_ENV`, ver `getEvaluationNow`). Fecha ISO para simular el instante "ahora" al resolver periodos `relative` (R4) o la ventana de facturación (R3). **Nunca definir en el `.env` de producción.** |
+
 ### Otros
 
 | Variable | Descripción |
@@ -231,7 +238,43 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 | `PENDING_TTL_MINUTES` | Minutos de antigüedad tras los cuales una fila `pending` huérfana se libera de forma lazy en `emit` (default: `10`) |
 | `NEXT_PUBLIC_LOOKUP_MOCK` | `true` usa `DEMO_TICKETS` en vez de llamar a Shopify en `lookup` (desarrollo sin credenciales) |
 | `INVOICE_WINDOW_MODE` | Modo de la ventana de facturación (default en código: `current-month`) |
+| `INVOICE_WINDOW_CUTOFF_HOUR` | Hora (0-23, zona MX) del corte de facturación del último día del mes en curso — pasado el corte, la ventana individual se cierra aunque el mes no haya terminado (evita doble factura con la global). Default en código: `21` (decisión de contabilidad 2026-07-16). |
+| `BILLING_CONTACT_EMAIL` | Correo de facturación mostrado en la pantalla de bloqueo del portal cuando la ventana del mes cerró (R3). Sin valor placeholder — lo define el usuario. |
 | `TRUSTED_PROXY_COUNT` | Ver grupo de Redis / rate limiting arriba |
+| `LOG_LEVEL` | Nivel mínimo del logger estructurado (pino → JSON a stdout, que es lo que recolecta Railway). Valores: `trace`/`debug`/`info`/`warn`/`error`/`fatal`. **Default en código: `info`**, que ya incluye toda la traza operativa de la facturación global (inicio/fin de corrida, enumeración por tienda, cada chunk timbrado) y los `error` accionables (rollback, `unmapped`, conciliación pendiente). Subir a `debug` solo para diagnóstico puntual; bajar a `warn` **oculta el detalle de las corridas exitosas** y deja solo lo que falla. |
+
+## Cron — Facturación Global (Railway)
+
+`POST /api/global/emit` está pensado para dispararse desde un *Scheduled
+Job* de Railway (no desde el navegador). El body soporta periodo explícito
+(`{year, month[, day]}`) o resolución `relative` (`current-month` /
+`previous-month` / `yesterday` / `today`), mutuamente excluyente con lo
+explícito; un body vacío usa el default histórico (mes anterior en zona MX). Detalle
+completo de los dos cron jobs (sandbox diario y producción mensual), sus
+bodies y schedules — ver **`docs/11-cron-facturacion-global.md`**.
+
+**Cron de producción (mensual):** schedule `0 3 1 * *` UTC = 21:00 MX del
+último día del mes, con body `{"relative":"current-month"}`. Regla de
+negocio: contabilidad requiere el cierre el mismo día del mes (no el día 1
+de madrugada) porque las tiendas POS no venden después de las 21:00 — ver
+**`docs/adr/ADR-009-corte-mensual-2100.md`**.
+
+**Cron de sandbox (diario):** schedule `0 3 * * *` UTC = **21:00 MX**, con body
+`{"relative":"today"}` — la MISMA hora de corte que producción, y `today` es el
+análogo diario de `current-month`: al correr a las 21:00 el periodo sigue
+abierto, así que el diario ejercita el mismo riesgo del ADR-009 que la mensual
+(pedidos posteriores al corte no entran) en vez de facturar días ya cerrados.
+Pasar a producción es entonces solo `*` → `1` en el día-del-mes y cambiar el
+body a `{"relative":"current-month"}`.
+
+> ⚠️ El cron sandbox diario y los modos `relative: 'yesterday'` / `'today'` son
+> **[DAILY-SCAFFOLDING] test-only** — existen solo para probar el timbrado
+> diario en sandbox y se eliminarán antes del PR a `main`.
+
+> ⚠️ **No dispares el cron dos veces el mismo día MX con `today`.** La clave de
+> idempotencia es `(store, year, month, day, bucket, chunk)`: la segunda corrida
+> cae en `skipped_idempotent` y los pedidos creados ENTRE ambas corridas no se
+> facturan nunca. Una corrida por día.
 
 ## Despliegue (Railway)
 

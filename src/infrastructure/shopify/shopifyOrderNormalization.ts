@@ -117,7 +117,8 @@ export function normalizeLineItem(item: ShopifyLineItem): OrderLine {
 
 export function normalizeOrder(
   order: ShopifyOrder,
-  storeName: string
+  storeName: string,
+  brand?: string
 ): NormalizedOrderWithPayment {
   const lines = order.lineItems.edges.map((e) => normalizeLineItem(e.node))
   const alreadyInvoiced = false
@@ -135,6 +136,7 @@ export function normalizeOrder(
     customerEmail: order.email ?? '',
     alreadyInvoiced,
     storeName: order.physicalLocation?.name ?? storeName,
+    brand,
     paymentGatewayNames: order.paymentGatewayNames,
     refundedAmount: parseAmount(order.totalRefundedSet),
     financialStatus: order.displayFinancialStatus ?? '',

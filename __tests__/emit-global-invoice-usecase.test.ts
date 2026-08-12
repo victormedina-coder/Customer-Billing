@@ -68,7 +68,10 @@ class FakeGlobalInvoiceRepository implements GlobalInvoiceRepository {
   private failedOnce = false
 
   private keyOf(k: GlobalInvoiceIdentity): string {
-    return [k.storeName, k.periodYear, k.periodMonth, k.paymentBucket, k.chunkIndex].join('|')
+    // periodDay ?? 0 replica el sentinela de persistencia (D3 del plan de
+    // diseño): un header diario y uno mensual del mismo (store, año, mes,
+    // bucket, chunk) deben coexistir sin chocar en el Map.
+    return [k.storeName, k.periodYear, k.periodMonth, k.periodDay ?? 0, k.paymentBucket, k.chunkIndex].join('|')
   }
 
   async createGlobalHeader(data: CreateGlobalHeaderData): Promise<CreateGlobalHeaderResult> {
@@ -334,6 +337,71 @@ describe('EmitGlobalInvoiceUseCase — filtros de elegibilidad', () => {
     expect(store.partialRefunds).toBe(1)
     expect(store.eligible).toBe(2) // partial-refund + normal
   })
+
+  it('identifica al pedido no-pagado y al reembolsado total, con su porqué', async () => {
+    const monthlyOrderSource = pageSource(STORE, [
+      {
+        orders: [
+          makeMonthlyOrder({ id: 'no-paid', financialStatus: 'PENDING' }),
+          makeMonthlyOrder({ id: 'full-refund', total: 116, refundedAmount: 116, financialStatus: 'REFUNDED' }),
+          makeMonthlyOrder({ id: 'normal' }),
+        ],
+        nextCursor: null,
+      },
+    ])
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource }))
+
+    const result = await useCase.execute({ year: 2026, month: 6, dryRun: true })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const store = result.value.stores[0]
+
+    expect(store.skippedUnpaid.count).toBe(1)
+    expect(store.skippedUnpaid.orders[0].orderId).toBe('no-paid')
+    expect(store.skippedUnpaid.orders[0].financialStatus).toBe('PENDING')
+    expect(store.skippedUnpaid.orders[0].reference).toBeTruthy()
+
+    expect(store.skippedFullyRefunded.count).toBe(1)
+    expect(store.skippedFullyRefunded.orders[0].orderId).toBe('full-refund')
+    expect(store.skippedFullyRefunded.orders[0].refundedAmount).toBe(116)
+
+    expect(result.value.summary.skippedUnpaid).toBe(1)
+    expect(result.value.summary.hasFailures).toBe(true)
+  })
+
+  it('el reporte concilia: enumerated − descartes − eligible === 0 (invariante)', async () => {
+    const monthlyOrderSource = pageSource(STORE, [
+      {
+        orders: [
+          makeMonthlyOrder({ id: 'no-pos', sourceIdentifier: null }),
+          makeMonthlyOrder({ id: 'no-paid', financialStatus: 'PENDING' }),
+          makeMonthlyOrder({ id: 'full-refund', total: 116, refundedAmount: 116, financialStatus: 'REFUNDED' }),
+          makeMonthlyOrder({ id: 'zero-total', total: 0 }),
+          makeMonthlyOrder({ id: 'normal' }),
+        ],
+        nextCursor: null,
+      },
+    ])
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource }))
+
+    const result = await useCase.execute({ year: 2026, month: 6, dryRun: true })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const store = result.value.stores[0]
+
+    expect(store.unaccounted).toBe(0)
+    expect(
+      store.enumerated
+      - store.skippedNonPos
+      - store.skippedUnpaid.count
+      - store.skippedFullyRefunded.count
+      - store.skippedZeroTotal,
+    ).toBe(store.eligible)
+    expect(result.value.summary.unaccounted).toBe(0)
+    expect(result.value.summary.hasFailures).toBe(true)
+  })
 })
 
 describe('EmitGlobalInvoiceUseCase — pedidos con total 0 (descuento 100%), decisión finanzas 2026-07-10', () => {
@@ -397,12 +465,37 @@ describe('EmitGlobalInvoiceUseCase — exclusión de ya facturados (unión de ga
     expect(result.ok).toBe(true)
     if (!result.ok) return
     const store = result.value.stores[0]
-    expect(store.excludedAlreadyInvoiced).toBe(2)
+    expect(store.excludedAlreadyInvoiced.count).toBe(2)
     expect(dbGateway.calls).toBe(1)
     expect(facturamaGateway.calls).toBe(1)
     // Solo order-3 sobrevive → cae en un bucket con 1 pedido.
     const totalSurvivingOrders = store.buckets.reduce((acc, b) => acc + b.orders, 0) + store.unmapped.count
     expect(totalSurvivingOrders).toBe(1)
+  })
+
+  it('reporta la identidad de auditoría de cada excluido: order.id, referencia y canal', async () => {
+    const byId = makeMonthlyOrder({ id: 'order-1', orderNumber: '#1' })
+    const byReference = makeMonthlyOrder({ id: 'order-2', orderNumber: '#2', sourceIdentifier: '87008247993-3-2000' })
+    const survivor = makeMonthlyOrder({ id: 'order-3', orderNumber: '#3' })
+
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [byId, byReference, survivor], nextCursor: null }])
+    const reference = buildOrderReference('#2', '87008247993-3-2000')
+
+    const dbGateway = new FakeInvoicedOrdersGateway({ orderIds: new Set(['order-1']), orderReferences: new Set() })
+    const facturamaGateway = new FakeInvoicedOrdersGateway({ orderIds: new Set(), orderReferences: new Set([reference]) })
+
+    const useCase = new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, invoicedOrdersGateways: [dbGateway, facturamaGateway] })
+    )
+
+    const result = await useCase.execute({ year: 2026, month: 6, dryRun: true })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const { orders } = result.value.stores[0].excludedAlreadyInvoiced
+    expect(orders).toHaveLength(2)
+    expect(orders).toContainEqual({ orderId: 'order-1', reference: buildOrderReference('#1', '87008247993-2-1000'), matchedBy: 'db' })
+    expect(orders).toContainEqual({ orderId: 'order-2', reference, matchedBy: 'facturama' })
   })
 })
 
@@ -450,7 +543,9 @@ describe('EmitGlobalInvoiceUseCase — agrupación por bucket (por forma de pago
       { id: 'mixed' },
       [{ gateway: 'cash', amount: 200 }, { gateway: 'debit_card', amount: 300 }]
     )
-    const unmappedOrder = makeMonthlyOrder({ id: 'unmapped-1' }, [{ gateway: 'wire_transfer_unknown', amount: 100 }])
+    // Gateway sin ninguna regla de clasificación. OJO: no usar nombres que
+    // contengan "transfer" — desde 2026-07-21 esos caen en credito, no unmapped.
+    const unmappedOrder = makeMonthlyOrder({ id: 'unmapped-1' }, [{ gateway: 'mercado_pago', amount: 100 }])
 
     const monthlyOrderSource = pageSource(STORE, [{ orders: [mixedPayment, unmappedOrder], nextCursor: null }])
     const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource }))
@@ -649,6 +744,121 @@ describe('EmitGlobalInvoiceUseCase — stamped_unconfirmed tras timbrado exitoso
   })
 })
 
+describe('EmitGlobalInvoiceUseCase — periodicidad DIARIA (R1)', () => {
+  it('con day presente, enumera solo el rango del día (no del mes) en zona MX', async () => {
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [makeMonthlyOrder({ id: 'o1' })], nextCursor: null }])
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource }))
+
+    const result = await useCase.execute({ year: 2026, month: 6, day: 15, dryRun: true })
+
+    expect(result.ok).toBe(true)
+    expect(monthlyOrderSource.calls).toHaveLength(1)
+    const { from, to } = monthlyOrderSource.calls[0]
+    // Ventana rodante de UN día: del corte del día 14 al corte del día 15
+    // (21:00 MX), NO el mes completo — ver createDailyGlobalPeriod.
+    expect(from.toISOString()).toBe('2026-06-15T03:00:00.000Z')
+    expect(to.toISOString()).toBe('2026-06-16T02:59:59.999Z')
+  })
+
+  it('el report incluye day cuando la corrida fue diaria', async () => {
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [], nextCursor: null }])
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource }))
+
+    const result = await useCase.execute({ year: 2026, month: 6, day: 15, dryRun: true })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.day).toBe(15)
+  })
+
+  it('el report NO incluye day en una corrida mensual (comportamiento intacto)', async () => {
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [], nextCursor: null }])
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource }))
+
+    const result = await useCase.execute({ year: 2026, month: 6, dryRun: true })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.day).toBeUndefined()
+  })
+
+  it('day inválido para el mes (ej. 31 en junio) devuelve VALIDATION_FAILED', async () => {
+    const monthlyOrderSource = new FakeMonthlyOrderSource(new Map())
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource }))
+
+    const result = await useCase.execute({ year: 2026, month: 6, day: 31 })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.code).toBe('VALIDATION_FAILED')
+    expect(monthlyOrderSource.calls).toHaveLength(0)
+  })
+
+  it('la identidad del header (global_invoices) lleva periodDay en una corrida diaria', async () => {
+    const order = makeMonthlyOrder({ id: 'order-1' })
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [order], nextCursor: null }])
+    const globalRepo = new FakeGlobalInvoiceRepository()
+
+    const result = await new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, globalRepo })
+    ).execute({ year: 2026, month: 6, day: 15 })
+
+    expect(result.ok).toBe(true)
+    const identity: GlobalInvoiceIdentity = {
+      storeName: STORE, periodYear: 2026, periodMonth: 6, periodDay: 15, paymentBucket: 'efectivo', chunkIndex: 0,
+    }
+    expect(globalRepo.getByIdentity(identity)).toBeDefined()
+  })
+
+  it('un header DIARIO y uno MENSUAL del mismo (store, año, mes, bucket, chunk) coexisten — no colisionan', async () => {
+    const globalRepo = new FakeGlobalInvoiceRepository()
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [makeMonthlyOrder({ id: 'order-1' })], nextCursor: null }])
+    const dailyOrderSource = pageSource(STORE, [{ orders: [makeMonthlyOrder({ id: 'order-2' })], nextCursor: null }])
+
+    const monthlyResult = await new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, globalRepo })
+    ).execute({ year: 2026, month: 6 })
+    const dailyResult = await new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource: dailyOrderSource, globalRepo })
+    ).execute({ year: 2026, month: 6, day: 15 })
+
+    expect(monthlyResult.ok).toBe(true)
+    expect(dailyResult.ok).toBe(true)
+    if (!monthlyResult.ok || !dailyResult.ok) return
+    expect(monthlyResult.value.stores[0].buckets[0].chunks[0].outcome).toBe('emitted')
+    expect(dailyResult.value.stores[0].buckets[0].chunks[0].outcome).toBe('emitted')
+  })
+
+  it('dos corridas diarias del MISMO día → la segunda es idempotente (skipped_idempotent)', async () => {
+    const globalRepo = new FakeGlobalInvoiceRepository()
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [makeMonthlyOrder({ id: 'order-1' })], nextCursor: null }])
+
+    const first = await new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, globalRepo })
+    ).execute({ year: 2026, month: 6, day: 15 })
+    const second = await new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, globalRepo })
+    ).execute({ year: 2026, month: 6, day: 15 })
+
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(second.value.stores[0].buckets[0].chunks[0].outcome).toBe('skipped_idempotent')
+  })
+
+  it('la corrida diaria pasa periodDay al puerto de timbrado (GlobalInvoiceStamping)', async () => {
+    const order = makeMonthlyOrder({ id: 'order-1' })
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [order], nextCursor: null }])
+    const stamping = makeSuccessfulStamping()
+
+    const result = await new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, globalStamping: stamping })
+    ).execute({ year: 2026, month: 6, day: 15 })
+
+    expect(result.ok).toBe(true)
+    expect(stamping.calls[0].periodDay).toBe(15)
+  })
+})
+
 describe('EmitGlobalInvoiceUseCase — dryRun no escribe', () => {
   it('cero llamadas de escritura a globalRepo/invoiceRepo/globalStamping', async () => {
     const orders = [
@@ -681,5 +891,96 @@ describe('EmitGlobalInvoiceUseCase — dryRun no escribe', () => {
     expect(invoiceRepo.calls.createInvoice).toBe(0)
     expect(invoiceRepo.calls.deleteByGlobalInvoiceId).toBe(0)
     expect(stamping.calls).toHaveLength(0)
+  })
+})
+
+// Motivación (2026-07-22): el reporte solo traía el árbol store→bucket→chunk, así
+// que una corrida enteramente fallida era indistinguible de una exitosa sin
+// recorrerlo entero — y el cron la reportaba verde. `summary` es la señal que el
+// disparador lee para decidir éxito/fallo.
+describe('EmitGlobalInvoiceUseCase — summary agregado de la corrida', () => {
+  it('corrida exitosa → cuenta el chunk emitido y hasFailures es false', async () => {
+    const order = makeMonthlyOrder({ id: 'order-1' })
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [order], nextCursor: null }])
+    const useCase = new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, globalStamping: makeSuccessfulStamping() })
+    )
+
+    const result = await useCase.execute({ year: 2026, month: 6 })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const { summary } = result.value
+    expect(summary.chunks).toBe(1)
+    expect(summary.emitted).toBe(1)
+    expect(summary.rolledBack).toBe(0)
+    expect(summary.ordersEligible).toBe(1)
+    expect(summary.hasFailures).toBe(false)
+  })
+
+  it('Facturama falla → rolledBack cuenta y hasFailures es true', async () => {
+    const order = makeMonthlyOrder({ id: 'order-1' })
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [order], nextCursor: null }])
+    const failingStamping = new FakeGlobalInvoiceStamping(async () => {
+      throw new Error('El atributo \'Serie\' debe existir en la sucursal')
+    })
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource, globalStamping: failingStamping }))
+
+    const result = await useCase.execute({ year: 2026, month: 6 })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const { summary } = result.value
+    expect(summary.chunks).toBe(1)
+    expect(summary.emitted).toBe(0)
+    expect(summary.rolledBack).toBe(1)
+    expect(summary.hasFailures).toBe(true)
+  })
+
+  // Decisión 2026-07-23: un `unmapped` es un hueco fiscal (el pedido no llega a
+  // ningún bucket → nunca se factura), así que debe ALERTAR como los demás
+  // fallos, no quedarse como dato informativo del reporte.
+  it('unmapped (forma de pago no clasificable) marca hasFailures aunque todo lo demás timbre', async () => {
+    const mapped = makeMonthlyOrder({ id: 'order-mapped' })
+    const weird = makeMonthlyOrder({ id: 'order-unmapped' })
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [mapped, weird], nextCursor: null }])
+
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({
+      monthlyOrderSource,
+      globalStamping: makeSuccessfulStamping(),
+      paymentBucketPolicy: {
+        classify: (payments) => (payments.length === 0 ? 'unmapped' : 'efectivo'),
+      },
+    }))
+    // `weird` sin pagos → 'unmapped'; `mapped` conserva los suyos → 'efectivo'.
+    weird.payments = []
+
+    const result = await useCase.execute({ year: 2026, month: 6 })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const { summary } = result.value
+    expect(summary.unmapped).toBe(1)
+    expect(summary.emitted).toBe(1)
+    expect(summary.rolledBack).toBe(0)
+    expect(summary.stampedUnconfirmed).toBe(0)
+    expect(summary.hasFailures).toBe(true)
+  })
+
+  it('stamped_unconfirmed (timbrado sin registrar) también marca hasFailures', async () => {
+    const order = makeMonthlyOrder({ id: 'order-1' })
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [order], nextCursor: null }])
+    const globalRepo = new FakeGlobalInvoiceRepository(true) // falla el primer updateGlobalStamp('emitted')
+    const stamping = new FakeGlobalInvoiceStamping(async () => ({ facturamaId: 'GF-001', uuidCfdi: crypto.randomUUID() }))
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource, globalRepo, globalStamping: stamping }))
+
+    const result = await useCase.execute({ year: 2026, month: 6 })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const { summary } = result.value
+    expect(summary.stampedUnconfirmed).toBe(1)
+    expect(summary.emitted).toBe(0)
+    expect(summary.hasFailures).toBe(true)
   })
 })

@@ -17,6 +17,8 @@ export interface EmitGlobalInvoicePayload {
   storeName: string
   periodYear: number
   periodMonth: number
+  /** Día del periodo cuando es DIARIO; `undefined` en un periodo mensual. */
+  periodDay?: number
   paymentBucket: PaymentBucket
   itemCount: number
   /** Pedidos sobrevivientes del chunk — insumo para construir los Items del CFDI. */
@@ -27,6 +29,12 @@ export interface EmitGlobalInvoicePayload {
 export interface EmitGlobalInvoiceResult {
   facturamaId: string
   uuidCfdi: string
+  /**
+   * Identificador legible que Facturama asignó al comprobante ("GDL1-7461").
+   * Es lo que permite reconocer marca y consecutivo sin entrar al panel; el
+   * folio lo asigna Facturama por Serie, no lo manda el Portal.
+   */
+  serieFolio?: string
 }
 
 export interface GlobalInvoiceStamping {

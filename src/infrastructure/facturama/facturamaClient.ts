@@ -13,7 +13,14 @@ import { MX_TZ } from '../../domain/shared/MxCalendar'
 export interface FacturamaCfdiResponse {
   Id: string
   Folio?: string
-  Series?: string
+  /**
+   * Facturama responde `Serie` en SINGULAR — confirmado contra la doc oficial
+   * (POST /3/cfdis, ejemplo `"Serie": "R", "Folio": "1"`) y en vivo el
+   * 2026-07-22: el reporte del cron mostraba `serieFolio:"3"` para un CFDI que
+   * en Facturama era `GDL1 3`, porque el código leía `Series`, que no existe.
+   * `Serie` es también el nombre del atributo en el estándar CFDI 4.0 del SAT.
+   */
+  Serie?: string
   Date?: string
   Complement?: {
     TaxStamp?: {
@@ -208,19 +215,22 @@ export interface FacturamaCfdiListItem {
 }
 
 /**
- * Tamaño de página del listado `GET /cfdi` — confirmado en la doc oficial:
- * https://apisandbox.facturama.mx/guias/api-web/cfdi/consultar
- * (`page=0` → elementos 1-100, `page=1` → 101-200, etc.).
+ * Tope de seguridad de páginas a recorrer. La doc oficial de Facturama
+ * (https://apisandbox.facturama.mx/guias/api-web/cfdi/consultar) dice que el
+ * listado `GET /cfdi` pagina a 100 elementos por página, pero un sondeo de
+ * solo lectura contra PRODUCCIÓN (2026-07-15) observó 10 elementos por
+ * página cuando se filtra por fecha (`dateStart`/`dateEnd`) — `page` sí
+ * avanza correctamente (folios y fechas descendiendo, cero repetidos), solo
+ * que el tamaño real de página es menor al documentado. Por eso el paro de
+ * `listarCfdisEmitidos` es AGNÓSTICO al tamaño de página (página vacía, no
+ * "menos que N" — ver más abajo). 200 páginas cubre con margen amplio el
+ * volumen actual (~100-150 CFDIs/mes) incluso al tamaño real observado
+ * (10/página → 2,000 CFDIs por ventana). Si se alcanza, NUNCA se regresa un
+ * listado parcial en silencio — eso reintroduciría el bug de exclusión
+ * incompleta que motivó la paginación. En su lugar se lanza un Error
+ * explícito.
  */
-const CFDI_LIST_PAGE_SIZE = 100
-
-/**
- * Tope de seguridad de páginas a recorrer (100 páginas × 100 = 10,000 CFDIs).
- * Si se alcanza, NUNCA se regresa un listado parcial en silencio — eso
- * reintroduciría el bug de exclusión incompleta que motivó la paginación.
- * En su lugar se lanza un Error explícito.
- */
-const CFDI_LIST_MAX_PAGES = 100
+const CFDI_LIST_MAX_PAGES = 200
 
 /**
  * Formatea un instante a "dd/MM/yyyy" según el CALENDARIO en zona MX (no UTC).
@@ -255,13 +265,17 @@ function formatMxDate(date: Date): string {
  * por el canal Facturama de InvoicedOrdersGateway (Paso 4) para excluir
  * pedidos ya facturados por la app externa de Facturama en Shopify.
  *
- * El listado está PAGINADO a `CFDI_LIST_PAGE_SIZE` elementos por página
- * (confirmado en la doc oficial). Aquí se pagina con `page=0,1,2…`
- * acumulando resultados hasta que una página devuelva menos del tamaño
- * completo (o 0) — señal de última página. Si se alcanza
- * `CFDI_LIST_MAX_PAGES` sin encontrar una página parcial, se lanza un
- * Error en vez de devolver un listado incompleto (ver riesgo de doble
- * facturación si la exclusión queda corta).
+ * El listado está PAGINADO, pero el tamaño real de página NO es confiable:
+ * la doc oficial dice 100 elementos por página y el sondeo de producción
+ * (2026-07-15) observó 10 con filtros de fecha. Por eso el paro NO depende
+ * del tamaño ("menos que N elementos"), sino de encontrar una página VACÍA:
+ * se pagina con `page=0,1,2…` acumulando resultados hasta que una página
+ * devuelva 0 elementos, sin importar cuántos traiga cada página intermedia.
+ * El costo es un request extra al final de cada corrida — aceptado (KISS:
+ * robustez ante un tamaño de página no documentado, sobre un ahorro marginal
+ * de una llamada). Si se alcanza `CFDI_LIST_MAX_PAGES` sin encontrar una
+ * página vacía, se lanza un Error en vez de devolver un listado incompleto
+ * (ver riesgo de doble facturación si la exclusión queda corta).
  *
  * `range` es opcional y, cuando viene, se manda como `dateStart`/`dateEnd`
  * (filtro server-side, formato `dd/MM/yyyy`) para acotar el listado. La
@@ -288,16 +302,16 @@ export async function listarCfdisEmitidos(
     const items = Array.isArray(data) ? data : data.Items ?? []
     results.push(...items)
 
-    if (items.length < CFDI_LIST_PAGE_SIZE) {
+    if (items.length === 0) {
       return results
     }
   }
 
   throw new Error(
     `Facturama listarCfdisEmitidos: se alcanzó el tope de seguridad de ` +
-      `${CFDI_LIST_MAX_PAGES} páginas (${CFDI_LIST_MAX_PAGES * CFDI_LIST_PAGE_SIZE} CFDIs) ` +
-      `sin encontrar una página parcial. El listado podría estar incompleto — ` +
-      `se aborta en vez de excluir pedidos ya facturados de forma silenciosa.`
+      `${CFDI_LIST_MAX_PAGES} páginas sin encontrar una página vacía. ` +
+      `El listado podría estar incompleto — se aborta en vez de excluir ` +
+      `pedidos ya facturados de forma silenciosa.`
   )
 }
 

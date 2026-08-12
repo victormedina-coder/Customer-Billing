@@ -17,6 +17,7 @@
  */
 
 import type { Order } from '../../domain/orders/Order'
+import { resolveSerie } from './brandSerie'
 import type { MonthlyOrder } from '../../domain/global/ports/MonthlyOrderSource'
 import type { GlobalPeriod } from '../../domain/global/GlobalPeriod'
 import type { PaymentBucket } from '../../domain/global/PaymentBucket'
@@ -27,14 +28,24 @@ import type { CfdiItem, CfdiReceiver, CfdiTax } from './cfdiPayloadBuilder'
 // ─── Tipos Facturama — CFDI global (infraestructura) ─────────────────────────
 
 export interface GlobalInformation {
-  Periodicity: '04'
+  /**
+   * Clave SAT c_Periodicidad: '04' = Mensual, '01' = Diario. El valor sale
+   * de `period.periodicityCode()` — el día NO se codifica aquí (SAT: el día
+   * queda implícito en `FechaEmision`; ver createDailyGlobalPeriod).
+   */
+  Periodicity: '01' | '04'
   Months: string
   Year: string
 }
 
 export interface GlobalCfdiPayload {
   NameId: string
-  Folio: string
+  Serie?: string
+   /**
+   * NO existe `Folio` a propósito: Facturama lo asigna e incrementa por Serie
+   * (decisión 2026-07-21) — esa es la numeración continua que contabilidad ya
+   * conoce en producción. Mandar uno propio rompería la secuencia.
+   */
   CfdiType: 'I'
   ExpeditionPlace: string
   Exportation: '01'
@@ -64,7 +75,6 @@ const GENERIC_RECEIVER: CfdiReceiver = {
  */
 const GLOBAL_PRODUCT_CODE = '01010101'
 const GLOBAL_UNIT_CODE = 'ACT'
-const GLOBAL_UNIT_NAME = 'Actividad'
 
 /**
  * Tasa de IVA FIJA del CFDI global — decisión del contador (2026-07-13, D1):
@@ -85,7 +95,6 @@ const BUCKET_TO_SAT_PAYMENT_FORM: Record<PaymentBucket, string> = {
   debito: '28',
   efectivo: '01',
 }
-
 /** Redondeo monetario a 2 decimales, igual convención que FiscalCalculator. */
 function round2(n: number): number {
   return Math.round(n * 100) / 100
@@ -119,7 +128,6 @@ function buildItemForOrder(order: Order): CfdiItem {
     ProductCode: GLOBAL_PRODUCT_CODE,
     IdentificationNumber: identificationNumber,
     Description: 'Venta',
-    Unit: GLOBAL_UNIT_NAME,
     UnitCode: GLOBAL_UNIT_CODE,
     UnitPrice: String(subtotalSinIVA),
     Quantity: '1',
@@ -154,11 +162,10 @@ function buildItemForOrder(order: Order): CfdiItem {
  * Construye el payload del CFDI global a partir del periodo, el bucket de
  * pago y los pedidos sobrevivientes de un chunk. Función pura, sin I/O.
  *
- * `storeName` se recibe por simetría con la identidad del CFDI global
- * (GlobalInvoiceIdentity / EmitGlobalInvoicePayload) aunque el contenido del
- * CFDI en sí no lo necesita hoy: el receptor es genérico y la cuenta de
- * Facturama es única (un solo NameId global, igual que el individual) sin
- * distinción por tienda/marca.
+ * `storeName` (clave de marca: 'ariat' | 'stetson' | 'western-brothers')
+ * resuelve la Serie fiscal del comprobante — es el único dato del CFDI que
+ * distingue la marca, ya que el emisor/CSD y el receptor genérico son
+ * idénticos para las tres.
  */
 export function buildGlobalCfdiPayload(
   period: GlobalPeriod,
@@ -176,14 +183,12 @@ export function buildGlobalCfdiPayload(
     throw new Error('buildGlobalCfdiPayload: orders no puede estar vacío.')
   }
 
-  const folio = String(Date.now()).slice(-8)
   const paymentForm = BUCKET_TO_SAT_PAYMENT_FORM[bucket]
 
   const items = orders.map((monthlyOrder) => buildItemForOrder(monthlyOrder.order))
 
-  return {
+  const payload: GlobalCfdiPayload = {
     NameId: nameId,
-    Folio: folio,
     CfdiType: 'I',
     ExpeditionPlace: expeditionPlace,
     Exportation: '01',
@@ -201,4 +206,9 @@ export function buildGlobalCfdiPayload(
       Year: period.yearString(),
     },
   }
+
+  const serie = resolveSerie(storeName)
+  if (serie) payload.Serie = serie
+
+  return payload
 }

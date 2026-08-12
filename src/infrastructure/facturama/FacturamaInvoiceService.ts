@@ -46,7 +46,7 @@ export class FacturamaInvoiceService implements InvoiceStampingService {
     const facturamaId = resp.Id
     const uuid        = resp.Complement?.TaxStamp?.Uuid ?? resp.Uuid ?? ''
     const serieFolio  =
-      [resp.Series, resp.Folio].filter(Boolean).join('-') || resp.Folio || resp.Id
+      [resp.Serie, resp.Folio].filter(Boolean).join('-') || resp.Folio || resp.Id
     const fecha = resp.Date ?? ''
     const sello =
       resp.Complement?.TaxStamp?.SatSign ?? resp.Complement?.TaxStamp?.CfdiSign ?? ''

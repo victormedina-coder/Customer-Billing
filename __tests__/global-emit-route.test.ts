@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import type { GlobalRunReport } from '../src/application/global/EmitGlobalInvoiceUseCase'
+import type { GlobalRunReport, GlobalRunSummary } from '../src/application/global/EmitGlobalInvoiceUseCase'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // vi.mock — composition root + rate-limit
@@ -33,11 +33,29 @@ vi.mock('../src/composition/makeEmitGlobalInvoiceUseCase', () => ({
   makeEmitGlobalInvoiceUseCase: vi.fn(),
 }))
 
+// El aviso por correo es un efecto de RED que el route dispara tras resolver el
+// reporte. Se mockea aquí para que estos tests (resolución de periodo) no abran
+// una conexión SMTP real: si el .env trae SMTP_*, makeRunReportNotifier
+// construye un transporte de nodemailer de verdad, y en las corridas MENSUALES
+// —que sí emiten correo— con vi.useFakeTimers() los timers de nodemailer quedan
+// congelados y el envío cuelga hasta el timeout. El comportamiento del correo
+// tiene su propia suite en run-report-notifier.test.ts.
+vi.mock('../src/composition/makeRunReportNotifier', () => ({
+  makeRunReportNotifier: vi.fn(() => ({ notify: vi.fn(async () => {}) })),
+}))
+
 let rateLimitMod: typeof import('../src/infrastructure/rate-limit')
 let compositionMod: typeof import('../src/composition/makeEmitGlobalInvoiceUseCase')
 let POST: typeof import('../app/api/global/emit/route')['POST']
 
 const SECRET = 'test-global-secret'
+
+/** Resumen "todo en ceros" — corrida sin chunks, que es el caso base sin fallos. */
+const EMPTY_SUMMARY: GlobalRunSummary = {
+  chunks: 0, emitted: 0, rolledBack: 0, skippedIdempotent: 0,
+  skippedUnpaid: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0,
+  ordersEligible: 0, unmapped: 0, unaccounted: 0, hasFailures: false,
+}
 
 function makeFakeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
   return {
@@ -45,6 +63,7 @@ function makeFakeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunRepo
     year: 2026,
     month: 6,
     dryRun: false,
+    summary: EMPTY_SUMMARY,
     stores: [],
     ...overrides,
   }
@@ -199,6 +218,44 @@ describe('POST /api/global/emit', () => {
     expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: 'ariat', dryRun: false })
   })
 
+  // Regresión 2026-07-22: una corrida con los 9 chunks en `rolled_back` (serie
+  // no dada de alta en Facturama) viajó dentro de un HTTP 200 y Railway pintó el
+  // cron en verde — cero CFDIs emitidos y nadie se enteró. El status debe
+  // reflejar el resultado real de la corrida, no solo que el handler terminó.
+  it('summary.hasFailures → responde 500 con el reporte COMPLETO en el body', async () => {
+    const failedSummary: GlobalRunSummary = {
+      ...EMPTY_SUMMARY, chunks: 9, rolledBack: 9, ordersEligible: 37, hasFailures: true,
+    }
+    const fakeReport = makeFakeReport({ runId: 'run-failed', summary: failedSummary })
+    const execute = vi.fn(async () => ({ ok: true, value: fakeReport }))
+    vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { execute } as any,
+    )
+
+    const res = await POST(makePostRequest({ year: 2026, month: 7 }, withSecretHeader()) as never)
+    const json = await res.json()
+
+    expect(res.status).toBe(500)
+    // El reporte NO se recorta al fallar: es lo único que permite diagnosticar.
+    expect(json.report).toEqual(fakeReport)
+  })
+
+  it('stamped_unconfirmed (timbrado sin registrar) también marca la corrida como fallida', async () => {
+    const unconfirmedSummary: GlobalRunSummary = {
+      ...EMPTY_SUMMARY, chunks: 3, emitted: 2, stampedUnconfirmed: 1, hasFailures: true,
+    }
+    const execute = vi.fn(async () => ({ ok: true, value: makeFakeReport({ summary: unconfirmedSummary }) }))
+    vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { execute } as any,
+    )
+
+    const res = await POST(makePostRequest({ year: 2026, month: 7 }, withSecretHeader()) as never)
+
+    expect(res.status).toBe(500)
+  })
+
   it('body sin year/month → el use case recibe el mes anterior en zona MX (cron sin periodo)', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-15T18:00:00.000Z')) // 15-jul-2026 12:00 MX → mes anterior: junio 2026
@@ -217,6 +274,51 @@ describe('POST /api/global/emit', () => {
     expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: undefined, dryRun: true })
   })
 
+  describe("body con relative (R4) — reloj inyectado con vi.setSystemTime", () => {
+    it("relative: 'current-month' resuelve al mes MX EN CURSO (no al anterior)", async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-07-15T18:00:00.000Z')) // 15-jul-2026 12:00 MX → mes en curso: julio 2026
+
+      const execute = vi.fn(async () => ({ ok: true, value: makeFakeReport({ year: 2026, month: 7 }) }))
+      vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { execute } as any,
+      )
+
+      const res = await POST(makePostRequest({ relative: 'current-month', dryRun: true }, withSecretHeader()) as never)
+
+      expect(res.status).toBe(200)
+      expect(execute).toHaveBeenCalledWith({ year: 2026, month: 7, storeName: undefined, dryRun: true })
+    })
+
+    it("relative: 'previous-month' resuelve al mes MX anterior (mismo resultado que el default histórico)", async () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-07-15T18:00:00.000Z')) // mes anterior: junio 2026
+
+      const execute = vi.fn(async () => ({ ok: true, value: makeFakeReport({ year: 2026, month: 6 }) }))
+      vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { execute } as any,
+      )
+
+      const res = await POST(makePostRequest({ relative: 'previous-month', dryRun: true }, withSecretHeader()) as never)
+
+      expect(res.status).toBe(200)
+      expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: undefined, dryRun: true })
+    })
+
+    it('responde 400 con relative + year/month (mutuamente excluyentes) — no llama al use case', async () => {
+      const res = await POST(
+        makePostRequest({ relative: 'current-month', year: 2026, month: 6 }, withSecretHeader()) as never,
+      )
+      const json = await res.json()
+
+      expect(res.status).toBe(400)
+      expect(json.error.code).toBe('VALIDATION_FAILED')
+      expect(compositionMod.makeEmitGlobalInvoiceUseCase).not.toHaveBeenCalled()
+    })
+  })
+
   it('propaga dryRun: true al use case', async () => {
     const execute = vi.fn(async () => ({ ok: true, value: makeFakeReport({ dryRun: true }) }))
     vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
@@ -231,6 +333,7 @@ describe('POST /api/global/emit', () => {
     expect(res.status).toBe(200)
     expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: undefined, dryRun: true })
   })
+
 
   it('mapea VALIDATION_FAILED del use case a 400', async () => {
     const execute = vi.fn(async () => ({

@@ -35,6 +35,15 @@ export interface Order {
   customerEmail: string
   alreadyInvoiced: boolean
   storeName: string
+  /**
+   * Clave de marca (brand key: 'ariat' | 'stetson' | 'western-brothers') de la
+   * tienda que emitió el pedido. Resuelve la Serie fiscal del CFDI (ver
+   * brandSerie.ts). Distinta de `storeName`, que en pedidos POS es el nombre de
+   * la UBICACIÓN física (physicalLocation), no la marca. Opcional: fuentes sin
+   * marca (tests, otras integraciones) pueden omitirla → el CFDI usa la serie
+   * por defecto de la sucursal.
+   */
+  brand?: string
   refundedAmount: number
   financialStatus: string
   /**

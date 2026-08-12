@@ -160,7 +160,9 @@ export class ShopifyOrderSource implements OrderSource {
     }
 
     const winner = matches[0]
-    return normalizeOrder(winner.order!, winner.brand.label)
+    // Se propaga la brand KEY (no el label) porque resuelve la Serie fiscal del
+    // CFDI (brandSerie.ts); `winner.brand.label` sigue como storeName de display.
+    return normalizeOrder(winner.order!, winner.brand.label, winner.brand.key)
   }
 
   private async queryBrand(cfg: BrandConfig, folioClean: string): Promise<BrandResult> {

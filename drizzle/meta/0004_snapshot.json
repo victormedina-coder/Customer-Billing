@@ -1,0 +1,368 @@
+{
+  "id": "983b8db3-e084-4f72-8d3a-af6836230c1c",
+  "prevId": "560f5f88-ca54-4dfd-ab24-228bd34736f5",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.global_invoices": {
+      "name": "global_invoices",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "store_name": {
+          "name": "store_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "period_year": {
+          "name": "period_year",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "period_month": {
+          "name": "period_month",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "period_day": {
+          "name": "period_day",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "payment_bucket": {
+          "name": "payment_bucket",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "chunk_index": {
+          "name": "chunk_index",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "facturama_id": {
+          "name": "facturama_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "uuid_cfdi": {
+          "name": "uuid_cfdi",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "item_count": {
+          "name": "item_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_global_invoices_store_period": {
+          "name": "idx_global_invoices_store_period",
+          "columns": [
+            {
+              "expression": "store_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "period_year",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "period_month",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "global_invoices_facturama_id_unique": {
+          "name": "global_invoices_facturama_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "facturama_id"
+          ]
+        },
+        "global_invoices_uuid_cfdi_unique": {
+          "name": "global_invoices_uuid_cfdi_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "uuid_cfdi"
+          ]
+        },
+        "unique_global_period_bucket_chunk": {
+          "name": "unique_global_period_bucket_chunk",
+          "nullsNotDistinct": false,
+          "columns": [
+            "store_name",
+            "period_year",
+            "period_month",
+            "period_day",
+            "payment_bucket",
+            "chunk_index"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.invoices": {
+      "name": "invoices",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "order_id": {
+          "name": "order_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "order_number": {
+          "name": "order_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "store_name": {
+          "name": "store_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "facturama_id": {
+          "name": "facturama_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "uuid_cfdi": {
+          "name": "uuid_cfdi",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rfc_receptor": {
+          "name": "rfc_receptor",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "razon_social": {
+          "name": "razon_social",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "invoice_type": {
+          "name": "invoice_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'individual'"
+        },
+        "payment_type": {
+          "name": "payment_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "global_invoice_id": {
+          "name": "global_invoice_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "cancelled_at": {
+          "name": "cancelled_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "privacy_version": {
+          "name": "privacy_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "terms_version": {
+          "name": "terms_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "consent_at": {
+          "name": "consent_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "idx_invoices_store_name_created_at": {
+          "name": "idx_invoices_store_name_created_at",
+          "columns": [
+            {
+              "expression": "store_name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_invoices_invoice_type_status": {
+          "name": "idx_invoices_invoice_type_status",
+          "columns": [
+            {
+              "expression": "invoice_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "invoices_global_invoice_id_global_invoices_id_fk": {
+          "name": "invoices_global_invoice_id_global_invoices_id_fk",
+          "tableFrom": "invoices",
+          "tableTo": "global_invoices",
+          "columnsFrom": [
+            "global_invoice_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "invoices_facturama_id_unique": {
+          "name": "invoices_facturama_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "facturama_id"
+          ]
+        },
+        "invoices_uuid_cfdi_unique": {
+          "name": "invoices_uuid_cfdi_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "uuid_cfdi"
+          ]
+        },
+        "unique_order_store": {
+          "name": "unique_order_store",
+          "nullsNotDistinct": false,
+          "columns": [
+            "order_id",
+            "store_name"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

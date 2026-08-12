@@ -10,12 +10,11 @@
  * (header `x-global-secret` vs env `GLOBAL_INVOICE_SECRET`), pensado para ser
  * llamado por un cron/job interno, no por el navegador del cliente final.
  *
- * Recibe: { year?: number, month?: number, storeName?: string, dryRun?: boolean }
- * year/month son opcionales — pensado para que el cron de Railway dispare
- * este endpoint con un body estático sin periodo; cuando faltan, se resuelven
- * aquí al mes anterior en zona MX (ver previousMxYearMonth) ANTES de llamar
- * al use case, que sigue recibiendo siempre year/month explícitos (el
- * default es responsabilidad de esta capa interface, no de application).
+ * Recibe: { year?, month?, relative?, storeName?, dryRun? }
+ * (ver GlobalEmitSchema en lib/api/schemas.ts para las reglas de exclusión).
+ * La resolución del periodo (explícito vs relative vs default histórico) es
+ * responsabilidad de ESTA capa interface — el use case siempre recibe
+ * year/month ya resueltos (ver bloque "Resolución del periodo" abajo).
  * Responde: { report: GlobalRunReport } en 200, o error estructurado en 4xx/5xx.
  *
  * Runtime: Node.js (no edge) — usa `crypto` de node y secretos de servidor.
@@ -27,6 +26,8 @@
  *   422 STORE_NOT_CONFIGURED → storeName no está entre las marcas configuradas
  *   429 RATE_LIMITED         → demasiados intentos (defensa en profundidad)
  *   503 FEATURE_NOT_CONFIGURED → GLOBAL_INVOICE_SECRET no está definido
+ *   500 (con { report })   → la corrida terminó pero algún chunk quedó en
+ *                            rolled_back/stamped_unconfirmed (ver summary.hasFailures)
  */
 
 export const runtime = 'nodejs'
@@ -43,7 +44,11 @@ import { makeEmitGlobalInvoiceUseCase } from '@/src/composition/makeEmitGlobalIn
 import type { GlobalRunErrorCode } from '@/src/application/global/EmitGlobalInvoiceUseCase'
 import { httpError } from '@/src/interface/http/httpError'
 import { enforceRateLimit } from '@/src/interface/http/withRateLimit'
-import { previousMxYearMonth } from '@/src/domain/shared/MxCalendar'
+import { currentMxYearMonth, previousMxYearMonth } from '@/src/domain/shared/MxCalendar'
+import { getEvaluationNow } from '@/src/infrastructure/time/getEvaluationNow'
+import { logger } from '@/src/infrastructure/observability/logger'
+import { makeRunReportNotifier } from '@/src/composition/makeRunReportNotifier'
+import { shouldEmailRunReport } from '@/src/application/global/RunReportEmailPolicy'
 
 const SECRET_HEADER = 'x-global-secret'
 
@@ -72,7 +77,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // ── 0. Feature configurada ────────────────────────────────────────────────
   const secret = process.env.GLOBAL_INVOICE_SECRET
   if (!secret) {
-    console.error('[global-emit-route] GLOBAL_INVOICE_SECRET no configurado — endpoint deshabilitado')
+    logger.error({}, '[global-emit-route] GLOBAL_INVOICE_SECRET no configurado — endpoint deshabilitado')
     return httpError('FEATURE_NOT_CONFIGURED', 'La facturación global no está configurada.', 503)
   }
 
@@ -105,22 +110,36 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const msg = parsed.error.issues.map((issue) => issue.message).join('; ')
     return httpError('VALIDATION_FAILED', msg, 400)
   }
-  const { year: bodyYear, month: bodyMonth, storeName, dryRun } = parsed.data
+  const { year: bodyYear, month: bodyMonth, relative, storeName, dryRun } = parsed.data
 
-  // ── 4b. Default de periodo (solo interface — el use case no lo conoce) ────
-  // GlobalEmitSchema ya garantiza que year/month vienen ambos o ninguno.
+  // ── 4b. Resolución del periodo (solo interface — el use case no lo conoce) ─
+  // GlobalEmitSchema ya garantiza: year/month vienen ambos o ninguno; relative
+  // es excluyente con los componentes explícitos. Los 4 casos posibles, en
+  // orden de precedencia:
   let year: number
   let month: number
+  let resolvedBy: string
+
   if (bodyYear !== undefined && bodyMonth !== undefined) {
+    // 1. Explícito mensual ({year,month}).
     year = bodyYear
     month = bodyMonth
+    resolvedBy = 'explicit-monthly'
+  } else if (relative === 'current-month') {
+    // 2. Relativo mensual, mes en curso — cron de producción (R2).
+    ;({ year, month } = currentMxYearMonth(getEvaluationNow()))
+    resolvedBy = 'relative-current-month'
+  } else if (relative === 'previous-month') {
+    // 3. Relativo mensual, mes anterior — equivalente explícito del default histórico.
+    ;({ year, month } = previousMxYearMonth(getEvaluationNow()))
+    resolvedBy = 'relative-previous-month'
   } else {
-    ;({ year, month } = previousMxYearMonth(new Date()))
-    console.log('[global-emit-route] year/month no vinieron en el body — usando mes anterior en zona MX', {
-      year,
-      month,
-    })
+    // 4. Body vacío → default histórico: mes anterior en zona MX (comportamiento intacto).
+    ;({ year, month } = previousMxYearMonth(getEvaluationNow()))
+    resolvedBy = 'default-previous-month'
   }
+
+  logger.info({ resolvedBy, year, month }, '[global-emit-route] periodo resuelto')
 
   // ── 5. Orquestación delegada al use case ──────────────────────────────────
   const useCase = makeEmitGlobalInvoiceUseCase()
@@ -131,5 +150,36 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return httpError(code, message, ERROR_STATUS[code])
   }
 
-  return NextResponse.json({ report: result.value }, { status: 200 })
+  const report = result.value
+
+  // ── 5b. Aviso por correo (best-effort) ────────────────────────────────────
+  // NUNCA puede afectar la corrida fiscal: la facturación ya ocurrió arriba.
+  // Un fallo del SMTP se registra y se ignora; el status HTTP lo sigue
+  // decidiendo hasFailures. Se envía DESPUÉS de resolver el reporte para que
+  // el correo de fallo (hasFailures) también salga.
+  if (shouldEmailRunReport(report)) {
+    try {
+      await makeRunReportNotifier().notify(report)
+    } catch (err) {
+      logger.error(
+        { runId: report.runId, err: (err as Error).message },
+        '[global-emit-route] fallo al enviar el aviso por correo — la corrida NO se ve afectada',
+      )
+    }
+  }
+
+  // Un chunk en `rolled_back`/`stamped_unconfirmed` es un hueco fiscal: pedidos
+  // elegibles que no quedaron timbrados (o timbrados sin registrar). Se responde
+  // con status de error para que el cron de Railway lo marque como fallido en
+  // vez de pintarlo verde; el reporte COMPLETO viaja igual en el body para
+  // diagnóstico (mismo shape que el 200, solo cambia el status).
+  if (report.summary.hasFailures) {
+    logger.error(
+      { runId: report.runId, year: report.year, month: report.month, day: report.day, summary: report.summary },
+      '[global-emit-route] corrida con fallos — revisar chunks en rolled_back/stamped_unconfirmed',
+    )
+    return NextResponse.json({ report }, { status: 500 })
+  }
+
+  return NextResponse.json({ report }, { status: 200 })
 }

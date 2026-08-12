@@ -146,4 +146,102 @@ describe('FacturamaGlobalStamping.emitirGlobal', () => {
     const adapter = new FacturamaGlobalStamping()
     await expect(adapter.emitirGlobal(makePayload())).rejects.toThrow('fetch failed')
   })
+
+  it('periodDay presente → reconstruye un periodo DIARIO (Periodicity 01, mismo Months/Year del día)', async () => {
+    const { FacturamaGlobalStamping } = await importAdapter()
+    fetchMock.mockResolvedValueOnce(jsonResponse({ Id: 'X', Complement: { TaxStamp: { Uuid: 'Y' } } }))
+
+    const adapter = new FacturamaGlobalStamping()
+    await adapter.emitirGlobal(makePayload({ periodDay: 15 }))
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(String(init.body))
+    expect(body.GlobalInformation).toEqual({ Periodicity: '01', Months: '06', Year: '2026' })
+  })
+
+  it('periodDay ausente → sigue reconstruyendo un periodo MENSUAL (Periodicity 04, comportamiento intacto)', async () => {
+    const { FacturamaGlobalStamping } = await importAdapter()
+    fetchMock.mockResolvedValueOnce(jsonResponse({ Id: 'X', Complement: { TaxStamp: { Uuid: 'Y' } } }))
+
+    const adapter = new FacturamaGlobalStamping()
+    await adapter.emitirGlobal(makePayload())
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(String(init.body))
+    expect(body.GlobalInformation.Periodicity).toBe('04')
+  })
+
+  it('el body NO manda Folio: Facturama lo asigna e incrementa por Serie', async () => {
+    const { FacturamaGlobalStamping } = await importAdapter()
+    fetchMock.mockResolvedValueOnce(jsonResponse({ Id: 'X', Complement: { TaxStamp: { Uuid: 'Y' } } }))
+
+    const adapter = new FacturamaGlobalStamping()
+    await adapter.emitirGlobal(makePayload())
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).not.toHaveProperty('Folio')
+  })
+
+  it('el body lleva la Serie de la marca cuando storeName es una clave de marca', async () => {
+    const { FacturamaGlobalStamping } = await importAdapter()
+    fetchMock.mockResolvedValueOnce(jsonResponse({ Id: 'X', Complement: { TaxStamp: { Uuid: 'Y' } } }))
+
+    const adapter = new FacturamaGlobalStamping()
+    await adapter.emitirGlobal(makePayload({ storeName: 'western-brothers' }))
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body)).Serie).toBe('WB')
+  })
+})
+
+describe('FacturamaGlobalStamping.emitirGlobal — serieFolio de la respuesta', () => {
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubEnv('FACTURAMA_USER', FAKE_USER)
+    vi.stubEnv('FACTURAMA_PASS', FAKE_PASS)
+    vi.stubEnv('FACTURAMA_ENV', 'sandbox')
+    vi.stubEnv('FACTURAMA_EXPEDITION_PLACE', '26015')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  it('Serie + Folio de la respuesta se componen como "SERIE-FOLIO"', async () => {
+    const { FacturamaGlobalStamping } = await importAdapter()
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ Id: 'X', Serie: 'GDL1', Folio: '7461', Complement: { TaxStamp: { Uuid: 'Y' } } })
+    )
+
+    const adapter = new FacturamaGlobalStamping()
+    const result = await adapter.emitirGlobal(makePayload())
+
+    expect(result.serieFolio).toBe('GDL1-7461')
+  })
+
+  it('solo Folio (sin Serie) → se usa el folio a secas', async () => {
+    const { FacturamaGlobalStamping } = await importAdapter()
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ Id: 'X', Folio: '7461', Complement: { TaxStamp: { Uuid: 'Y' } } })
+    )
+
+    const adapter = new FacturamaGlobalStamping()
+    const result = await adapter.emitirGlobal(makePayload())
+
+    expect(result.serieFolio).toBe('7461')
+  })
+
+  it('respuesta sin Serie ni Folio → serieFolio undefined (nunca cadena vacía)', async () => {
+    const { FacturamaGlobalStamping } = await importAdapter()
+    fetchMock.mockResolvedValueOnce(jsonResponse({ Id: 'X', Complement: { TaxStamp: { Uuid: 'Y' } } }))
+
+    const adapter = new FacturamaGlobalStamping()
+    const result = await adapter.emitirGlobal(makePayload())
+
+    expect(result.serieFolio).toBeUndefined()
+  })
 })

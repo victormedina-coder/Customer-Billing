@@ -71,16 +71,21 @@ export const ResendSchema = z.object({
 export const InvoiceIdParamSchema = z.string().uuid()
 
 /**
- * Body de POST /api/global/emit — facturación global mensual. Endpoint
- * disparado por cron/operación interna (no por el cliente final), de ahí que
- * year/month se validen como number estricto (sin coerce): quien lo llama
- * controla el JSON que envía.
+ * Body de POST /api/global/emit — facturación global mensual.
+ * Endpoint disparado por cron/operación interna (no por el cliente final), de
+ * ahí que year/month se validen como number estricto (sin coerce): quien lo
+ * llama controla el JSON que envía.
  *
- * year/month son OPCIONALES: el cron de Railway dispara este endpoint con un
- * body estático (sin periodo), y cuando no vienen el route handler los
- * resuelve al mes anterior en zona MX (ver `previousMxYearMonth` en
- * MxCalendar). Deben venir AMBOS o NINGUNO — un periodo parcial (solo year o
- * solo month) es ambiguo y se rechaza aquí mismo, antes de llegar al handler.
+ * year/month son OPCIONALES: deben venir AMBOS o NINGUNO — un periodo
+ * parcial (solo year o solo month) es ambiguo y se rechaza aquí mismo, antes
+ * de llegar al handler.
+ *
+ * relative es OPCIONAL (R4 — resolución de defaults para crons con body
+ * estático): alternativa a year/month explícitos, MUTUAMENTE EXCLUYENTE con
+ * ellos. 'current-month'/'previous-month' resuelven a un periodo MENSUAL.
+ * Cuando ni componentes explícitos ni relative vienen (body vacío), el route
+ * handler aplica el default histórico: mes anterior en zona MX
+ * (`previousMxYearMonth`).
  */
 export const GlobalEmitSchema = z
   .object({
@@ -88,10 +93,24 @@ export const GlobalEmitSchema = z
     month: z.number().int('El mes debe ser un entero').min(1, 'Mes inválido (1-12)').max(12, 'Mes inválido (1-12)').optional(),
     storeName: z.string().min(1).max(100).optional(),
     dryRun: z.boolean().optional().default(false),
+    /**
+     * Resolución relativa del periodo (R4). 'current-month'/'previous-month'
+     * son PERMANENTES (las usa el cron de producción mensual, R2).
+     */
+    relative: z.enum(['current-month', 'previous-month']).optional(),
   })
   .superRefine((data, ctx) => {
     const hasYear = data.year !== undefined
     const hasMonth = data.month !== undefined
+    const hasRelative = data.relative !== undefined
+
+    if (hasRelative && (hasYear || hasMonth)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'relative es excluyente con year/month explícitos: usa uno u otro, no ambos.',
+        path: ['relative'],
+      })
+    }
     if (hasYear !== hasMonth) {
       ctx.addIssue({
         code: 'custom',

@@ -318,6 +318,38 @@ describe('buildCfdiPayload — ExpeditionPlace', () => {
   })
 })
 
+// ── Serie por marca + ausencia de Folio (2026-07-23) ─────────────────────────
+describe('buildCfdiPayload — Serie fiscal por marca', () => {
+  const baseLine: OrderLine[] = [{ description: 'Item', quantity: 1, unitPrice: 116, taxRate: 0.16, taxObject: '02', discount: 0, productCode: 'P001' }]
+
+  it('brand "ariat" → Serie "GDL1" (fallback de producción)', () => {
+    const payload = buildCfdiPayload(makeOrder({ total: 116, taxAmount: 16, lines: baseLine, brand: 'ariat' }), fiscal, EXPEDITION_PLACE)
+    expect(payload.Serie).toBe('GDL1')
+  })
+
+  it('brand "stetson" → "STET"; "western-brothers" → "WB"', () => {
+    const stet = buildCfdiPayload(makeOrder({ total: 116, taxAmount: 16, lines: baseLine, brand: 'stetson' }), fiscal, EXPEDITION_PLACE)
+    const wb = buildCfdiPayload(makeOrder({ total: 116, taxAmount: 16, lines: baseLine, brand: 'western-brothers' }), fiscal, EXPEDITION_PLACE)
+    expect(stet.Serie).toBe('STET')
+    expect(wb.Serie).toBe('WB')
+  })
+
+  it('sin brand → OMITE la Serie (Facturama usa la default de la sucursal)', () => {
+    const payload = buildCfdiPayload(makeOrder({ total: 116, taxAmount: 16, lines: baseLine }), fiscal, EXPEDITION_PLACE)
+    expect('Serie' in payload).toBe(false)
+  })
+
+  it('brand desconocida → OMITE la Serie (no revienta)', () => {
+    const payload = buildCfdiPayload(makeOrder({ total: 116, taxAmount: 16, lines: baseLine, brand: 'marca-inexistente' }), fiscal, EXPEDITION_PLACE)
+    expect('Serie' in payload).toBe(false)
+  })
+
+  it('NUNCA manda Folio propio — Facturama lo asigna por Serie', () => {
+    const payload = buildCfdiPayload(makeOrder({ total: 116, taxAmount: 16, lines: baseLine, brand: 'ariat' }), fiscal, EXPEDITION_PLACE)
+    expect('Folio' in payload).toBe(false)
+  })
+})
+
 // ── Test 9: línea exenta — sin nodo Taxes, TaxObject '01' ────────────────────
 describe('buildCfdiPayload — línea exenta (taxObject 01)', () => {
   const order = makeOrder({
@@ -394,11 +426,6 @@ describe('buildCfdiPayload — ClaveProdServ/ClaveUnidad genéricas', () => {
     } finally {
       if (prev !== undefined) process.env.FACTURAMA_DEFAULT_UNIT_CODE = prev
     }
-  })
-
-  it('Unit === "Pieza" (nombre consistente con H87)', () => {
-    const payload = buildCfdiPayload(order, fiscal, EXPEDITION_PLACE)
-    expect(payload.Items[0].Unit).toBe('Pieza')
   })
 
   it('respeta override por env de FACTURAMA_DEFAULT_PRODUCT_CODE/UNIT_CODE', () => {

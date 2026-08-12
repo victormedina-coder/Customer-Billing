@@ -66,18 +66,42 @@ export function getMxOffsetMs(utcDate: Date): number {
 
 /**
  * Retorna el instante UTC que corresponde al primer segundo (00:00:00.000 MX)
- * del mes `month` (1-indexed) del año `year`, en zona horaria de México.
+ * del día `day` del mes `month` (1-indexed) del año `year`, en zona horaria
+ * de México.
  *
- * Estrategia (sin dependencias externas): construimos el día 1 del mes como si
- * fuera medianoche UTC y ajustamos por la diferencia de offset entre UTC y MX
- * en ese punto.
+ * Estrategia (sin dependencias externas): construimos el día como si fuera
+ * medianoche UTC y ajustamos por la diferencia de offset entre UTC y MX en
+ * ese punto. `mxMonthStart` es el caso `day=1` de esta misma función (DRY).
  */
-export function mxMonthStart(year: number, month: number): Date {
-  const naiveUtcMs = Date.UTC(year, month - 1, 1) // día 1 del mes, 00:00 UTC
+export function mxDayStart(year: number, month: number, day: number): Date {
+  const naiveUtcMs = Date.UTC(year, month - 1, day) // día dado, 00:00 UTC
   const offsetMs = getMxOffsetMs(new Date(naiveUtcMs))
   // El instante real de "00:00 MX" = naiveUTC - offsetMX
   // (si MX es UTC-6, offsetMs = -6*3600*1000, restamos negativo → sumamos 6h)
   return new Date(naiveUtcMs - offsetMs)
+}
+
+/**
+ * Retorna el instante UTC que corresponde al primer segundo (00:00:00.000 MX)
+ * del mes `month` (1-indexed) del año `year`, en zona horaria de México.
+ * Reexpresado como caso `day=1` de `mxDayStart` (DRY) — la firma pública no
+ * cambia.
+ */
+export function mxMonthStart(year: number, month: number): Date {
+  return mxDayStart(year, month, 1)
+}
+
+/**
+ * Límites [from, to] del día `day`/`month`/`year` en zona MX: `from` =
+ * primer instante del día (00:00:00.000 MX), `to` = último instante del día
+ * (el ms inmediatamente anterior al inicio del día siguiente). Usa
+ * `Date.UTC` con día fuera de rango (ej. día 32) para que JS normalice al
+ * mes siguiente — misma técnica que `mxMonthBounds` con el mes.
+ */
+export function mxDayBounds(year: number, month: number, day: number): { from: Date; to: Date } {
+  const from = mxDayStart(year, month, day)
+  const to = new Date(mxDayStart(year, month, day + 1).getTime() - 1)
+  return { from, to }
 }
 
 /**
@@ -91,6 +115,72 @@ export function mxMonthBounds(year: number, month: number): { from: Date; to: Da
   const nextYear = month === 12 ? year + 1 : year
   const to = new Date(mxMonthStart(nextYear, nextMonth).getTime() - 1)
   return { from, to }
+}
+
+/**
+ * Retorna el instante UTC del CORTE de facturación del mes `month`/`year` en
+ * zona MX: `cutoffHour` horas del ÚLTIMO día del mes (default 21:00 MX,
+ * decisión de contabilidad 2026-07-16 — ver plan de diseño R2/R3, corte
+ * mensual a las 21:00 porque las tiendas POS no venden después de esa hora).
+ *
+ * DRY sobre `mxMonthStart`: el corte es "medianoche del mes SIGUIENTE menos
+ * (24 − cutoffHour) horas" — evita reimplementar el cálculo de fin de mes
+ * (bisiestos, diciembre→enero) que `mxMonthStart`/`mxMonthBounds` ya
+ * resuelven. Como México es UTC-6 fijo (sin DST desde 2022), restar horas
+ * exactas a un instante UTC siempre aterriza en el mismo punto de reloj MX
+ * sin ambigüedad de huso horario.
+ */
+export function mxMonthInvoiceCutoff(year: number, month: number, cutoffHour: number = DEFAULT_INVOICE_CUTOFF_HOUR): Date {
+  const nextMonth = month === 12 ? 1 : month + 1
+  const nextYear = month === 12 ? year + 1 : year
+  const hoursBeforeNextMidnight = 24 - cutoffHour
+  return new Date(mxMonthStart(nextYear, nextMonth).getTime() - hoursBeforeNextMidnight * 60 * 60 * 1000)
+}
+
+/**
+ * Análogo DIARIO de `mxMonthInvoiceCutoff`: instante UTC del corte del día
+ * `day`/`month`/`year` — `cutoffHour` horas de ESE día en zona MX.
+ *
+ * Misma técnica que el mensual (medianoche del día SIGUIENTE menos
+ * `24 − cutoffHour` horas) para reusar la normalización de `mxDayStart`: un
+ * `day + 1` fuera de rango lo resuelve `Date.UTC` (fin de mes, fin de año,
+ * 29-feb) sin lógica de calendario adicional. Por la misma razón acepta
+ * `day = 0`, que denota el último día del mes anterior.
+ */
+export function mxDayInvoiceCutoff(
+  year: number,
+  month: number,
+  day: number,
+  cutoffHour: number = DEFAULT_INVOICE_CUTOFF_HOUR,
+): Date {
+  const hoursBeforeNextMidnight = 24 - cutoffHour
+  return new Date(mxDayStart(year, month, day + 1).getTime() - hoursBeforeNextMidnight * 60 * 60 * 1000)
+}
+
+/** Hora de corte por defecto (21:00 MX) — decisión de contabilidad 2026-07-16, ADR-009. */
+export const DEFAULT_INVOICE_CUTOFF_HOUR = 21
+
+/**
+ * Hora (0-23, zona MX) del corte de facturación. **Fuente única de verdad**:
+ * la consumen tanto `InvoiceWindowPolicy` (ventana del portal individual)
+ * como `GlobalPeriod` (ventana rodante de la global). Override por env
+ * `INVOICE_WINDOW_CUTOFF_HOUR`; un valor vacío, no numérico o fuera de 0-23
+ * cae al default.
+ *
+ * Vive aquí y no en cada policy porque mover el corte es una decisión de
+ * contabilidad que debe aplicarse en UN lugar: si la ventana individual
+ * cerrara a las 23:00 y la global siguiera barriendo a las 21:00, los
+ * pedidos de esas 2 horas quedarían fuera de ambas vías.
+ *
+ * ⚠️ Cadena vacía NO es 0: `INVOICE_WINDOW_CUTOFF_HOUR=` en el `.env` debe
+ * caer al default, no a medianoche (que equivale a "sin corte"). Por eso el
+ * guardia es `if (!raw)` y no `??` — ver el fallo del probe del 2026-07-23.
+ */
+export function resolveInvoiceCutoffHour(): number {
+  const raw = process.env.INVOICE_WINDOW_CUTOFF_HOUR
+  if (!raw) return DEFAULT_INVOICE_CUTOFF_HOUR
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 23 ? parsed : DEFAULT_INVOICE_CUTOFF_HOUR
 }
 
 /**
@@ -108,3 +198,18 @@ export function previousMxYearMonth(now: Date): { year: number; month: number } 
   const { year, month } = getMxYearMonth(now)
   return month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 }
 }
+
+/**
+ * Retorna el año/mes MX (1-indexed) del instante `now` — el mes calendario
+ * EN CURSO. Nombre explícito (alias de `getMxYearMonth`) para usarse junto a
+ * `previousMxYearMonth` en la resolución de periodos relativos del endpoint
+ * de facturación global (R4 — modo `relative: 'current-month'`).
+ */
+export function currentMxYearMonth(now: Date): { year: number; month: number } {
+  return getMxYearMonth(now)
+}
+
+// [R5] Se eliminaron `getMxYearMonthDay`, `previousMxDay` y `currentMxDay`
+// (andamiaje de disparo diario del endpoint global). La periodicidad diaria
+// sobrevive como capacidad LATENTE del motor (createDailyGlobalPeriod), pero
+// el endpoint quedó monthly-only, así que estos helpers ya no se necesitan.

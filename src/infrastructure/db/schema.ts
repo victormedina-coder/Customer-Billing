@@ -15,6 +15,19 @@ export const globalInvoices = pgTable('global_invoices', {
   storeName: text('store_name').notNull(),
   periodYear: integer('period_year').notNull(),
   periodMonth: integer('period_month').notNull(),
+  /**
+   * Día del periodo cuando la periodicidad es DIARIA. Sentinela `0` = "mes
+   * completo" (mensual) — día real es 1-31, así que 0 es un valor imposible
+   * como día y sirve de marca inequívoca. NOT NULL (no nullable) A PROPÓSITO:
+   * si fuera nullable, Postgres trata NULL como distinto de NULL en
+   * constraints UNIQUE, y dos corridas mensuales del mismo
+   * (store, year, month, bucket, chunk) tendrían ambas period_day = NULL sin
+   * colisionar — rompiendo el cerrojo anti-doble-timbre que hoy funciona
+   * (ver plan de diseño D3). El dominio (GlobalInvoiceIdentity.periodDay)
+   * expresa el mismo concepto como `undefined` — el sentinela 0 es un
+   * detalle de persistencia que el repo mapea en ambas direcciones.
+   */
+  periodDay: integer('period_day').notNull().default(0),
   /** 'credito' | 'debito' | 'efectivo' — texto libre validado en código. */
   paymentBucket: text('payment_bucket').notNull(),
   /** Índice del chunk cuando el periodo/bucket se partió en varios CFDI. */
@@ -30,11 +43,15 @@ export const globalInvoices = pgTable('global_invoices', {
   itemCount: integer('item_count').notNull().default(0),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 }, (table) => [
-  // Cerrojo de idempotencia: un único CFDI global por (tienda, periodo, bucket, chunk).
+  // Cerrojo de idempotencia: un único CFDI global por (tienda, periodo, día, bucket, chunk).
+  // `periodDay` se incluye entre period_month y payment_bucket (0 = mensual,
+  // ver comentario de la columna) — los headers mensuales existentes quedan
+  // con period_day=0 y su unicidad se preserva idéntica tras la migración.
   unique('unique_global_period_bucket_chunk').on(
     table.storeName,
     table.periodYear,
     table.periodMonth,
+    table.periodDay,
     table.paymentBucket,
     table.chunkIndex,
   ),

@@ -80,7 +80,7 @@ describe('emitirCFDI', () => {
       Id: 'abc123',
       Complement: { TaxStamp: { Uuid: 'uuid-1', SatSign: 'sello-sat', CfdiSign: 'sello-cfdi' } },
       Issuer: { Rfc: 'XAXX010101000', Name: 'EMISOR', FiscalRegime: '601' },
-      Series: 'GR', Folio: '42', Date: '2026-06-29',
+      Serie: 'GR', Folio: '42', Date: '2026-06-29',
     }
     fetchMock.mockResolvedValueOnce(jsonResponse(fakeCfdiResponse, 200))
 
@@ -100,7 +100,7 @@ describe('emitirCFDI', () => {
       Id: 'fact-id-001',
       Complement: { TaxStamp: { Uuid: 'UUID-STAMP', SatSign: 'SAT-SIGN', CfdiSign: 'CFDI-SIGN' } },
       Issuer: { Rfc: 'AAA010101AAA', Name: 'Test', FiscalRegime: '612' },
-      Series: 'A', Folio: '1', Date: '2026-01-01',
+      Serie: 'A', Folio: '1', Date: '2026-01-01',
     }
     fetchMock.mockResolvedValueOnce(jsonResponse(resp))
 
@@ -699,26 +699,20 @@ describe('listarCfdisEmitidos', () => {
     vi.unstubAllEnvs()
   })
 
-  it('página 0 con menos de 100 elementos → una sola llamada', async () => {
+  // El paro es por página VACÍA (no por tamaño de página) — el sondeo de
+  // producción (2026-07-15) mostró que el tamaño real (10) no coincide con
+  // el documentado (100), así que los tests usan páginas de 10 elementos
+  // (como producción) para no reintroducir una dependencia implícita del
+  // tamaño documentado.
+
+  it('página con items (aunque sean pocos) siempre pide la siguiente página', async () => {
     const { listarCfdisEmitidos } = await importClient()
-    fetchMock.mockResolvedValueOnce(jsonResponse(pageOf(5)))
+    fetchMock.mockResolvedValueOnce(jsonResponse(pageOf(10, 0)))
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
 
     const result = await listarCfdisEmitidos()
 
-    expect(result).toHaveLength(5)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url] = fetchMock.mock.calls[0] as [string]
-    expect(new URL(url).searchParams.get('page')).toBe('0')
-  })
-
-  it('página llena (100) sigue paginando; página parcial detiene y acumula todo', async () => {
-    const { listarCfdisEmitidos } = await importClient()
-    fetchMock.mockResolvedValueOnce(jsonResponse(pageOf(100, 0)))
-    fetchMock.mockResolvedValueOnce(jsonResponse(pageOf(40, 100)))
-
-    const result = await listarCfdisEmitidos()
-
-    expect(result).toHaveLength(140)
+    expect(result).toHaveLength(10)
     expect(fetchMock).toHaveBeenCalledTimes(2)
     const [firstUrl] = fetchMock.mock.calls[0] as [string]
     const [secondUrl] = fetchMock.mock.calls[1] as [string]
@@ -726,23 +720,38 @@ describe('listarCfdisEmitidos', () => {
     expect(new URL(secondUrl).searchParams.get('page')).toBe('1')
   })
 
-  it('página vacía (0 elementos) detiene la paginación', async () => {
+  it('página vacía desde el inicio (page=0) → una sola llamada, resultado vacío', async () => {
     const { listarCfdisEmitidos } = await importClient()
-    fetchMock.mockResolvedValueOnce(jsonResponse(pageOf(100, 0)))
     fetchMock.mockResolvedValueOnce(jsonResponse([]))
 
     const result = await listarCfdisEmitidos()
 
-    expect(result).toHaveLength(100)
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(result).toEqual([])
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('acumula varias páginas no vacías hasta encontrar la página vacía (patrón observado en producción)', async () => {
+    const { listarCfdisEmitidos } = await importClient()
+    // 5 páginas de 10 elementos (50 CFDIs) + página 5 vacía → detiene ahí.
+    for (let page = 0; page < 5; page++) {
+      fetchMock.mockResolvedValueOnce(jsonResponse(pageOf(10, page * 10)))
+    }
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
+
+    const result = await listarCfdisEmitidos()
+
+    expect(result).toHaveLength(50)
+    expect(fetchMock).toHaveBeenCalledTimes(6)
   })
 
   it('alcanza el tope de seguridad de páginas → lanza Error en vez de listado incompleto', async () => {
     const { listarCfdisEmitidos } = await importClient()
-    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(pageOf(100))))
+    // Ninguna página vacía nunca (peor caso: el listado real no termina
+    // dentro del tope) → debe abortar en vez de devolver algo incompleto.
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(pageOf(10))))
 
     await expect(listarCfdisEmitidos()).rejects.toThrow(/tope de seguridad/)
-    expect(fetchMock).toHaveBeenCalledTimes(100)
+    expect(fetchMock).toHaveBeenCalledTimes(200)
   })
 
   it('sin rango: no manda dateStart/dateEnd (compatibilidad hacia atrás)', async () => {
@@ -778,9 +787,13 @@ describe('listarCfdisEmitidos', () => {
 
   it('acepta la respuesta envuelta en { Items: [...] } en cada página', async () => {
     const { listarCfdisEmitidos } = await importClient()
+    // Página 0 no vacía y envuelta en { Items }, página 1 vacía (plana) para
+    // detener la paginación.
     fetchMock.mockResolvedValueOnce(jsonResponse({ Items: pageOf(3) }))
+    fetchMock.mockResolvedValueOnce(jsonResponse([]))
 
     const result = await listarCfdisEmitidos()
     expect(result).toHaveLength(3)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

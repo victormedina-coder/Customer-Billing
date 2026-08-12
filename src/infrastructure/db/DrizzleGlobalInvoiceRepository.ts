@@ -43,6 +43,7 @@ function identityWhere(key: GlobalInvoiceIdentity) {
     eq(globalInvoices.storeName, key.storeName),
     eq(globalInvoices.periodYear, key.periodYear),
     eq(globalInvoices.periodMonth, key.periodMonth),
+    eq(globalInvoices.periodDay, key.periodDay ?? 0),
     eq(globalInvoices.paymentBucket, key.paymentBucket),
     eq(globalInvoices.chunkIndex, key.chunkIndex),
   )
@@ -50,7 +51,9 @@ function identityWhere(key: GlobalInvoiceIdentity) {
 
 /**
  * Mapea una fila cruda de `global_invoices` al agregado de dominio
- * `GlobalInvoice` — función pura, sin I/O (testeable sin DB).
+ * `GlobalInvoice` — función pura, sin I/O (testeable sin DB). El sentinela
+ * `period_day = 0` (mensual) se traduce a `undefined` en el dominio — ver
+ * comentario de la columna en schema.ts y GlobalInvoiceIdentity.periodDay.
  */
 export function mapRowToGlobalInvoice(row: GlobalInvoiceRow): GlobalInvoice {
   return {
@@ -58,6 +61,7 @@ export function mapRowToGlobalInvoice(row: GlobalInvoiceRow): GlobalInvoice {
     storeName: row.storeName,
     periodYear: row.periodYear,
     periodMonth: row.periodMonth,
+    periodDay: row.periodDay === 0 ? undefined : row.periodDay,
     paymentBucket: row.paymentBucket as PaymentBucket,
     chunkIndex: row.chunkIndex,
     status: row.status as GlobalInvoice['status'],
@@ -81,6 +85,7 @@ export class DrizzleGlobalInvoiceRepository implements GlobalInvoiceRepository {
           storeName: data.storeName,
           periodYear: data.periodYear,
           periodMonth: data.periodMonth,
+          periodDay: data.periodDay ?? 0,
           paymentBucket: data.paymentBucket,
           chunkIndex: data.chunkIndex,
         })
