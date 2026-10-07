@@ -34,6 +34,14 @@ import { isFullyRefunded } from '../domain/orders/RefundPolicy'
 
 const DEFAULT_MAX_ITEMS_PER_CFDI = 250
 const DEFAULT_PENDING_TTL_MINUTES = 10
+const DEFAULT_GLOBAL_TIMEOUT_MS = 120000
+
+export function getFacturamaGlobalTimeoutMs(): number {
+  const raw = process.env.FACTURAMA_GLOBAL_TIMEOUT_MS
+  if (!raw) return DEFAULT_GLOBAL_TIMEOUT_MS
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : DEFAULT_GLOBAL_TIMEOUT_MS
+}
 
 /**
  * Tope de conceptos por CFDI global (ver plan §7). Debe ser un entero >= 1;
@@ -64,7 +72,7 @@ function getPendingTtlMinutes(): number {
 export function makeEmitGlobalInvoiceUseCase(): EmitGlobalInvoiceUseCase {
   const deps: EmitGlobalInvoiceDeps = {
     monthlyOrderSource: new ShopifyMonthlyOrderSource(),
-    globalStamping: new FacturamaGlobalStamping(),
+    globalStamping: new FacturamaGlobalStamping(getFacturamaGlobalTimeoutMs()),
     globalRepo: new DrizzleGlobalInvoiceRepository(),
     invoiceRepo: {
       createInvoice: (data) => createInvoice(data),

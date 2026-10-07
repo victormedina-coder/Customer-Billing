@@ -129,6 +129,7 @@ export function PortalClient({ windowClosed, contactEmail }: PortalClientProps) 
               amount={state.amount}
               busy={state.busy}
               lookupError={state.lookupError}
+              contactEmail={contactEmail}
               ticket={state.ticket}
               showFolioHelp={state.showFolioHelp}
               onFolioChange={portal.setFolio}

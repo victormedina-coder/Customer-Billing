@@ -35,7 +35,7 @@ export interface GlobalInvoiceRepository {
   createGlobalHeader(data: CreateGlobalHeaderData): Promise<CreateGlobalHeaderResult>
 
   /**
-   * "Reap" de un encabezado 'pending' o 'stamped_unconfirmed' abandonado:
+   * "Reap" solo de un encabezado 'pending' abandonado:
    * si su antigüedad supera `ttlMinutes` (respecto a `now`), lo libera para
    * poder reintentar. Devuelve true si se liberó algo.
    */

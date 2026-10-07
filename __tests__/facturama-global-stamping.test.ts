@@ -78,6 +78,43 @@ describe('FacturamaGlobalStamping.emitirGlobal', () => {
     vi.unstubAllEnvs()
   })
 
+  it('usa el timeout inyectado para el POST', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout')
+    try {
+      const { FacturamaGlobalStamping } = await importAdapter()
+      fetchMock.mockResolvedValueOnce(jsonResponse({ Id: 'X', Uuid: 'Y' }))
+      await new FacturamaGlobalStamping(90000).emitirGlobal(makePayload())
+      expect(timeoutSpy).toHaveBeenCalledWith(90000)
+    } finally {
+      timeoutSpy.mockRestore()
+    }
+  })
+
+  it('fallo al resolver ExpeditionPlace no llama al POST', async () => {
+    vi.stubEnv('FACTURAMA_EXPEDITION_PLACE', '')
+    const { FacturamaGlobalStamping } = await importAdapter()
+    fetchMock.mockRejectedValueOnce(new TypeError('fetch failed'))
+    await expect(new FacturamaGlobalStamping().emitirGlobal(makePayload())).rejects.toMatchObject({ name: 'StampPreparationError' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect((fetchMock.mock.calls[0] as [string])[0]).toContain('TaxEntity')
+  })
+
+  it('fallo del builder no llama a Facturama', async () => {
+    const { FacturamaGlobalStamping } = await importAdapter()
+    await expect(new FacturamaGlobalStamping().emitirGlobal(makePayload({ orders: [] }))).rejects.toMatchObject({ name: 'StampPreparationError' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['FACTURAMA_USER', 'FACTURAMA_PASS'] as const)('falta %s: falla en preparación sin llamar a Facturama', async (variable) => {
+    vi.stubEnv(variable, '')
+    const { FacturamaGlobalStamping } = await importAdapter()
+    await expect(new FacturamaGlobalStamping().emitirGlobal(makePayload())).rejects.toMatchObject({
+      name: 'StampPreparationError',
+      cause: { message: 'Facturama no está configurado: faltan FACTURAMA_USER o FACTURAMA_PASS' },
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('éxito: extrae facturamaId/uuidCfdi de la respuesta y llama a POST /3/cfdis', async () => {
     const { FacturamaGlobalStamping } = await importAdapter()
     fetchMock.mockResolvedValueOnce(
@@ -183,6 +220,7 @@ describe('FacturamaGlobalStamping.emitirGlobal', () => {
   })
 
   it('el body lleva la Serie de la marca cuando storeName es una clave de marca', async () => {
+    vi.stubEnv('WB_FACTURAMA_SERIE', '')
     const { FacturamaGlobalStamping } = await importAdapter()
     fetchMock.mockResolvedValueOnce(jsonResponse({ Id: 'X', Complement: { TaxStamp: { Uuid: 'Y' } } }))
 

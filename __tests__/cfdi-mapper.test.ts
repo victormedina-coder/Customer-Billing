@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { buildCfdiPayload } from '../src/infrastructure/facturama/cfdiPayloadBuilder'
 import type { CfdiItem } from '../src/infrastructure/facturama/cfdiPayloadBuilder'
 import type { NormalizedOrderWithPayment, OrderLine } from '../src/domain/orders/Order'
@@ -322,9 +322,17 @@ describe('buildCfdiPayload — ExpeditionPlace', () => {
 describe('buildCfdiPayload — Serie fiscal por marca', () => {
   const baseLine: OrderLine[] = [{ description: 'Item', quantity: 1, unitPrice: 116, taxRate: 0.16, taxObject: '02', discount: 0, productCode: 'P001' }]
 
-  it('brand "ariat" → Serie "GDL1" (fallback de producción)', () => {
+  beforeEach(() => {
+    vi.stubEnv('ARIAT_FACTURAMA_SERIE', '')
+    vi.stubEnv('STETSON_FACTURAMA_SERIE', '')
+    vi.stubEnv('WB_FACTURAMA_SERIE', '')
+  })
+
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('brand "ariat" → Serie "gdl1" (fallback de producción)', () => {
     const payload = buildCfdiPayload(makeOrder({ total: 116, taxAmount: 16, lines: baseLine, brand: 'ariat' }), fiscal, EXPEDITION_PLACE)
-    expect(payload.Serie).toBe('GDL1')
+    expect(payload.Serie).toBe('gdl1')
   })
 
   it('brand "stetson" → "STET"; "western-brothers" → "WB"', () => {
@@ -332,6 +340,12 @@ describe('buildCfdiPayload — Serie fiscal por marca', () => {
     const wb = buildCfdiPayload(makeOrder({ total: 116, taxAmount: 16, lines: baseLine, brand: 'western-brothers' }), fiscal, EXPEDITION_PLACE)
     expect(stet.Serie).toBe('STET')
     expect(wb.Serie).toBe('WB')
+  })
+
+  it('la serie configurada por env tiene prioridad sobre el fallback', () => {
+    vi.stubEnv('ARIAT_FACTURAMA_SERIE', 'TEST1')
+    const payload = buildCfdiPayload(makeOrder({ total: 116, taxAmount: 16, lines: baseLine, brand: 'ariat' }), fiscal, EXPEDITION_PLACE)
+    expect(payload.Serie).toBe('TEST1')
   })
 
   it('sin brand → OMITE la Serie (Facturama usa la default de la sucursal)', () => {

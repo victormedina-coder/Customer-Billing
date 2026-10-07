@@ -52,7 +52,7 @@ const SECRET = 'test-global-secret'
 
 /** Resumen "todo en ceros" — corrida sin chunks, que es el caso base sin fallos. */
 const EMPTY_SUMMARY: GlobalRunSummary = {
-  chunks: 0, emitted: 0, rolledBack: 0, skippedIdempotent: 0,
+  chunks: 0, emitted: 0, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0,
   skippedUnpaid: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0,
   ordersEligible: 0, unmapped: 0, unaccounted: 0, hasFailures: false,
 }

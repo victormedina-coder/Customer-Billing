@@ -10,6 +10,7 @@ export type LookupError =
   | 'notfound'    // legado — ya no usa el backend, mantenemos por seguridad
   | 'invalid'     // folio O monto incorrecto (error genérico, VALIDATION_FAILED)
   | 'invoiced'
+  | 'unconfirmed'
   | 'deadline'
   | 'refunded'
   | 'ratelimited' // demasiados intentos (RATE_LIMITED)

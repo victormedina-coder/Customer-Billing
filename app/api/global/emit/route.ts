@@ -27,7 +27,7 @@
  *   429 RATE_LIMITED         → demasiados intentos (defensa en profundidad)
  *   503 FEATURE_NOT_CONFIGURED → GLOBAL_INVOICE_SECRET no está definido
  *   500 (con { report })   → la corrida terminó pero algún chunk quedó en
- *                            rolled_back/stamped_unconfirmed (ver summary.hasFailures)
+ *                            rolled_back/rollback_failed/reservation_failed/stamped_unconfirmed (ver summary.hasFailures)
  */
 
 export const runtime = 'nodejs'
@@ -176,7 +176,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (report.summary.hasFailures) {
     logger.error(
       { runId: report.runId, year: report.year, month: report.month, day: report.day, summary: report.summary },
-      '[global-emit-route] corrida con fallos — revisar chunks en rolled_back/stamped_unconfirmed',
+      '[global-emit-route] corrida con fallos — revisar chunks en rolled_back/rollback_failed/reservation_failed/stamped_unconfirmed',
     )
     return NextResponse.json({ report }, { status: 500 })
   }

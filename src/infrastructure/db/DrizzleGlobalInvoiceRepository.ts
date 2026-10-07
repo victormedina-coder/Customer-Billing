@@ -109,8 +109,8 @@ export class DrizzleGlobalInvoiceRepository implements GlobalInvoiceRepository {
     const row = rows[0]
     if (!row) return false
     // Invariante anti-doble-timbre: jamás reapear 'emitted' ni
-    // 'stamped_unconfirmed' — este último indica que el CFDI YA existe en
-    // Facturama aunque la fila no se haya podido confirmar.
+    // 'stamped_unconfirmed' — este último indica un intento cuyo resultado
+    // debe conciliarse antes de permitir otro timbrado.
     if (row.status !== 'pending') return false
 
     const ageMs = now.getTime() - row.createdAt.getTime()
@@ -125,7 +125,7 @@ export class DrizzleGlobalInvoiceRepository implements GlobalInvoiceRepository {
 
   async updateGlobalStamp(id: string, data: UpdateGlobalStampData): Promise<void> {
     const db = getDb()
-    await db
+    const rows = await db
       .update(globalInvoices)
       .set({
         status: data.status,
@@ -134,6 +134,8 @@ export class DrizzleGlobalInvoiceRepository implements GlobalInvoiceRepository {
         ...(data.itemCount !== undefined ? { itemCount: data.itemCount } : {}),
       })
       .where(eq(globalInvoices.id, id))
+      .returning({ id: globalInvoices.id })
+    if (rows.length === 0) throw new Error(`No se encontró el header global ${id} al actualizar timbrado`)
   }
 
   async deleteGlobalHeader(id: string): Promise<void> {

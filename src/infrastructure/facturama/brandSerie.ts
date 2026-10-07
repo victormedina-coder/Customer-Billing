@@ -17,7 +17,7 @@
  */
 
 const BRAND_SERIE: Record<string, { envVar: string; fallback: string }> = {
-  'ariat':            { envVar: 'ARIAT_FACTURAMA_SERIE',   fallback: 'GDL1' },
+  'ariat':            { envVar: 'ARIAT_FACTURAMA_SERIE',   fallback: 'gdl1' },
   'stetson':          { envVar: 'STETSON_FACTURAMA_SERIE', fallback: 'STET' },
   'western-brothers': { envVar: 'WB_FACTURAMA_SERIE',      fallback: 'WB'   },
 }

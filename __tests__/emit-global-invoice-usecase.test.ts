@@ -11,6 +11,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { EmitGlobalInvoiceUseCase } from '../src/application/global/EmitGlobalInvoiceUseCase'
+import { StampPreparationError } from '../src/application/shared/StampPreparationError'
 import type {
   EmitGlobalInvoiceDeps,
   GlobalMembershipRepo,
@@ -691,6 +692,24 @@ describe('EmitGlobalInvoiceUseCase — carrera por-fila en membresías', () => {
 })
 
 describe('EmitGlobalInvoiceUseCase — rollback en fallo de timbrado', () => {
+  for (const failure of [
+    { name: 'preparación', error: new StampPreparationError(new Error('builder failed')) },
+    { name: 'HTTP 401', error: Object.assign(new Error('HTTP 401'), { statusCode: 401 }) },
+    { name: 'HTTP 403', error: Object.assign(new Error('HTTP 403'), { statusCode: 403 }) },
+  ]) {
+    it(`${failure.name} libera membresías y header`, async () => {
+      const monthlyOrderSource = pageSource(STORE, [{ orders: [makeMonthlyOrder({ id: `order-${failure.name}` })], nextCursor: null }])
+      const invoiceRepo = new FakeGlobalMembershipRepo()
+      const globalRepo = new FakeGlobalInvoiceRepository()
+      const stamping = new FakeGlobalInvoiceStamping(async () => { throw failure.error })
+      const result = await new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource, invoiceRepo, globalRepo, globalStamping: stamping })).execute({ year: 2026, month: 6 })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.stores[0].buckets[0].chunks[0].outcome).toBe('rolled_back')
+      expect(invoiceRepo.allRows).toHaveLength(0)
+      expect(globalRepo.getByIdentity({ storeName: STORE, periodYear: 2026, periodMonth: 6, paymentBucket: 'efectivo', chunkIndex: 0 })).toBeUndefined()
+    })
+  }
   it('Facturama lanza → borra membresías del chunk y el header (rolled_back)', async () => {
     const order = makeMonthlyOrder({ id: 'order-1' })
     const monthlyOrderSource = pageSource(STORE, [{ orders: [order], nextCursor: null }])
@@ -698,7 +717,7 @@ describe('EmitGlobalInvoiceUseCase — rollback en fallo de timbrado', () => {
     const invoiceRepo = new FakeGlobalMembershipRepo()
     const globalRepo = new FakeGlobalInvoiceRepository()
     const failingStamping = new FakeGlobalInvoiceStamping(async () => {
-      throw new Error('facturama down')
+      throw Object.assign(new Error('facturama rejected'), { statusCode: 400 })
     })
 
     const useCase = new EmitGlobalInvoiceUseCase(
@@ -711,13 +730,102 @@ describe('EmitGlobalInvoiceUseCase — rollback en fallo de timbrado', () => {
     if (!result.ok) return
     const chunk = result.value.stores[0].buckets[0].chunks[0]
     expect(chunk.outcome).toBe('rolled_back')
-    expect(chunk.error).toBe('facturama down')
+    expect(chunk.error).toBe('facturama rejected')
     expect(invoiceRepo.calls.deleteByGlobalInvoiceId).toBe(1)
     expect(globalRepo.calls.deleteGlobalHeader).toBe(1)
     expect(invoiceRepo.allRows).toHaveLength(0)
 
     const identity: GlobalInvoiceIdentity = { storeName: STORE, periodYear: 2026, periodMonth: 6, paymentBucket: 'efectivo', chunkIndex: 0 }
     expect(globalRepo.getByIdentity(identity)).toBeUndefined()
+  })
+})
+
+describe('EmitGlobalInvoiceUseCase — respuesta incierta de Facturama', () => {
+  it('conserva la reserva ante error de red', async () => {
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [makeMonthlyOrder({ id: 'order-fetch-failed' })], nextCursor: null }])
+    const globalRepo = new FakeGlobalInvoiceRepository()
+    const stamping = new FakeGlobalInvoiceStamping(async () => { throw new TypeError('fetch failed') })
+    const result = await new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource, globalRepo, globalStamping: stamping })).execute({ year: 2026, month: 6 })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.stores[0].buckets[0].chunks[0].outcome).toBe('stamped_unconfirmed')
+    expect(globalRepo.getByIdentity({ storeName: STORE, periodYear: 2026, periodMonth: 6, paymentBucket: 'efectivo', chunkIndex: 0 })?.status).toBe('stamped_unconfirmed')
+  })
+  it('conserva el chunk tras timeout y no vuelve a timbrarlo en otra corrida', async () => {
+    const order = makeMonthlyOrder({ id: 'order-timeout' })
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [order], nextCursor: null }])
+    const invoiceRepo = new FakeGlobalMembershipRepo()
+    const globalRepo = new FakeGlobalInvoiceRepository()
+    const stamping = new FakeGlobalInvoiceStamping(async () => {
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+    })
+    const useCase = new EmitGlobalInvoiceUseCase(
+      makeDeps({ monthlyOrderSource, invoiceRepo, globalRepo, globalStamping: stamping }),
+    )
+
+    const first = await useCase.execute({ year: 2026, month: 6 })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    expect(first.value.stores[0].buckets[0].chunks[0].outcome).toBe('stamped_unconfirmed')
+    expect(first.value.summary.hasFailures).toBe(true)
+    expect(invoiceRepo.calls.deleteByGlobalInvoiceId).toBe(0)
+    expect(globalRepo.calls.deleteGlobalHeader).toBe(0)
+    const identity: GlobalInvoiceIdentity = { storeName: STORE, periodYear: 2026, periodMonth: 6, paymentBucket: 'efectivo', chunkIndex: 0 }
+    expect(globalRepo.getByIdentity(identity)?.status).toBe('stamped_unconfirmed')
+
+    const second = await useCase.execute({ year: 2026, month: 6 })
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(second.value.stores[0].buckets[0].chunks[0].outcome).toBe('skipped_idempotent')
+    expect(stamping.calls).toHaveLength(1)
+  })
+
+  it('no reporta rollback completo si la BD no pudo borrar el header', async () => {
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [makeMonthlyOrder({ id: 'order-rollback-db' })], nextCursor: null }])
+    const globalRepo = new FakeGlobalInvoiceRepository()
+    globalRepo.deleteGlobalHeader = async () => { throw new Error('DB unavailable') }
+    const stamping = new FakeGlobalInvoiceStamping(async () => {
+      throw Object.assign(new Error('rejected'), { statusCode: 400 })
+    })
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource, globalRepo, globalStamping: stamping }))
+
+    const result = await useCase.execute({ year: 2026, month: 6 })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.stores[0].buckets[0].chunks[0].outcome).toBe('rollback_failed')
+    expect(result.value.summary.rollbackFailed).toBe(1)
+    expect(result.value.summary.hasFailures).toBe(true)
+  })
+
+  it('un HTTP 500 tampoco libera el chunk', async () => {
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [makeMonthlyOrder({ id: 'order-500' })], nextCursor: null }])
+    const globalRepo = new FakeGlobalInvoiceRepository()
+    const stamping = new FakeGlobalInvoiceStamping(async () => {
+      throw Object.assign(new Error('PAC internal error'), { statusCode: 500 })
+    })
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource, globalRepo, globalStamping: stamping }))
+
+    const result = await useCase.execute({ year: 2026, month: 6 })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.stores[0].buckets[0].chunks[0].outcome).toBe('stamped_unconfirmed')
+    expect(globalRepo.calls.deleteGlobalHeader).toBe(0)
+  })
+
+  it('no llama a Facturama si falla la reserva previa al timbrado', async () => {
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [makeMonthlyOrder({ id: 'order-db-fail' })], nextCursor: null }])
+    const globalRepo = new FakeGlobalInvoiceRepository()
+    globalRepo.updateGlobalStamp = async () => { throw new Error('DB unavailable') }
+    const stamping = makeSuccessfulStamping()
+    const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource, globalRepo, globalStamping: stamping }))
+
+    const result = await useCase.execute({ year: 2026, month: 6 })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.stores[0].buckets[0].chunks[0].outcome).toBe('reservation_failed')
+    expect(result.value.summary.reservationFailed).toBe(1)
+    expect(result.value.summary.hasFailures).toBe(true)
+    expect(stamping.calls).toHaveLength(0)
   })
 })
 
@@ -738,7 +846,9 @@ describe('EmitGlobalInvoiceUseCase — stamped_unconfirmed tras timbrado exitoso
     const chunk = result.value.stores[0].buckets[0].chunks[0]
     expect(chunk.outcome).toBe('stamped_unconfirmed')
     expect(chunk.uuid).toBe(fixedUuid)
-    expect(globalRepo.calls.updateGlobalStamp).toBe(2)
+    const identity: GlobalInvoiceIdentity = { storeName: STORE, periodYear: 2026, periodMonth: 6, paymentBucket: 'efectivo', chunkIndex: 0 }
+    expect(globalRepo.getByIdentity(identity)).toMatchObject({ facturamaId: 'GF-001', uuidCfdi: fixedUuid, itemCount: 1 })
+    expect(globalRepo.calls.updateGlobalStamp).toBe(3)
     // El CFDI YA se timbró — NO debe haber rollback de membresías ni de header.
     expect(globalRepo.calls.deleteGlobalHeader).toBe(0)
   })
@@ -922,7 +1032,7 @@ describe('EmitGlobalInvoiceUseCase — summary agregado de la corrida', () => {
     const order = makeMonthlyOrder({ id: 'order-1' })
     const monthlyOrderSource = pageSource(STORE, [{ orders: [order], nextCursor: null }])
     const failingStamping = new FakeGlobalInvoiceStamping(async () => {
-      throw new Error('El atributo \'Serie\' debe existir en la sucursal')
+      throw Object.assign(new Error('El atributo \'Serie\' debe existir en la sucursal'), { statusCode: 400 })
     })
     const useCase = new EmitGlobalInvoiceUseCase(makeDeps({ monthlyOrderSource, globalStamping: failingStamping }))
 

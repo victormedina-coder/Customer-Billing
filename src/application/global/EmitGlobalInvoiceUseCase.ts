@@ -34,6 +34,8 @@
 
 import type { Order } from '../../domain/orders/Order'
 import { buildOrderReference } from '../../domain/orders/OrderReference'
+import { isDefinitiveStampRejection } from '../shared/isDefinitiveStampRejection'
+import { StampPreparationError } from '../shared/StampPreparationError'
 import type { GlobalPeriod } from '../../domain/global/GlobalPeriod'
 import { createDailyGlobalPeriod, createGlobalPeriod } from '../../domain/global/GlobalPeriod'
 import type { PaymentBucket } from '../../domain/global/PaymentBucket'
@@ -80,6 +82,8 @@ export type ChunkOutcome =
   | 'emitted'
   | 'skipped_idempotent'
   | 'rolled_back'
+  | 'rollback_failed'
+  | 'reservation_failed'
   | 'stamped_unconfirmed'
   | 'empty'
   | 'dry_run'
@@ -196,6 +200,8 @@ export interface GlobalRunSummary {
   chunks: number
   emitted: number
   rolledBack: number
+  rollbackFailed: number
+  reservationFailed: number
   skippedIdempotent: number
   stampedUnconfirmed: number
   empty: number
@@ -210,8 +216,8 @@ export interface GlobalRunSummary {
    * true si la corrida dejó pedidos elegibles SIN facturar o en estado
    * inconsistente. Cinco causas, todas del mismo tipo (hueco fiscal que exige
    * intervención humana):
-   *   - `rolledBack`         → el chunk no se timbró.
-   *   - `stampedUnconfirmed` → se timbró pero el header no se actualizó (conciliar).
+   *   - `rolledBack`         → Facturama rechazó el timbrado.
+   *   - `stampedUnconfirmed` → el timbrado puede existir; conciliar antes de reintentar.
    *   - `unmapped`           → la forma de pago no se pudo clasificar, así que el
    *                            pedido nunca llegó a un bucket ni, por tanto, a un
    *                            CFDI (decisión 2026-07-23: el `unmapped` debe
@@ -240,7 +246,7 @@ export interface GlobalRunReport {
 /** Recorre el árbol store→bucket→chunk y agrega los contadores de la corrida. */
 function computeSummary(stores: StoreReport[]): GlobalRunSummary {
   const s: GlobalRunSummary = {
-    chunks: 0, emitted: 0, rolledBack: 0, skippedIdempotent: 0,
+    chunks: 0, emitted: 0, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0,
     stampedUnconfirmed: 0, empty: 0, dryRun: 0,
     ordersEligible: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false,
   }
@@ -256,6 +262,8 @@ function computeSummary(stores: StoreReport[]): GlobalRunSummary {
         switch (chunk.outcome) {
           case 'emitted': s.emitted++; break
           case 'rolled_back': s.rolledBack++; break
+          case 'rollback_failed': s.rollbackFailed++; break
+          case 'reservation_failed': s.reservationFailed++; break
           case 'skipped_idempotent': s.skippedIdempotent++; break
           case 'stamped_unconfirmed': s.stampedUnconfirmed++; break
           case 'empty': s.empty++; break
@@ -265,7 +273,7 @@ function computeSummary(stores: StoreReport[]): GlobalRunSummary {
     }
   }
 
-  s.hasFailures = s.rolledBack > 0 || s.stampedUnconfirmed > 0 || s.unmapped > 0 || s.unaccounted !== 0 ||s.skippedUnpaid > 0
+  s.hasFailures = s.rolledBack > 0 || s.rollbackFailed > 0 || s.reservationFailed > 0 || s.stampedUnconfirmed > 0 || s.unmapped > 0 || s.unaccounted !== 0 ||s.skippedUnpaid > 0
   return s
 }
 
@@ -631,7 +639,7 @@ export class EmitGlobalInvoiceUseCase {
    * Procesa un chunk de forma idempotente: insert-first del header, reap-lazy
    * si está pending y viejo, insert-first por-fila de membresías (excluyendo
    * SOLO los pedidos que pierden la carrera), timbrado, y rollback/marca de
-   * stamped_unconfirmed según en qué punto falle (mirror de EmitInvoiceUseCase).
+   * stamped_unconfirmed antes de llamar a Facturama y ante respuesta incierta.
    */
   private async processChunk(
     store: string,
@@ -698,7 +706,18 @@ export class EmitGlobalInvoiceUseCase {
       return { chunkIndex, itemCount: 0, outcome: 'empty', excludedByRace }
     }
 
+    // Antes de llamar al PAC, cerrar la ventana en la que un crash dejaría
+    // un header pending reapeable aunque Facturama ya hubiera timbrado.
+    try {
+      await this.deps.globalRepo.updateGlobalStamp(headerId, { status: 'stamped_unconfirmed' })
+    } catch (markErr: unknown) {
+      const message = markErr instanceof Error ? markErr.message : String(markErr)
+      this.logger.error({ runId, headerId, error: message }, '[global-invoice] No se pudo reservar el intento de timbrado; Facturama no fue llamado')
+      return { chunkIndex, itemCount: survivors.length, outcome: 'reservation_failed', error: message, excludedByRace }
+    }
+
     let stampResult
+    const stampStartedAt = Date.now()
     try {
       stampResult = await this.deps.globalStamping.emitirGlobal({
         storeName: store,
@@ -711,9 +730,21 @@ export class EmitGlobalInvoiceUseCase {
       })
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e)
-      this.logger.error({ runId, store, day: period.day, bucket, chunkIndex, error: message }, '[global-invoice] Facturama global falló, rollback')
-      await this.rollbackChunk(headerId, runId)
-      return { chunkIndex, itemCount: survivors.length, outcome: 'rolled_back', error: message, excludedByRace }
+      const durationMs = Date.now() - stampStartedAt
+      if (e instanceof StampPreparationError || isDefinitiveStampRejection(e)) {
+        this.logger.error({ runId, store, day: period.day, bucket, chunkIndex, error: message, durationMs }, e instanceof StampPreparationError
+          ? '[global-invoice] Facturama no fue llamado, rollback'
+          : '[global-invoice] Facturama rechazó el CFDI, rollback')
+        const rolledBack = await this.rollbackChunk(headerId, runId)
+        return {
+          chunkIndex, itemCount: survivors.length,
+          outcome: rolledBack ? 'rolled_back' : 'rollback_failed',
+          error: rolledBack ? message : `${message}; no se pudo confirmar la limpieza en la base de datos`,
+          excludedByRace,
+        }
+      }
+      this.logger.error({ runId, headerId, store, day: period.day, bucket, chunkIndex, error: message, durationMs }, '[global-invoice] Resultado del timbrado incierto; conciliar con Facturama antes de reintentar')
+      return { chunkIndex, itemCount: survivors.length, outcome: 'stamped_unconfirmed', error: message, excludedByRace }
     }
 
     try {
@@ -729,7 +760,10 @@ export class EmitGlobalInvoiceUseCase {
         runId, headerId, error: dbMessage,
       }, '[global-invoice] CFDI global timbrado pero no se pudo actualizar el header (conciliar)')
       try {
-        await this.deps.globalRepo.updateGlobalStamp(headerId, { status: 'stamped_unconfirmed' })
+        await this.deps.globalRepo.updateGlobalStamp(headerId, {
+          status: 'stamped_unconfirmed', facturamaId: stampResult.facturamaId,
+          uuidCfdi: stampResult.uuidCfdi, itemCount: survivors.length,
+        })
       } catch (markErr: unknown) {
         const markMessage = markErr instanceof Error ? markErr.message : String(markErr)
         this.logger.error({
@@ -742,24 +776,28 @@ export class EmitGlobalInvoiceUseCase {
     }
 
     this.logger.info({
-      runId, store, day: period.day, bucket, chunkIndex, uuid: stampResult.uuidCfdi, serieFolio: stampResult.serieFolio, itemCount: survivors.length,
+      runId, store, day: period.day, bucket, chunkIndex, uuid: stampResult.uuidCfdi, serieFolio: stampResult.serieFolio, itemCount: survivors.length, durationMs: Date.now() - stampStartedAt,
     }, '[global-invoice] chunk timbrado')
     return { chunkIndex, itemCount: survivors.length, outcome: 'emitted', uuid: stampResult.uuidCfdi, serieFolio: stampResult.serieFolio, excludedByRace }
   }
 
-  /** Rollback: borra las membresías del chunk y el header — NUNCA se llama tras timbrar con éxito. */
-  private async rollbackChunk(headerId: string, runId: string): Promise<void> {
+  /** Rollback solo para rechazo de validación explícito — nunca para resultado incierto. */
+  private async rollbackChunk(headerId: string, runId: string): Promise<boolean> {
+    let completed = true
     try {
       await this.deps.invoiceRepo.deleteByGlobalInvoiceId(headerId)
     } catch (delErr: unknown) {
+      completed = false
       const message = delErr instanceof Error ? delErr.message : String(delErr)
       this.logger.error({ runId, headerId, error: message }, '[global-invoice] rollback: no se pudieron borrar las membresías')
     }
     try {
       await this.deps.globalRepo.deleteGlobalHeader(headerId)
     } catch (delErr: unknown) {
+      completed = false
       const message = delErr instanceof Error ? delErr.message : String(delErr)
       this.logger.error({ runId, headerId, error: message }, '[global-invoice] rollback: no se pudo borrar el header')
     }
+    return completed
   }
 }

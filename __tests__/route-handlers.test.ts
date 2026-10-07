@@ -121,7 +121,7 @@ vi.mock('../src/composition/orderSource', async () => ({
 }))
 
 vi.mock('../src/infrastructure/db/invoice-repository', async () => ({
-  isAlreadyInvoiced:  vi.fn(async () => false),
+  findInvoiceStatus:  vi.fn(async () => null),
   createInvoice:      vi.fn(async () => ({ created: true, invoice: makeInvoiceRow() })),
   updateInvoiceStamp: vi.fn(async () => makeInvoiceRow()),
   deleteById:         vi.fn(async () => {}),
@@ -201,7 +201,7 @@ beforeEach(async () => {
   vi.mocked(orderSrcMod.getOrderSource).mockReturnValue({
     findOrder: vi.fn(async () => VALID_ORDER),
   })
-  vi.mocked(dbRepo.isAlreadyInvoiced).mockImplementation(async () => false)
+  vi.mocked(dbRepo.findInvoiceStatus).mockImplementation(async () => null)
   vi.mocked(dbRepo.createInvoice).mockImplementation(async () => ({
     created: true as const,
     invoice: makeInvoiceRow(),
@@ -365,8 +365,8 @@ describe('POST /api/invoice/emit', () => {
     expect(body.error.code).toBe('ORDER_NOT_FOUND')
   })
 
-  it('409 ALREADY_INVOICED cuando isAlreadyInvoiced devuelve true', async () => {
-    vi.mocked(dbRepo.isAlreadyInvoiced).mockImplementation(async () => true)
+  it('409 ALREADY_INVOICED cuando findInvoiceStatus devuelve emitted', async () => {
+    vi.mocked(dbRepo.findInvoiceStatus).mockImplementation(async () => 'emitted')
 
     const req = makePostRequest(validBody)
     const res = await emitHandler(req as never)
@@ -374,6 +374,15 @@ describe('POST /api/invoice/emit', () => {
     expect(res.status).toBe(409)
     const body = await parseJson(res) as { error: { code: string } }
     expect(body.error.code).toBe('ALREADY_INVOICED')
+  })
+
+  it('409 INVOICE_UNCONFIRMED en emit cuando la factura está en verificación', async () => {
+    vi.mocked(dbRepo.findInvoiceStatus).mockImplementation(async () => 'stamped_unconfirmed')
+    const res = await emitHandler(makePostRequest(validBody) as never)
+    expect(res.status).toBe(409)
+    const body = await parseJson(res) as { error: { code: string; message: string } }
+    expect(body.error.code).toBe('INVOICE_UNCONFIRMED')
+    expect(body.error.message).toMatch(/24 horas/)
   })
 
   it('409 ALREADY_INVOICED cuando createInvoice devuelve created:false (carrera)', async () => {
@@ -505,6 +514,16 @@ describe('POST /api/invoice/lookup', () => {
     expect(body.ticket).toBeDefined()
   })
 
+  it.each([null, 'pending'])('200 con ticket cuando el estado de factura es %s', async (status) => {
+    vi.mocked(dbRepo.findInvoiceStatus).mockResolvedValue(status)
+
+    const res = await lookupHandler(makePostRequest(validLookupBody) as never)
+
+    expect(res.status).toBe(200)
+    const body = await parseJson(res) as { ticket: unknown }
+    expect(body.ticket).toBeDefined()
+  })
+
   it('422 VALIDATION_FAILED cuando folio está vacío tras trim', async () => {
     // El handler devuelve el error genérico para no distinguir casos al atacante
     const req = makePostRequest({ folio: '   ', amount: 116 })
@@ -591,7 +610,7 @@ describe('POST /api/invoice/lookup', () => {
   })
 
   it('409 ALREADY_INVOICED cuando el pedido ya tiene CFDI', async () => {
-    vi.mocked(dbRepo.isAlreadyInvoiced).mockImplementation(async () => true)
+    vi.mocked(dbRepo.findInvoiceStatus).mockImplementation(async () => 'emitted')
 
     const req = makePostRequest(validLookupBody)
     const res = await lookupHandler(req as never)
@@ -599,6 +618,15 @@ describe('POST /api/invoice/lookup', () => {
     expect(res.status).toBe(409)
     const body = await parseJson(res) as { error: { code: string } }
     expect(body.error.code).toBe('ALREADY_INVOICED')
+  })
+
+  it('409 INVOICE_UNCONFIRMED en lookup cuando la factura está en verificación', async () => {
+    vi.mocked(dbRepo.findInvoiceStatus).mockImplementation(async () => 'stamped_unconfirmed')
+    const res = await lookupHandler(makePostRequest(validLookupBody) as never)
+    expect(res.status).toBe(409)
+    const body = await parseJson(res) as { error: { code: string; message: string } }
+    expect(body.error.code).toBe('INVOICE_UNCONFIRMED')
+    expect(body.error.message).toMatch(/24 horas/)
   })
 
   it('422 DEADLINE_EXCEEDED cuando pedido está fuera de la ventana', async () => {

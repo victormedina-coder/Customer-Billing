@@ -162,20 +162,56 @@ El servidor de desarrollo corre en `http://localhost:3000` (con `-H 0.0.0.0`, ta
 | `test` | `vitest run` | Corre la suite de tests una vez |
 | `test:watch` | `vitest` | Tests en modo watch |
 | `test:coverage` | `vitest run --coverage` | Tests con reporte de cobertura |
+| `test:e2e` | `playwright test` | Pruebas E2E del portal en Chromium (ver [Testing](#testing)) |
+| `test:e2e:ui` | `playwright test --ui` | E2E en modo interactivo, para depurar |
 | `db:generate` | `drizzle-kit generate` | Genera una migración a partir del schema |
 | `db:migrate` | `drizzle-kit migrate` | Aplica migraciones pendientes |
 
 ## Testing
 
-El proyecto usa **Vitest** (`__tests__/`), con 283 tests activos (más 19 de integración que se saltan si falta configuración). Cubre dominio (cálculo fiscal, ventana de facturación, reembolsos), clientes HTTP (Shopify, Facturama), handlers de rutas (mapa error→HTTP), orquestación de `emit` (insert-first, rollback, correo best-effort) y utilidades (redacción de logs, rate limiting, matching de monto).
+El proyecto usa **Vitest** (`__tests__/`) para unitarias e integración, y **Playwright** (`e2e/`) para el recorrido del portal en el navegador. No se documenta aquí un conteo de tests (envejece en cada commit): el número real sale de la corrida.
+
+Cobertura (Vitest): dominio (cálculo fiscal, ventana de facturación, reembolsos), clientes HTTP (Shopify, Facturama), handlers de rutas (mapa error→HTTP), orquestación de `emit` (insert-first, rollback, correo best-effort), clasificación de resultados de timbrado inciertos y manejo de timeouts, estados de error del portal, y utilidades (redacción de logs, rate limiting, matching de monto).
+
+### Vitest
+
+`vitest.config.ts` define dos proyectos:
+
+- **`unit`**: todo `__tests__/` salvo los archivos de integración. Usa fakes y mocks en memoria, no necesita base de datos y puede correr en paralelo.
+- **`integration`**: exactamente los archivos de `INTEGRATION_TEST_FILES` en `vitest.config.ts`: `invoice-repository.test.ts`, `invoiced-orders-gateway.test.ts` y `global-invoice-repository.test.ts`. Comparten las mismas tablas de una Postgres real, por eso se serializan entre sí (`fileParallelism: false`); en paralelo se pisarían y la suite quedaría intermitente. Se saltan solos si falta `DATABASE_URL_TEST`.
 
 ```bash
-npm test              # correr toda la suite una vez
-npm run test:watch    # modo watch
-npm run test:coverage # con cobertura
+npx vitest run --project unit      # solo unitarias, sin base de datos
+npm test -- --maxWorkers=1         # suite completa (unit + integration)
+npm run test:watch                 # modo watch
+npm run test:coverage              # con cobertura
 ```
 
-Los tests de `invoice-repository` (integración) requieren `DATABASE_URL_TEST` apuntando a una base de datos de test real (se recomienda una segunda base en el mismo proyecto de Railway); sin esa variable, se saltan automáticamente.
+El `--` de `npm test -- --maxWorkers=1` separa los argumentos de npm de los que se pasan a `vitest run`.
+
+`vitest.config.ts` lee el `.env` local y, si existe `DATABASE_URL_TEST`, **sobrescribe `DATABASE_URL` con ese valor** en el proceso de tests. Así el código de producción (`getDb()`) conecta a la base de test sin necesidad de mocks.
+
+> **⚠️ `DATABASE_URL_TEST` debe apuntar a una base usada ÚNICAMENTE para tests: nunca producción, nunca la base de la app sandbox.** Los tests de integración ejecutan `TRUNCATE TABLE invoices, global_invoices RESTART IDENTITY CASCADE` antes de cada test (`invoice-repository`, `invoiced-orders-gateway` y `global-invoice-repository`). Eso borra los candados anti-doble-facturación; ya vació la base del sandbox una vez, el 2026-10-07. Se recomienda una segunda base en el mismo proyecto de Railway.
+
+Ningún test llama de verdad a Facturama, Shopify ni SMTP: los clientes HTTP se prueban con `fetch` mockeado, el timbrado y el correo con fakes. Lo único real que tocan es esa base de test.
+
+Como el `.env` se carga en los tests, los que prueban el fallback de serie aíslan `ARIAT_FACTURAMA_SERIE`, `STETSON_FACTURAMA_SERIE` y `WB_FACTURAMA_SERIE` con `vi.stubEnv`, para que la serie real del `.env` no altere el resultado.
+
+### E2E con Playwright
+
+```bash
+npm ci
+npx playwright install chromium
+npm run test:e2e        # corrida normal
+npm run test:e2e:ui     # modo interactivo, para depurar
+```
+
+Playwright levanta su propio Next.js en `127.0.0.1:4173`; ese puerto debe estar libre (`reuseExistingServer=false`, para no reutilizar un servidor ajeno con otra configuración). Las trazas y capturas de los fallos quedan en `test-results/` y `playwright-report/`, que no se versionan.
+
+- `e2e/portal.spec.ts` recorre el portal en Chromium: consulta del ticket, validación fiscal y consentimientos, confirmación, emisión, descargas, reenvío, errores, reinicio y persistencia de la sesión. Intercepta todas las llamadas del navegador a `/api/**` y falla ante una ruta inesperada.
+- `e2e/api.spec.ts` llama a las rutas locales para verificar el rechazo de entradas inválidas y la respuesta de emisión simulada. No hace un timbrado real.
+
+**Aislamiento:** el servidor de Playwright arranca con `EMIT_MOCK=true`, credenciales de Facturama y Shopify vacías, y sin `DATABASE_URL`, `REDIS_URL` ni secreto del cron global (`GLOBAL_INVOICE_SECRET`). También fija una fecha de desarrollo (`DEV_NOW_OVERRIDE`) para que la ventana de facturación siga abierta. Por eso Playwright **no prueba** Facturama, Shopify, SMTP, la base de datos ni el cron global real: eso lo cubren las pruebas de `__tests__/`, y una prueba fiscal completa necesita un ambiente sandbox con datos separados de producción.
 
 ## Variables de entorno
 
@@ -228,6 +264,7 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 | Variable | Descripción |
 |---|---|
 | `GLOBAL_INVOICE_SECRET` | Secreto compartido que autentica al cron/job interno que dispara el endpoint (header `x-global-secret`, comparación en tiempo constante). Sin ella, el endpoint responde `503 FEATURE_NOT_CONFIGURED`. |
+| `FACTURAMA_GLOBAL_TIMEOUT_MS` | Tiempo máximo del POST de CFDI global en milisegundos (entero >= 1; default `120000`). No altera el timeout de `15000` ms del CFDI individual. Un timeout deja la reserva en `stamped_unconfirmed` para conciliación. |
 | `DEV_NOW_OVERRIDE` | **Solo fuera de producción** (guard duro por `NODE_ENV`, ver `getEvaluationNow`). Fecha ISO para simular el instante "ahora" al resolver periodos `relative` (R4) o la ventana de facturación (R3). **Nunca definir en el `.env` de producción.** |
 
 ### Otros

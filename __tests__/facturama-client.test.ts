@@ -148,6 +148,40 @@ describe('emitirCFDI', () => {
     })
   })
 
+  it.each([401, 403])('conserva HTTP %i aunque el cuerpo JSON esté roto', async (status) => {
+    const { emitirCFDI } = await importClient()
+    fetchMock.mockResolvedValueOnce(new Response('{invalid', {
+      status, headers: { 'content-type': 'application/json' },
+    }))
+
+    await expect(emitirCFDI({})).rejects.toMatchObject({
+      message: `HTTP ${status}`, statusCode: status,
+    })
+  })
+
+  it('mantiene ambiguo un cuerpo JSON roto en HTTP 200', async () => {
+    const { emitirCFDI } = await importClient()
+    fetchMock.mockResolvedValueOnce(new Response('{invalid', {
+      status: 200, headers: { 'content-type': 'application/json' },
+    }))
+
+    await expect(emitirCFDI({})).rejects.not.toHaveProperty('statusCode')
+  })
+
+  it('usa timeout configurado en emitirCFDI y 15 segundos por defecto', async () => {
+    const { emitirCFDI } = await importClient()
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    fetchMock.mockResolvedValueOnce(jsonResponse({ Id: 'test-id' }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({ Id: 'test-id' }))
+
+    await emitirCFDI({}, { timeoutMs: 90_000 })
+    await emitirCFDI({})
+
+    expect(timeout).toHaveBeenNthCalledWith(1, 90_000)
+    expect(timeout).toHaveBeenNthCalledWith(2, 15_000)
+    timeout.mockRestore()
+  })
+
   it('usa JSON.stringify del body como mensaje cuando error no tiene Message ni message', async () => {
     const { emitirCFDI } = await importClient()
 
@@ -159,7 +193,7 @@ describe('emitirCFDI', () => {
     // El mensaje debe contener algo derivado del body (no vacío)
     try {
       await emitirCFDI({})
-    } catch (e) {
+    } catch {
       // Segunda llamada — necesitamos otro mock
       fetchMock.mockResolvedValueOnce(jsonResponse({ code: 'UNKNOWN', detail: 'x' }, 500))
     }

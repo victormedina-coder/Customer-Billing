@@ -79,7 +79,8 @@ export function isFacturamaConfigured(): boolean {
 async function request<T = unknown>(
   method: string,
   path: string,
-  body?: unknown
+  body?: unknown,
+  options?: { timeoutMs?: number }
 ): Promise<T> {
   const cfg = getConfig()
   if (!cfg) {
@@ -99,15 +100,17 @@ async function request<T = unknown>(
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(options?.timeoutMs ?? 15_000),
   })
 
   const ct = res.headers.get('content-type') ?? ''
-  const data: unknown = ct.includes('application/json')
-    ? await res.json()
-    : await res.text()
-
   if (!res.ok) {
+    let data: unknown
+    try {
+      data = ct.includes('application/json') ? await res.json() : await res.text()
+    } catch {
+      data = ''
+    }
     let msg: string
     if (typeof data === 'object' && data !== null) {
       const d = data as Record<string, unknown>
@@ -128,6 +131,9 @@ async function request<T = unknown>(
     throw err
   }
 
+  const data: unknown = ct.includes('application/json')
+    ? await res.json()
+    : await res.text()
   return data as T
 }
 
@@ -187,8 +193,11 @@ export async function validarReceptor(input: {
 
 // ─── Operaciones CFDI ─────────────────────────────────────────────────────────
 
-export async function emitirCFDI(payload: unknown): Promise<FacturamaCfdiResponse> {
-  return request<FacturamaCfdiResponse>('POST', '/3/cfdis', payload)
+export async function emitirCFDI(
+  payload: unknown,
+  options?: { timeoutMs?: number }
+): Promise<FacturamaCfdiResponse> {
+  return request<FacturamaCfdiResponse>('POST', '/3/cfdis', payload, options)
 }
 
 export async function obtenerCFDI(id: string): Promise<FacturamaCfdiResponse> {

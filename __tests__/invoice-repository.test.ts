@@ -4,7 +4,7 @@ import postgresJs from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import * as schema from '../src/infrastructure/db/schema'
 import {
-  isAlreadyInvoiced,
+  findInvoiceStatus,
   findByOrder,
   findById,
   createInvoice,
@@ -32,7 +32,7 @@ if (!skip) {
 
 beforeEach(async () => {
   if (skip) return
-  await cleanupDb!.execute(sql`TRUNCATE TABLE invoices RESTART IDENTITY CASCADE`)
+  await cleanupDb!.execute(sql`TRUNCATE TABLE invoices, global_invoices RESTART IDENTITY CASCADE`)
 })
 
 afterAll(async () => {
@@ -43,20 +43,20 @@ afterAll(async () => {
 
 describe.skipIf(skip)('invoice-repository (integration, Railway test DB)', () => {
 
-  // ── isAlreadyInvoiced ──────────────────────────────────────────────────────
+  // ── findInvoiceStatus ──────────────────────────────────────────────────────
 
-  it('returns false when no invoice exists', async () => {
-    expect(await isAlreadyInvoiced('order-001', 'tienda-ariat')).toBe(false)
+  it('returns null when no invoice exists', async () => {
+    expect(await findInvoiceStatus('order-001', 'tienda-ariat')).toBeNull()
   })
 
-  it('returns true after inserting an invoice', async () => {
+  it('returns pending status after inserting an invoice', async () => {
     await createInvoice({ orderId: 'order-001', orderNumber: '#1001', storeName: 'tienda-ariat' })
-    expect(await isAlreadyInvoiced('order-001', 'tienda-ariat')).toBe(true)
+    expect(await findInvoiceStatus('order-001', 'tienda-ariat')).toBe('pending')
   })
 
-  it('is scoped to storeName — same orderId in different store returns false', async () => {
+  it('is scoped to storeName — same orderId in different store returns null', async () => {
     await createInvoice({ orderId: 'order-001', orderNumber: '#1001', storeName: 'tienda-ariat' })
-    expect(await isAlreadyInvoiced('order-001', 'tienda-stetson')).toBe(false)
+    expect(await findInvoiceStatus('order-001', 'tienda-stetson')).toBeNull()
   })
 
   // ── createInvoice ──────────────────────────────────────────────────────────
@@ -387,6 +387,22 @@ describe.skipIf(skip)('invoice-repository (integration, Railway test DB)', () =>
 
     expect(reaped).toBe(false)
     expect(await findByOrder('order-reap-002', 'tienda-ariat')).not.toBeNull()
+  })
+
+  it('reapIfStalePending NUNCA borra una membresía global pending aunque sea vieja', async () => {
+    const created = await createInvoice({
+      orderId: 'order-global-pending',
+      orderNumber: '#GLOBAL',
+      storeName: 'tienda-ariat',
+      status: 'pending',
+      invoiceType: 'global',
+    })
+    expect(created.created).toBe(true)
+
+    const future = new Date(Date.now() + 20 * 60_000)
+    const reaped = await reapIfStalePending('order-global-pending', 'tienda-ariat', 10, future)
+    expect(reaped).toBe(false)
+    expect(await findByOrder('order-global-pending', 'tienda-ariat')).not.toBeNull()
   })
 
   it('reapIfStalePending NO borra una fila emitted aunque sea vieja', async () => {

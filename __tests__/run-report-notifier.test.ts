@@ -34,7 +34,7 @@ function makeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
     day: 23,
     dryRun: false,
     summary: {
-      chunks: 1, emitted: 1, rolledBack: 0, skippedIdempotent: 0, stampedUnconfirmed: 0,
+      chunks: 1, emitted: 1, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0, stampedUnconfirmed: 0,
       empty: 0, dryRun: 0, ordersEligible: 1, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false,
     },
     stores: [makeStore()],
@@ -43,6 +43,19 @@ function makeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
 }
 
 describe('formatGlobalRunReportEmail', () => {
+  it('separa rollback fallido y reserva fallida sin prometer liberación por TTL', () => {
+    const store = makeStore({ buckets: [{ bucket: 'efectivo', orders: 2, chunks: [
+      { chunkIndex: 0, itemCount: 1, outcome: 'rollback_failed', error: 'DB down' },
+      { chunkIndex: 1, itemCount: 1, outcome: 'reservation_failed', error: 'DB down' },
+    ] }] })
+    const report = makeReport({ stores: [store], summary: { ...makeReport().summary, rollbackFailed: 1, reservationFailed: 1, hasFailures: true } })
+    const { text } = formatGlobalRunReportEmail(report)
+    expect(text).toContain('Facturama no timbró')
+    expect(text).toContain('Limpiar header y membresías en BD')
+    expect(text).toContain('falló la reserva antes de llamar a Facturama')
+    expect(text).toContain('header quedó pending con membresías')
+    expect(text).toContain('el TTL no lo libera')
+  })
   it('veredicto ✅, desglose y folio+UUID de auditoría en el cuerpo', () => {
     const { subject, text, html } = formatGlobalRunReportEmail(makeReport())
     expect(subject).toContain('✅')
@@ -99,7 +112,7 @@ describe('formatGlobalRunReportEmail — totales de PEDIDOS (no CFDIs)', () => {
 
   const report = makeReport({
     day: undefined,
-    summary: { chunks: 9, emitted: 9, rolledBack: 0, skippedIdempotent: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0, ordersEligible: 50, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false },
+    summary: { chunks: 9, emitted: 9, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0, ordersEligible: 50, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false },
     stores: [billedStore('western-brothers', 3, 12, 5), billedStore('stetson', 8, 9, 3), billedStore('ariat', 2, 6, 2)],
   })
 
@@ -138,6 +151,20 @@ describe('formatGlobalRunReportEmail — excluidos, errores e idempotencia', () 
     expect(subject).toContain('🔴')
     expect(text).toContain('45 pedido(s) NO se facturaron')
     expect(text).toContain('Ariat / crédito — 45 pedidos — "Base x Rate != Total"')
+    expect(text).not.toContain('los ya facturados no se duplican')
+  })
+
+  it('ante timbrado incierto advierte que puede existir el CFDI y prohíbe reintentar', () => {
+    const store = makeStore({
+      store: 'ariat',
+      buckets: [{ bucket: 'credito', orders: 250, chunks: [{ chunkIndex: 0, itemCount: 250, outcome: 'stamped_unconfirmed', error: 'The operation was aborted due to timeout', excludedByRace: 0 }] }],
+    })
+    const summary = { ...makeReport().summary, hasFailures: true, stampedUnconfirmed: 1 }
+    const { text } = formatGlobalRunReportEmail(makeReport({ day: undefined, summary, stores: [store] }))
+    expect(text).toContain('pueden estar facturados')
+    expect(text).toContain('NO reintentar')
+    expect(text).not.toContain('The operation was aborted due to timeout')
+    expect(text).not.toContain('250 pedido(s) NO se facturaron')
   })
 
   it('caso idempotente: 0 pedidos nuevos y nota explicativa (no lo trata como error)', () => {

@@ -4,10 +4,10 @@
  * Objetivo: que un lector NO técnico entienda de un vistazo cuántos PEDIDOS se
  * facturaron (NO cuántos CFDIs — un CFDI global agrupa cientos de pedidos), el
  * desglose por marca y forma de pago, cuántos ya tenían factura vigente, y qué
- * falló con el detalle necesario para reintentar (marca + forma de pago +
+ * falló con el detalle necesario para conciliar (marca + forma de pago +
  * motivo). El detalle de errores es POR GRUPO (marca/forma de pago): un CFDI
  * que falla arrastra todos los pedidos de ese bucket; lo accionable es
- * reintentar ese grupo, y las referencias exactas viven en el log estructurado.
+ * revisar ese grupo, y las referencias exactas viven en el log estructurado.
  *
  * Formato aprobado por el usuario (2026-08-03): asunto con el mes en palabras,
  * encabezado en una línea, columnas alineadas con puntos de relleno, marca
@@ -15,7 +15,7 @@
  * marcas): se testea sola. El HTML envuelve el texto en <pre>.
  */
 
-import type { GlobalRunReport, StoreReport } from "@/src/application/global/EmitGlobalInvoiceUseCase";
+import type { GlobalRunReport } from "@/src/application/global/EmitGlobalInvoiceUseCase";
 import type { PaymentBucket } from "@/src/domain/global/PaymentBucket";
 
 export interface RunReportEmail {
@@ -135,7 +135,7 @@ interface FailGroup {
     store: string
     bucket: PaymentBucket
     itemCount: number
-    outcome: 'rolled_back' | 'stamped_unconfirmed'
+    outcome: 'rolled_back' | 'rollback_failed' | 'reservation_failed' | 'stamped_unconfirmed'
     serieFolio?: string
     error?: string
 }
@@ -145,7 +145,7 @@ function failedGroups(r: GlobalRunReport): FailGroup[] {
     for (const s of r.stores) {
         for (const bucket of s.buckets) {
             for (const chunk of bucket.chunks) {
-                if (chunk.outcome === 'rolled_back' || chunk.outcome === 'stamped_unconfirmed') {
+                if (chunk.outcome === 'rolled_back' || chunk.outcome === 'rollback_failed' || chunk.outcome === 'reservation_failed' || chunk.outcome === 'stamped_unconfirmed') {
                     out.push({ store: s.store, bucket: bucket.bucket, itemCount: chunk.itemCount, outcome: chunk.outcome, serieFolio: chunk.serieFolio, error: chunk.error })
                 }
             }
@@ -194,7 +194,7 @@ function buildText(r: GlobalRunReport): string {
     L.push(RULE, 'RESUMEN', RULE)
     L.push(`${leader(billedVerb, W)}${totalBilled}   (en ${nCfdis} CFDI${nCfdis === 1 ? '' : 's'})`)
     L.push(`${leader('Ya facturados (excluidos)', W)}${totalExcluded}   (ya tenían factura vigente)`)
-    L.push(`${leader('Con error (sin facturar)', W)}${totalFailedOrders}`)
+    L.push(`${leader('Con error (revisar)', W)}${totalFailedOrders}`)
     if (totalBilled === 0 && idempotent > 0) {
         L.push('')
         L.push(`Nota: ${idempotent} grupo(s) ya estaban timbrados de una corrida previa`)
@@ -228,9 +228,11 @@ function buildText(r: GlobalRunReport): string {
     }
     L.push('')
 
-    // ERRORES / SIN FACTURAR
-    L.push(RULE, 'ERRORES / SIN FACTURAR', RULE)
+    // ERRORES / CONCILIACIÓN
+    L.push(RULE, 'ERRORES / CONCILIACIÓN', RULE)
     const rolled = fails.filter((f) => f.outcome === 'rolled_back')
+    const rollbackFailed = fails.filter((f) => f.outcome === 'rollback_failed')
+    const reservationFailed = fails.filter((f) => f.outcome === 'reservation_failed')
     const unconfirmed = fails.filter((f) => f.outcome === 'stamped_unconfirmed')
     const unmappedStores = r.stores.filter((s) => s.unmapped.count > 0)
     const unaccountedStores = r.stores.filter((s) => s.unaccounted !== 0)
@@ -242,15 +244,34 @@ function buildText(r: GlobalRunReport): string {
         for (const f of rolled) {
             L.push(`   • ${brandLabel(f.store)} / ${BUCKET_LABELS[f.bucket]} — ${f.itemCount} pedidos — "${f.error ?? 'error desconocido'}"`)
         }
-        L.push('   → Reintentar la corrida; los ya facturados no se duplican.')
+        L.push('   → Revisar el rechazo en Facturama y corregirlo antes de reintentar.')
+    }
+    if (rollbackFailed.length > 0) {
+        anyError = true
+        const n = rollbackFailed.reduce((a, f) => a + f.itemCount, 0)
+        L.push(`🔴 ${n} pedido(s) NO se facturaron; Facturama no timbró y falló el rollback:`)
+        for (const f of rollbackFailed) {
+            L.push(`   • ${brandLabel(f.store)} / ${BUCKET_LABELS[f.bucket]} — ${f.itemCount} pedidos — "${f.error ?? 'error desconocido'}"`)
+        }
+        L.push('   → Limpiar header y membresías en BD antes de reintentar.')
+    }
+    if (reservationFailed.length > 0) {
+        anyError = true
+        const n = reservationFailed.reduce((a, f) => a + f.itemCount, 0)
+        L.push(`🔴 ${n} pedido(s) NO se facturaron; falló la reserva antes de llamar a Facturama:`)
+        for (const f of reservationFailed) {
+            L.push(`   • ${brandLabel(f.store)} / ${BUCKET_LABELS[f.bucket]} — ${f.itemCount} pedidos — "${f.error ?? 'error desconocido'}"`)
+        }
+        L.push('   → El header quedó pending con membresías; limpiar ambos antes de reintentar — el TTL no lo libera.')
     }
     if (unconfirmed.length > 0) {
         anyError = true
         const n = unconfirmed.reduce((a, f) => a + f.itemCount, 0)
-        L.push(`⚠ ${n} pedido(s) timbrados SIN confirmar el registro (conciliar):`)
+        L.push(`⚠ ${n} pedido(s) con timbrado SIN CONFIRMAR (pueden estar facturados; conciliar):`)
         for (const f of unconfirmed) {
-            L.push(`   • ${brandLabel(f.store)} / ${BUCKET_LABELS[f.bucket]} — ${f.itemCount} pedidos — folio ${f.serieFolio ?? '(sin folio)'}`)
+            L.push(`   • ${brandLabel(f.store)} / ${BUCKET_LABELS[f.bucket]} — ${f.itemCount} pedidos — folio ${f.serieFolio ?? '(sin respuesta)'}`)
         }
+        L.push('   → NO reintentar hasta verificar en Facturama y conciliar los CFDI con la base de datos.')
     }
     if (unmappedStores.length > 0) {
         anyError = true

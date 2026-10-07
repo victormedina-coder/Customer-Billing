@@ -339,7 +339,7 @@ describe('buildGlobalCfdiPayload — Serie por marca', () => {
   })
 
   it.each([
-    ['ariat', 'GDL1'],
+    ['ariat', 'gdl1'],
     ['stetson', 'STET'],
     ['western-brothers', 'WB'],
   ])('clave de marca "%s" → Serie "%s"', (storeName, expected) => {

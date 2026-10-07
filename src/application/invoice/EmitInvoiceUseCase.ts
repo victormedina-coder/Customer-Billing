@@ -16,6 +16,9 @@ import type { FiscalInput } from '../../domain/fiscal/FiscalInput'
 import type { InvoiceStampingService, EmitResult } from '../../domain/invoicing/ports/InvoiceStampingService'
 import type { CreateInvoiceData } from '../../infrastructure/db/invoice-repository'
 import { ok, err } from '../shared/Result'
+import { isDefinitiveStampRejection } from '../shared/isDefinitiveStampRejection'
+import { StampPreparationError } from '../shared/StampPreparationError'
+import { INVOICE_UNCONFIRMED_MESSAGE } from './INVOICE_UNCONFIRMED_MESSAGE'
 import type { Result } from '../shared/Result'
 import { maskEmail } from '../../infrastructure/observability/logRedact'
 import { amountMatches } from '../../../lib/amount-match'
@@ -43,6 +46,7 @@ export type EmitErrorCode =
   | 'ORDER_NOT_FOUND'
   | 'SHOPIFY_ERROR'
   | 'ALREADY_INVOICED'
+  | 'INVOICE_UNCONFIRMED'
   | 'FULLY_REFUNDED'
   | 'DEADLINE_EXCEEDED'
   | 'FACTURAMA_ERROR'
@@ -64,14 +68,14 @@ export interface EmitOk {
 // ─── Port mínimo del repo necesario en este caso de uso ──────────────────────
 
 export interface EmitInvoiceRepo {
-  isAlreadyInvoiced(orderId: string, storeName: string): Promise<boolean>
+  findInvoiceStatus(orderId: string, storeName: string): Promise<string | null>
   createInvoice(data: CreateInvoiceData): Promise<
     | { created: true; invoice: { id: string } }
     | { created: false; reason: string }
   >
   updateInvoiceStamp(
     invoiceId: string,
-    data: { facturamaId: string; uuidCfdi: string; status: string }
+    data: { facturamaId?: string; uuidCfdi?: string; status: string }
   ): Promise<unknown>
   deleteById(invoiceId: string): Promise<void>
   /**
@@ -166,8 +170,11 @@ export class EmitInvoiceUseCase {
     }
 
     // ── Etapa 3: verificación real de doble-facturación ───────────────────
-    const alreadyInvoiced = await repo.isAlreadyInvoiced(order.id, order.storeName)
-    if (alreadyInvoiced) {
+    const invoiceStatusBeforeInsert = await repo.findInvoiceStatus(order.id, order.storeName)
+    if (invoiceStatusBeforeInsert === 'stamped_unconfirmed') {
+      return err({ code: 'INVOICE_UNCONFIRMED', message: INVOICE_UNCONFIRMED_MESSAGE })
+    }
+    if (invoiceStatusBeforeInsert === 'emitted') {
       return err({ code: 'ALREADY_INVOICED', message: 'Este pedido ya cuenta con un CFDI emitido.' })
     }
 
@@ -218,59 +225,77 @@ export class EmitInvoiceUseCase {
     }
 
     if (!pending.created) {
+      const invoiceStatus = await repo.findInvoiceStatus(order.id, order.storeName)
+      if (invoiceStatus === 'stamped_unconfirmed') {
+        return err({ code: 'INVOICE_UNCONFIRMED', message: INVOICE_UNCONFIRMED_MESSAGE })
+      }
       return err({ code: 'ALREADY_INVOICED', message: 'Este pedido ya cuenta con un CFDI emitido.' })
     }
     const invoiceId = pending.invoice.id
 
     // ── 7. Timbrar en Facturama ────────────────────────────────────────────
+    // Proteger la reserva antes del POST: un crash o timeout no debe dejar
+    // una fila pending que el reaper pueda borrar tras timbrarse el CFDI.
+    try {
+      const marked = await repo.updateInvoiceStamp(invoiceId, { status: 'stamped_unconfirmed' })
+      if (marked === null) throw new Error('La reserva de la factura ya no existe')
+    } catch (markErr: unknown) {
+      const markMessage = markErr instanceof Error ? markErr.message : String(markErr)
+      console.error('[emit] No se pudo reservar el intento de timbrado; Facturama no fue llamado:', { invoiceId, error: markMessage })
+      return err({ code: 'FACTURAMA_ERROR', message: 'No se pudo iniciar la facturación. Contacta a soporte antes de reintentar.' })
+    }
     let emitResult: EmitResult
     try {
       emitResult = await stamping.emitir({ order, fiscal })
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e)
-      console.error('[emit] Facturama:', message)
-      // El timbrado falló: liberamos el cerrojo borrando la fila pendiente para
-      // permitir que el cliente reintente.
-      try {
-        await repo.deleteById(invoiceId)
-      } catch (delErr: unknown) {
-        const delMsg = delErr instanceof Error ? delErr.message : String(delErr)
-        console.error('[emit] No se pudo limpiar la fila pendiente tras fallo de timbrado:', {
-          invoiceId, error: delMsg,
-        })
+      if (e instanceof StampPreparationError || isDefinitiveStampRejection(e)) {
+        const preparationFailed = e instanceof StampPreparationError
+        console.error(preparationFailed ? '[emit] Falló la preparación; Facturama no fue llamado:' : '[emit] Facturama rechazó el CFDI:', { invoiceId, error: message })
+        try {
+          await repo.deleteById(invoiceId)
+        } catch (delErr: unknown) {
+          const delMsg = delErr instanceof Error ? delErr.message : String(delErr)
+          console.error(preparationFailed
+            ? '[emit] No se pudo limpiar la reserva tras fallo de preparación:'
+            : '[emit] No se pudo limpiar la reserva tras rechazo del timbrado:', { invoiceId, error: delMsg })
+          return err({ code: 'FACTURAMA_ERROR', message: 'No pudimos liberar la reserva de facturación. Contacta a facturación antes de reintentar.' })
+        }
+        return err({ code: 'FACTURAMA_ERROR', message: preparationFailed ? 'No se pudo preparar la factura. Revisa los datos fiscales antes de reintentar.' : 'Facturama rechazó la factura. Revisa los datos fiscales antes de reintentar.' })
       }
-      return err({ code: 'FACTURAMA_ERROR', message: 'Error al generar la factura. Intenta de nuevo más tarde.' })
+      console.error('[emit] Resultado de timbrado incierto; conciliar con Facturama antes de reintentar:', { invoiceId, error: message })
+      return err({ code: 'FACTURAMA_ERROR', message: 'No pudimos confirmar si se generó la factura. Contacta a facturación antes de reintentar.' })
     }
 
     // ── 8. Persistir los datos del CFDI en la fila ya bloqueada ─────────────
     // El cerrojo ya está tomado; este UPDATE no puede fallar por carrera.
-    // Si la DB falla aquí (raro), el CFDI YA está timbrado en Facturama — la fila
-    // NO debe quedar como 'pending' reapeable (el reap-lazy la borraría y un
-    // reintento del cliente causaría un SEGUNDO timbrado duplicado). En su lugar
-    // la marcamos 'stamped_unconfirmed', un status que el reaper nunca toca y que
-    // requiere conciliación manual (docs/08-plan-pre-deploy.md §4).
+    // Si la DB falla aquí, la reserva previa ya sigue en stamped_unconfirmed.
+    // Reintentamos guardar los identificadores del CFDI para facilitar la conciliación.
     try {
-      await repo.updateInvoiceStamp(invoiceId, {
+      const saved = await repo.updateInvoiceStamp(invoiceId, {
         facturamaId: emitResult.facturamaId,
         uuidCfdi: emitResult.uuid,
         status: 'emitted',
       })
+      if (saved === null) throw new Error('La reserva de la factura desapareció tras el timbrado')
     } catch (dbErr: unknown) {
       const dbMsg = dbErr instanceof Error ? dbErr.message : String(dbErr)
       console.error('[emit] CFDI timbrado pero no se pudo actualizar la fila (conciliar):', {
         invoiceId, error: dbMsg,
       })
       try {
-        await repo.updateInvoiceStamp(invoiceId, {
+        const saved = await repo.updateInvoiceStamp(invoiceId, {
           facturamaId: emitResult.facturamaId,
           uuidCfdi: emitResult.uuid,
           status: 'stamped_unconfirmed',
         })
+        if (saved === null) throw new Error('La reserva de la factura desapareció tras el timbrado')
       } catch (markErr: unknown) {
         const markMsg = markErr instanceof Error ? markErr.message : String(markErr)
         console.error('[emit] No se pudo marcar la fila como stamped_unconfirmed (riesgo de reap indebido, conciliar manualmente):', {
           invoiceId, error: markMsg,
         })
+        return err({ code: 'FACTURAMA_ERROR', message: 'La factura se generó, pero no pudimos confirmar su registro. Contacta a soporte; no vuelvas a facturar este pedido.' })
       }
     }
 

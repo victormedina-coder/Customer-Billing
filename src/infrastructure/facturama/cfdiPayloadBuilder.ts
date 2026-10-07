@@ -56,7 +56,7 @@ export interface CfdiReceiver {
 export interface CfdiPayload {
   NameId: string
   /**
-   * Serie fiscal de la marca (GDL1/STET/WB, ver brandSerie.ts). En producción
+   * Serie fiscal de la marca (gdl1/STET/WB, ver brandSerie.ts). En producción
    * hay UNA sola numeración por marca gobernada por su Serie — global e
    * individual comparten la secuencia (2026-07-23). NO existe `Folio` a
    * propósito: Facturama lo asigna e incrementa por Serie, igual que el CFDI

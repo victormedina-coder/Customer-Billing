@@ -3,6 +3,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import type { PortalState, PortalStep, FiscalData, Ticket, GeneratedInvoice, ToastType } from '../_lib/types'
 import { validateFiscal } from '../_lib/validators'
 import { DEMO_TICKETS } from '../_lib/constants'
+import { selectEmitErrorMessage } from '../_lib/emitErrorMessage'
 
 const INITIAL_FISCAL: FiscalData = { rfc: '', razon: '', regimen: '', cp: '', uso: '', email: '' }
 
@@ -248,6 +249,10 @@ export function usePortal(flash: (msg: string, type?: ToastType) => void) {
             set({ busy: false, ticket: null, lookupError: 'invoiced' })
             return
           }
+          if (code === 'INVOICE_UNCONFIRMED') {
+            set({ busy: false, ticket: null, lookupError: 'unconfirmed' })
+            return
+          }
           if (code === 'FULLY_REFUNDED') {
             // Pedido reembolsado en su totalidad — no se puede facturar.
             set({ busy: false, ticket: null, lookupError: 'refunded' })
@@ -345,12 +350,16 @@ export function usePortal(flash: (msg: string, type?: ToastType) => void) {
 
       if (!res.ok) {
         let code = 'EMIT_ERROR'
+        let serverMessage: unknown
         try {
-          const b = (await res.json()) as { error?: { code?: string } }
+          const b = (await res.json()) as { error?: { code?: string; message?: unknown } }
           code = b?.error?.code ?? code
+          serverMessage = b?.error?.message
         } catch { /* ignore */ }
 
-        if (code === 'ALREADY_INVOICED') {
+        if (code === 'INVOICE_UNCONFIRMED') {
+          set({ busy: false, step: 'ticket', ticket: null, folio: '', lookupError: 'unconfirmed' })
+        } else if (code === 'ALREADY_INVOICED') {
           set({ busy: false, step: 'ticket', ticket: null, folio: '', lookupError: 'invoiced' })
         } else if (code === 'FULLY_REFUNDED') {
           set({ busy: false, step: 'ticket', ticket: null, folio: '', lookupError: 'refunded' })
@@ -361,7 +370,7 @@ export function usePortal(flash: (msg: string, type?: ToastType) => void) {
           flash('Datos fiscales inválidos — regresa y verifica los campos', 'error')
           set({ busy: false })
         } else {
-          flash('Error al generar la factura. Intenta de nuevo más tarde.', 'error')
+          flash(selectEmitErrorMessage(serverMessage), 'error')
           set({ busy: false })
         }
         return
