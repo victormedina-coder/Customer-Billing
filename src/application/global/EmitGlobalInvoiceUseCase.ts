@@ -45,7 +45,7 @@ import { PaymentBucketPolicy } from '../../domain/global/PaymentBucketPolicy'
 import { GlobalChunkPolicy } from '../../domain/global/GlobalChunkPolicy'
 import type { MonthlyOrder, MonthlyOrderSource } from '../../domain/global/ports/MonthlyOrderSource'
 import type { GlobalInvoiceStamping } from '../../domain/global/ports/GlobalInvoiceStamping'
-import type { GlobalInvoiceRepository } from '../../domain/global/ports/GlobalInvoiceRepository'
+import type { GlobalInvoiceRepository, UnresolvedGlobalHeader } from '../../domain/global/ports/GlobalInvoiceRepository'
 import type { InvoicedOrdersGateway } from '../../domain/global/ports/InvoicedOrdersGateway'
 import type { CreateInvoiceData } from '../../infrastructure/db/invoice-repository'
 import type { Logger } from '../../domain/shared/ports/Logger'
@@ -117,7 +117,7 @@ export interface ExcludedOrderIdentity {
   /** Referencia humana (`buildOrderReference`) — la que empata con el canal Facturama, ej. `"#1150 2-1244"`. */
   reference: string
   /** Canal que detectó la exclusión: `'db'` (match por `order.id`) o `'facturama'` (match por referencia). */
-  matchedBy: 'db' | 'facturama'
+  matchedBy: 'db' | 'db_unresolved' | 'facturama'
 }
 
 /** Reporte estructurado de exclusión por ya-facturado — mismo patrón que `UnmappedReport`, con identidad para auditoría fiscal. */
@@ -172,6 +172,7 @@ export interface StoreReport {
   /** Pedidos con reembolso TOTAL (`RefundPolicy.isFullyRefunded`). */
   skippedFullyRefunded: RefundedOrdersReport
   excludedAlreadyInvoiced: ExcludedAlreadyInvoicedReport
+  unresolvedHeaders: UnresolvedGlobalHeader[]
   unmapped: UnmappedReport
   buckets: BucketReport[]
   /**
@@ -207,6 +208,8 @@ export interface GlobalRunSummary {
   empty: number
   dryRun: number
   ordersEligible: number
+  unresolvedOrders: number
+  unresolvedHeaders: number
   unmapped: number
   /** Suma de `StoreReport.unaccounted`. Distinto de 0 ⇒ hay un filtro que descarta en silencio. */
   unaccounted: number
@@ -248,11 +251,13 @@ function computeSummary(stores: StoreReport[]): GlobalRunSummary {
   const s: GlobalRunSummary = {
     chunks: 0, emitted: 0, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0,
     stampedUnconfirmed: 0, empty: 0, dryRun: 0,
-    ordersEligible: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false,
+    ordersEligible: 0, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false,
   }
 
   for (const store of stores) {
     s.ordersEligible += store.eligible
+    s.unresolvedOrders += store.excludedAlreadyInvoiced.orders.filter((order) => order.matchedBy === 'db_unresolved').length
+    s.unresolvedHeaders += store.unresolvedHeaders.length
     s.unmapped += store.unmapped.count
     s.unaccounted += store.unaccounted
     s.skippedUnpaid += store.skippedUnpaid.count
@@ -273,7 +278,7 @@ function computeSummary(stores: StoreReport[]): GlobalRunSummary {
     }
   }
 
-  s.hasFailures = s.rolledBack > 0 || s.rollbackFailed > 0 || s.reservationFailed > 0 || s.stampedUnconfirmed > 0 || s.unmapped > 0 || s.unaccounted !== 0 ||s.skippedUnpaid > 0
+  s.hasFailures = s.rolledBack > 0 || s.rollbackFailed > 0 || s.reservationFailed > 0 || s.skippedIdempotent > 0 || s.stampedUnconfirmed > 0 || s.unmapped > 0 || s.unaccounted !== 0 || s.skippedUnpaid > 0 || s.unresolvedOrders > 0 || s.unresolvedHeaders > 0
   return s
 }
 
@@ -317,7 +322,6 @@ export interface EmitGlobalInvoiceDeps {
   /** Tope de conceptos por CFDI global. Default: 250 (ver plan §7). */
   maxItemsPerChunk?: number
   /** Minutos de antigüedad tras los cuales un header 'pending' se considera huérfano. Default: 10. */
-  pendingTtlMinutes?: number
   /** Reloj inyectable — permite testear el TTL sin esperar minutos reales. Default: () => new Date(). */
   now?: () => Date
   /** uuid de la corrida — inyectable para tests deterministas. Default: crypto.randomUUID(). */
@@ -329,7 +333,6 @@ export interface EmitGlobalInvoiceDeps {
 // ─── Use Case ─────────────────────────────────────────────────────────────────
 
 const DEFAULT_MAX_ITEMS_PER_CHUNK = 250
-const DEFAULT_PENDING_TTL_MINUTES = 10
 
 /**
  * Logger por defecto cuando no se inyecta uno (tests, o un composition root que
@@ -350,7 +353,6 @@ export class EmitGlobalInvoiceUseCase {
   private readonly paymentBucketPolicy: PaymentBucketClassifier
   private readonly chunkPolicy: ChunkPolicyPort
   private readonly maxItemsPerChunk: number
-  private readonly pendingTtlMinutes: number
   private readonly now: () => Date
   private readonly runId: string
   private readonly logger: Logger
@@ -359,7 +361,6 @@ export class EmitGlobalInvoiceUseCase {
     this.paymentBucketPolicy = deps.paymentBucketPolicy ?? PaymentBucketPolicy
     this.chunkPolicy = deps.chunkPolicy ?? GlobalChunkPolicy
     this.maxItemsPerChunk = deps.maxItemsPerChunk ?? DEFAULT_MAX_ITEMS_PER_CHUNK
-    this.pendingTtlMinutes = deps.pendingTtlMinutes ?? DEFAULT_PENDING_TTL_MINUTES
     this.now = deps.now ?? (() => new Date())
     this.runId = deps.runId ?? crypto.randomUUID()
     this.logger = deps.logger ?? CONSOLE_LOGGER
@@ -477,6 +478,10 @@ export class EmitGlobalInvoiceUseCase {
     }
 
     const { survivors, excludedAlreadyInvoiced } = await this.excludeAlreadyInvoiced(store, period, eligible)
+    const unresolvedHeaders = await this.deps.globalRepo.listUnresolvedHeaders(store, period.year, period.month, period.day)
+    if (unresolvedHeaders.length > 0 || excludedAlreadyInvoiced.orders.some((order) => order.matchedBy === 'db_unresolved')) {
+      this.logger.error({ runId, store, unresolvedHeaders, unresolvedOrderIds: excludedAlreadyInvoiced.orders.filter((order) => order.matchedBy === 'db_unresolved').map((order) => order.orderId) }, '[global-invoice] pedidos bloqueados sin confirmar timbrado')
+    }
     const { buckets, unmapped } = this.groupByBucket(survivors)
 
     const unaccounted =
@@ -538,6 +543,7 @@ export class EmitGlobalInvoiceUseCase {
       skippedUnpaid: { count: skippedUnpaid.length, orders: skippedUnpaid },
       skippedFullyRefunded: { count: skippedFullyRefunded.length, orders: skippedFullyRefunded },
       excludedAlreadyInvoiced,
+      unresolvedHeaders,
       unmapped: { count: unmapped.length, orderIds: unmapped.map((mo) => mo.order.id) },
       buckets: bucketReports,
       unaccounted,
@@ -570,10 +576,12 @@ export class EmitGlobalInvoiceUseCase {
     candidates: MonthlyOrder[],
   ): Promise<{ survivors: MonthlyOrder[]; excludedAlreadyInvoiced: ExcludedAlreadyInvoicedReport }> {
     const orderIds = new Set<string>()
+    const unresolvedOrderIds = new Set<string>()
     const orderReferences = new Set<string>()
     for (const gateway of this.deps.invoicedOrdersGateways) {
       const keys = await gateway.listInvoicedOrderKeys(store, period)
       for (const id of keys.orderIds) orderIds.add(id)
+      for (const id of keys.unresolvedOrderIds) unresolvedOrderIds.add(id)
       for (const reference of keys.orderReferences) orderReferences.add(reference)
     }
 
@@ -585,7 +593,7 @@ export class EmitGlobalInvoiceUseCase {
       const matchedById = orderIds.has(order.id)
       const matchedByReference = orderReferences.has(reference)
       if (matchedById || matchedByReference) {
-        excludedOrders.push({ orderId: order.id, reference, matchedBy: matchedById ? 'db' : 'facturama' })
+        excludedOrders.push({ orderId: order.id, reference, matchedBy: unresolvedOrderIds.has(order.id) ? 'db_unresolved' : matchedById ? 'db' : 'facturama' })
         continue
       }
       survivors.push(monthlyOrder)
@@ -622,10 +630,12 @@ export class EmitGlobalInvoiceUseCase {
     runId: string,
   ): Promise<BucketReport> {
     const chunks = this.chunkPolicy.chunk(bucketOrders, this.maxItemsPerChunk)
+    const firstChunkIndex = dryRun ? 0 : await this.deps.globalRepo.nextChunkIndex(store, period.year, period.month, period.day, bucket)
 
     const chunkReports: ChunkReport[] = []
-    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
-      const chunkOrders = chunks[chunkIndex]
+    for (let offset = 0; offset < chunks.length; offset++) {
+      const chunkIndex = firstChunkIndex + offset
+      const chunkOrders = chunks[offset]
       const chunkReport = dryRun
         ? { chunkIndex, itemCount: chunkOrders.length, outcome: 'dry_run' as const }
         : await this.processChunk(store, period, bucket, chunkIndex, chunkOrders, runId)
@@ -636,8 +646,8 @@ export class EmitGlobalInvoiceUseCase {
   }
 
   /**
-   * Procesa un chunk de forma idempotente: insert-first del header, reap-lazy
-   * si está pending y viejo, insert-first por-fila de membresías (excluyendo
+   * Procesa un chunk de forma idempotente: insert-first del header,
+   * insert-first por-fila de membresías (excluyendo
    * SOLO los pedidos que pierden la carrera), timbrado, y rollback/marca de
    * stamped_unconfirmed antes de llamar a Facturama y ante respuesta incierta.
    */
@@ -662,15 +672,9 @@ export class EmitGlobalInvoiceUseCase {
       chunkIndex,
     }
 
-    let header = await this.deps.globalRepo.createGlobalHeader(identity)
+    const header = await this.deps.globalRepo.createGlobalHeader(identity)
     if (!header.created) {
-      const reaped = await this.deps.globalRepo.reapStaleGlobalHeader(identity, this.pendingTtlMinutes, this.now())
-      if (reaped) {
-        header = await this.deps.globalRepo.createGlobalHeader(identity)
-      }
-    }
-    if (!header.created) {
-      this.logger.info({ runId, store, day: period.day, bucket, chunkIndex }, '[global-invoice] chunk salteado (idempotente)')
+      this.logger.error({ runId, store, bucket, chunkIndex, itemCount: chunkOrders.length }, '[global-invoice] colisión de header: pedidos sin timbrar; revisar corrida concurrente')
       return { chunkIndex, itemCount: chunkOrders.length, outcome: 'skipped_idempotent' }
     }
     const headerId = header.header.id
@@ -692,7 +696,22 @@ export class EmitGlobalInvoiceUseCase {
         paymentType: bucket,
         globalInvoiceId: headerId,
       }
-      const membership = await this.deps.invoiceRepo.createInvoice(membershipData)
+      let membership: Awaited<ReturnType<GlobalMembershipRepo['createInvoice']>>
+      try {
+        membership = await this.deps.invoiceRepo.createInvoice(membershipData)
+      } catch (insertErr: unknown) {
+        const message = insertErr instanceof Error ? insertErr.message : String(insertErr)
+        this.logger.error({ runId, headerId, store, bucket, chunkIndex, error: message }, '[global-invoice] Falló la inserción de membresía antes de llamar a Facturama')
+        const rolledBack = await this.rollbackChunk(headerId, runId)
+        return {
+          chunkIndex, itemCount: chunkOrders.length,
+          outcome: rolledBack ? 'reservation_failed' : 'rollback_failed',
+          error: rolledBack
+            ? `${message}; se liberaron el header y las membresías parciales`
+            : `${message}; no se pudo confirmar la limpieza en la base de datos`,
+          excludedByRace,
+        }
+      }
       if (membership.created) {
         survivors.push(monthlyOrder)
       } else {
@@ -701,7 +720,16 @@ export class EmitGlobalInvoiceUseCase {
     }
 
     if (survivors.length === 0) {
-      await this.deps.globalRepo.deleteGlobalHeader(headerId)
+      try {
+        await this.deps.globalRepo.deleteGlobalHeader(headerId)
+      } catch (deleteErr: unknown) {
+        const message = deleteErr instanceof Error ? deleteErr.message : String(deleteErr)
+        this.logger.error({ runId, headerId, store, bucket, chunkIndex, itemCount: chunkOrders.length, error: message }, '[global-invoice] No se pudo borrar el header vacío; queda pending y requiere conciliación')
+        return {
+          chunkIndex, itemCount: 0, outcome: 'rollback_failed', excludedByRace,
+          error: `${message}; el header vacío quedó pending y requiere conciliación (se reportará como no resuelto en la siguiente corrida)`,
+        }
+      }
       this.logger.info({ runId, store, day: period.day, bucket, chunkIndex }, '[global-invoice] chunk vacío tras insert-first, header borrado')
       return { chunkIndex, itemCount: 0, outcome: 'empty', excludedByRace }
     }
@@ -712,8 +740,16 @@ export class EmitGlobalInvoiceUseCase {
       await this.deps.globalRepo.updateGlobalStamp(headerId, { status: 'stamped_unconfirmed' })
     } catch (markErr: unknown) {
       const message = markErr instanceof Error ? markErr.message : String(markErr)
-      this.logger.error({ runId, headerId, error: message }, '[global-invoice] No se pudo reservar el intento de timbrado; Facturama no fue llamado')
-      return { chunkIndex, itemCount: survivors.length, outcome: 'reservation_failed', error: message, excludedByRace }
+      this.logger.error({ runId, headerId, store, bucket, chunkIndex, error: message }, '[global-invoice] No se pudo reservar el intento de timbrado; Facturama no fue llamado')
+      const rolledBack = await this.rollbackChunk(headerId, runId)
+      return {
+        chunkIndex, itemCount: survivors.length,
+        outcome: rolledBack ? 'reservation_failed' : 'rollback_failed',
+        error: rolledBack
+          ? `${message}; se liberaron el header y las membresías`
+          : `${message}; no se pudo confirmar la limpieza en la base de datos`,
+        excludedByRace,
+      }
     }
 
     let stampResult
@@ -781,7 +817,7 @@ export class EmitGlobalInvoiceUseCase {
     return { chunkIndex, itemCount: survivors.length, outcome: 'emitted', uuid: stampResult.uuidCfdi, serieFolio: stampResult.serieFolio, excludedByRace }
   }
 
-  /** Rollback solo para rechazo de validación explícito — nunca para resultado incierto. */
+  /** Rollback antes de llamar a Facturama o tras rechazo definitivo; nunca para resultado incierto. */
   private async rollbackChunk(headerId: string, runId: string): Promise<boolean> {
     let completed = true
     try {

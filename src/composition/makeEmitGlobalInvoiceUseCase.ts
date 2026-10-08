@@ -33,7 +33,6 @@ import { createInvoice, deleteByGlobalInvoiceId } from '../infrastructure/db/inv
 import { isFullyRefunded } from '../domain/orders/RefundPolicy'
 
 const DEFAULT_MAX_ITEMS_PER_CFDI = 250
-const DEFAULT_PENDING_TTL_MINUTES = 10
 const DEFAULT_GLOBAL_TIMEOUT_MS = 120000
 
 export function getFacturamaGlobalTimeoutMs(): number {
@@ -52,17 +51,6 @@ function getMaxItemsPerChunk(): number {
   if (!raw) return DEFAULT_MAX_ITEMS_PER_CFDI
   const parsed = Number(raw)
   return Number.isInteger(parsed) && parsed >= 1 ? parsed : DEFAULT_MAX_ITEMS_PER_CFDI
-}
-
-/**
- * Misma variable de entorno que usa el flujo individual (`PENDING_TTL_MINUTES`)
- * — un solo TTL de reap-lazy para todo el portal, ver makeEmitInvoiceUseCase.ts.
- */
-function getPendingTtlMinutes(): number {
-  const raw = process.env.PENDING_TTL_MINUTES
-  if (!raw) return DEFAULT_PENDING_TTL_MINUTES
-  const parsed = Number(raw)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PENDING_TTL_MINUTES
 }
 
 /**
@@ -85,7 +73,6 @@ export function makeEmitGlobalInvoiceUseCase(): EmitGlobalInvoiceUseCase {
     // La application no lee config — recibe las marcas configuradas inyectadas.
     storeNames: listConfiguredBrands().map((brand) => brand.key),
     maxItemsPerChunk: getMaxItemsPerChunk(),
-    pendingTtlMinutes: getPendingTtlMinutes(),
     logger,
   }
 

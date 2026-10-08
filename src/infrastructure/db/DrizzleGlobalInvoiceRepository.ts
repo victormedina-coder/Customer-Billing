@@ -4,10 +4,10 @@
  *
  * Sigue el mismo patrón maduro de `invoice-repository.ts`: insert-first
  * atrapando la violación UNIQUE (23505 — postgres-js la pone en `err.cause`),
- * reap-lazy de encabezados 'pending' huérfanos, y rollback vía delete.
+ * índices crecientes por periodo/bucket, y rollback vía delete.
  */
 
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, max } from 'drizzle-orm'
 import { getDb } from './client'
 import { globalInvoices, invoices } from './schema'
 import type {
@@ -15,8 +15,9 @@ import type {
   CreateGlobalHeaderResult,
   GlobalInvoiceRepository,
   UpdateGlobalStampData,
+  UnresolvedGlobalHeader,
 } from '../../domain/global/ports/GlobalInvoiceRepository'
-import type { GlobalInvoice, GlobalInvoiceIdentity } from '../../domain/global/GlobalInvoice'
+import type { GlobalInvoice } from '../../domain/global/GlobalInvoice'
 import type { PaymentBucket } from '../../domain/global/PaymentBucket'
 
 export type GlobalInvoiceRow = typeof globalInvoices.$inferSelect
@@ -36,17 +37,6 @@ function isUniqueViolation(err: unknown): boolean {
     return (cause as Record<string, unknown>)['code'] === PG_UNIQUE_VIOLATION
   }
   return false
-}
-
-function identityWhere(key: GlobalInvoiceIdentity) {
-  return and(
-    eq(globalInvoices.storeName, key.storeName),
-    eq(globalInvoices.periodYear, key.periodYear),
-    eq(globalInvoices.periodMonth, key.periodMonth),
-    eq(globalInvoices.periodDay, key.periodDay ?? 0),
-    eq(globalInvoices.paymentBucket, key.paymentBucket),
-    eq(globalInvoices.chunkIndex, key.chunkIndex),
-  )
 }
 
 /**
@@ -76,6 +66,28 @@ export function mapRowToGlobalInvoice(row: GlobalInvoiceRow): GlobalInvoice {
 // ---------------------------------------------------------------------------
 
 export class DrizzleGlobalInvoiceRepository implements GlobalInvoiceRepository {
+  async nextChunkIndex(storeName: string, periodYear: number, periodMonth: number, periodDay: number | undefined, paymentBucket: PaymentBucket): Promise<number> {
+    const rows = await getDb().select({ highest: max(globalInvoices.chunkIndex) }).from(globalInvoices).where(and(
+      eq(globalInvoices.storeName, storeName),
+      eq(globalInvoices.periodYear, periodYear),
+      eq(globalInvoices.periodMonth, periodMonth),
+      eq(globalInvoices.periodDay, periodDay ?? 0),
+      eq(globalInvoices.paymentBucket, paymentBucket),
+    ))
+    return (rows[0]?.highest ?? -1) + 1
+  }
+
+  async listUnresolvedHeaders(storeName: string, periodYear: number, periodMonth: number, periodDay: number | undefined): Promise<UnresolvedGlobalHeader[]> {
+    const rows = await getDb().select().from(globalInvoices).where(and(
+      eq(globalInvoices.storeName, storeName),
+      eq(globalInvoices.periodYear, periodYear),
+      eq(globalInvoices.periodMonth, periodMonth),
+      eq(globalInvoices.periodDay, periodDay ?? 0),
+      inArray(globalInvoices.status, ['pending', 'stamped_unconfirmed']),
+    ))
+    return rows.map(row => ({ storeName: row.storeName, bucket: row.paymentBucket as PaymentBucket, chunkIndex: row.chunkIndex, status: row.status as UnresolvedGlobalHeader['status'], createdAt: row.createdAt, itemCount: row.itemCount }))
+  }
+
   async createGlobalHeader(data: CreateGlobalHeaderData): Promise<CreateGlobalHeaderResult> {
     const db = getDb()
     try {
@@ -97,30 +109,6 @@ export class DrizzleGlobalInvoiceRepository implements GlobalInvoiceRepository {
       }
       throw err
     }
-  }
-
-  async reapStaleGlobalHeader(
-    key: GlobalInvoiceIdentity,
-    ttlMinutes: number,
-    now: Date,
-  ): Promise<boolean> {
-    const db = getDb()
-    const rows = await db.select().from(globalInvoices).where(identityWhere(key)).limit(1)
-    const row = rows[0]
-    if (!row) return false
-    // Invariante anti-doble-timbre: jamás reapear 'emitted' ni
-    // 'stamped_unconfirmed' — este último indica un intento cuyo resultado
-    // debe conciliarse antes de permitir otro timbrado.
-    if (row.status !== 'pending') return false
-
-    const ageMs = now.getTime() - row.createdAt.getTime()
-    const ttlMs = ttlMinutes * 60_000
-    if (ageMs <= ttlMs) return false
-
-    await db
-      .delete(globalInvoices)
-      .where(and(eq(globalInvoices.id, row.id), eq(globalInvoices.status, 'pending')))
-    return true
   }
 
   async updateGlobalStamp(id: string, data: UpdateGlobalStampData): Promise<void> {

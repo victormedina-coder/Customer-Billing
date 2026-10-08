@@ -26,8 +26,8 @@
  *   422 STORE_NOT_CONFIGURED → storeName no está entre las marcas configuradas
  *   429 RATE_LIMITED         → demasiados intentos (defensa en profundidad)
  *   503 FEATURE_NOT_CONFIGURED → GLOBAL_INVOICE_SECRET no está definido
- *   500 (con { report })   → la corrida terminó pero algún chunk quedó en
- *                            rolled_back/rollback_failed/reservation_failed/stamped_unconfirmed (ver summary.hasFailures)
+ *   500 (con { report })   → la corrida terminó con fallos de chunks, pedidos
+ *                            bloqueados sin confirmar o headers sin resolver (ver summary.hasFailures)
  */
 
 export const runtime = 'nodejs'
@@ -168,15 +168,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
   }
 
-  // Un chunk en `rolled_back`/`stamped_unconfirmed` es un hueco fiscal: pedidos
-  // elegibles que no quedaron timbrados (o timbrados sin registrar). Se responde
+  // Chunks rolled_back/rollback_failed/reservation_failed/stamped_unconfirmed,
+  // skipped_idempotent con pedidos, unresolvedOrders y unresolvedHeaders requieren
+  // atención fiscal: pedidos sin timbrar, timbrados sin registrar o bloqueados. Se responde
   // con status de error para que el cron de Railway lo marque como fallido en
   // vez de pintarlo verde; el reporte COMPLETO viaja igual en el body para
   // diagnóstico (mismo shape que el 200, solo cambia el status).
   if (report.summary.hasFailures) {
     logger.error(
       { runId: report.runId, year: report.year, month: report.month, day: report.day, summary: report.summary },
-      '[global-emit-route] corrida con fallos — revisar chunks en rolled_back/rollback_failed/reservation_failed/stamped_unconfirmed',
+      '[global-emit-route] corrida con fallos — revisar rolled_back/rollback_failed/reservation_failed/stamped_unconfirmed/skipped_idempotent con pedidos, unresolvedOrders y unresolvedHeaders',
     )
     return NextResponse.json({ report }, { status: 500 })
   }

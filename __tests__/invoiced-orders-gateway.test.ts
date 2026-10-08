@@ -38,6 +38,21 @@ describe.skipIf(skip)('DrizzleInvoicedOrdersGateway (integration, Railway test D
     const result = await gateway.listInvoicedOrderKeys('tienda-ariat', PERIOD)
     expect(result.orderIds).toEqual(new Set())
     expect(result.orderReferences).toEqual(new Set())
+    expect(result.unresolvedOrderIds).toEqual(new Set())
+  })
+
+  it('marca filas individuales stamped_unconfirmed y membresías con header no emitido como bloqueadas', async () => {
+    const [header] = await cleanupDb!.insert(schema.globalInvoices).values({
+      storeName: 'tienda-ariat', periodYear: 2026, periodMonth: 6, paymentBucket: 'efectivo', chunkIndex: 0,
+      status: 'stamped_unconfirmed', itemCount: 1,
+    }).returning()
+    await createInvoice({ orderId: 'individual-unconfirmed', orderNumber: '#1', storeName: 'Sucursal A', invoiceType: 'individual', status: 'stamped_unconfirmed' })
+    await createInvoice({ orderId: 'global-unconfirmed', orderNumber: '#2', storeName: 'Sucursal B', invoiceType: 'global', globalInvoiceId: header.id, status: 'pending' })
+    await createInvoice({ orderId: 'individual-emitted', orderNumber: '#3', storeName: 'Sucursal C', invoiceType: 'individual', status: 'emitted' })
+
+    const result = await gateway.listInvoicedOrderKeys('tienda-ariat', PERIOD)
+    expect(result.orderIds).toEqual(new Set(['individual-unconfirmed', 'global-unconfirmed', 'individual-emitted']))
+    expect(result.unresolvedOrderIds).toEqual(new Set(['individual-unconfirmed', 'global-unconfirmed']))
   })
 
   it('incluye orderIds facturados INDIVIDUALMENTE', async () => {

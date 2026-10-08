@@ -54,7 +54,7 @@ const SECRET = 'test-global-secret'
 const EMPTY_SUMMARY: GlobalRunSummary = {
   chunks: 0, emitted: 0, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0,
   skippedUnpaid: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0,
-  ordersEligible: 0, unmapped: 0, unaccounted: 0, hasFailures: false,
+  ordersEligible: 0, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, hasFailures: false,
 }
 
 function makeFakeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
@@ -254,6 +254,20 @@ describe('POST /api/global/emit', () => {
     const res = await POST(makePostRequest({ year: 2026, month: 7 }, withSecretHeader()) as never)
 
     expect(res.status).toBe(500)
+  })
+
+  it('pedidos bloqueados de corridas previas conservan el reporte y devuelven 500', async () => {
+    const summary: GlobalRunSummary = { ...EMPTY_SUMMARY, unresolvedOrders: 2, unresolvedHeaders: 1, hasFailures: true }
+    const report = makeFakeReport({ summary })
+    const execute = vi.fn(async () => ({ ok: true, value: report }))
+    vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { execute } as any,
+    )
+
+    const res = await POST(makePostRequest({ year: 2026, month: 7 }, withSecretHeader()) as never)
+    expect(res.status).toBe(500)
+    expect((await res.json()).report.summary).toEqual(summary)
   })
 
   it('body sin year/month → el use case recibe el mes anterior en zona MX (cron sin periodo)', async () => {

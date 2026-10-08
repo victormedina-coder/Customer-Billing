@@ -193,12 +193,11 @@ function buildText(r: GlobalRunReport): string {
     // RESUMEN
     L.push(RULE, 'RESUMEN', RULE)
     L.push(`${leader(billedVerb, W)}${totalBilled}   (en ${nCfdis} CFDI${nCfdis === 1 ? '' : 's'})`)
-    L.push(`${leader('Ya facturados (excluidos)', W)}${totalExcluded}   (ya tenían factura vigente)`)
+    L.push(`${leader('Excluidos por registro previo', W)}${totalExcluded}`)
     L.push(`${leader('Con error (revisar)', W)}${totalFailedOrders}`)
     if (totalBilled === 0 && idempotent > 0) {
         L.push('')
-        L.push(`Nota: ${idempotent} grupo(s) ya estaban timbrados de una corrida previa`)
-        L.push('(idempotencia) — esta corrida no facturó nada nuevo.')
+        L.push(`Alerta: ${idempotent} grupo(s) chocaron con un header existente; revisar pedidos pendientes.`)
     }
     L.push('')
 
@@ -215,8 +214,8 @@ function buildText(r: GlobalRunReport): string {
     }
     L.push('')
 
-    // YA FACTURADOS (excluidos por tener factura vigente)
-    L.push(RULE, 'YA FACTURADOS (no se re-facturaron)', RULE)
+    // EXCLUIDOS POR REGISTRO PREVIO
+    L.push(RULE, 'EXCLUIDOS POR REGISTRO PREVIO (no se re-facturaron)', RULE)
     if (totalExcluded === 0) {
         L.push('Ninguno.')
     } else {
@@ -228,15 +227,44 @@ function buildText(r: GlobalRunReport): string {
     }
     L.push('')
 
+    const blockedOrders = r.stores.flatMap((store) => store.excludedAlreadyInvoiced.orders
+        .filter((order) => order.matchedBy === 'db_unresolved')
+        .map((order) => ({ store: store.store, order })))
+    const blockedHeaders = r.stores.flatMap((store) => store.unresolvedHeaders)
+    if (blockedOrders.length > 0 || blockedHeaders.length > 0) {
+        L.push(RULE, 'PEDIDOS BLOQUEADOS SIN CONFIRMAR TIMBRADO', RULE)
+        for (const header of blockedHeaders) {
+            L.push(`${brandLabel(header.storeName)} / ${BUCKET_LABELS[header.bucket]} / chunk ${header.chunkIndex} / ${header.status} / ${header.itemCount} pedido(s)`)
+            if (header.status === 'pending' && header.itemCount === 0) {
+                L.push('   → Si no hay filas en invoices con ese global_invoice_id, es seguro borrar el header pending manualmente.')
+            }
+        }
+        for (const { store, order } of blockedOrders) {
+            L.push(`${brandLabel(store)} / ${order.reference} / ${order.orderId} / db_unresolved`)
+        }
+        L.push('→ Conciliar en Facturama antes de liberar pedidos o membresías en la base de datos.')
+        L.push('')
+    }
+
     // ERRORES / CONCILIACIÓN
     L.push(RULE, 'ERRORES / CONCILIACIÓN', RULE)
     const rolled = fails.filter((f) => f.outcome === 'rolled_back')
     const rollbackFailed = fails.filter((f) => f.outcome === 'rollback_failed')
     const reservationFailed = fails.filter((f) => f.outcome === 'reservation_failed')
     const unconfirmed = fails.filter((f) => f.outcome === 'stamped_unconfirmed')
+    const idempotentFailures = r.stores.flatMap((store) => store.buckets.flatMap((bucket) => bucket.chunks
+        .filter((chunk) => chunk.outcome === 'skipped_idempotent' && chunk.itemCount > 0)
+        .map((chunk) => ({ store: store.store, bucket: bucket.bucket, chunk }))))
     const unmappedStores = r.stores.filter((s) => s.unmapped.count > 0)
     const unaccountedStores = r.stores.filter((s) => s.unaccounted !== 0)
-    let anyError = false
+    let anyError = blockedOrders.length > 0 || blockedHeaders.length > 0
+    if (idempotentFailures.length > 0) {
+        anyError = true
+        for (const { store, bucket, chunk } of idempotentFailures) {
+            L.push(`🔴 ${brandLabel(store)} / ${BUCKET_LABELS[bucket]} / chunk ${chunk.chunkIndex}: ${chunk.itemCount} pedido(s) quedaron sin timbrar por colisión de header.`)
+        }
+        L.push('   → Revisar el header y las membresías antes de volver a ejecutar la corrida.')
+    }
     if (rolled.length > 0) {
         anyError = true
         const n = rolled.reduce((a, f) => a + f.itemCount, 0)
@@ -262,7 +290,7 @@ function buildText(r: GlobalRunReport): string {
         for (const f of reservationFailed) {
             L.push(`   • ${brandLabel(f.store)} / ${BUCKET_LABELS[f.bucket]} — ${f.itemCount} pedidos — "${f.error ?? 'error desconocido'}"`)
         }
-        L.push('   → El header quedó pending con membresías; limpiar ambos antes de reintentar — el TTL no lo libera.')
+        L.push('   → Se liberaron el header y las membresías; se puede reintentar tras corregir el error de BD.')
     }
     if (unconfirmed.length > 0) {
         anyError = true

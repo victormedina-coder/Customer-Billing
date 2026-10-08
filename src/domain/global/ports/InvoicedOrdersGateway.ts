@@ -40,6 +40,8 @@ import type { GlobalPeriod } from '../GlobalPeriod'
 export interface InvoicedOrderKeys {
   /** `order.id` de Shopify de pedidos ya facturados (match exacto). */
   orderIds: Set<string>
+  /** Pedidos excluidos cuya factura individual o header global aún no tiene timbrado confirmado. */
+  unresolvedOrderIds: Set<string>
   /**
    * Referencia normalizada (`buildOrderReference`) de pedidos ya facturados
    * por un canal que no expone `order.id` (ej. la app de Facturama).

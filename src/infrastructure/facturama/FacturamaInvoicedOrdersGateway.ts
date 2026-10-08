@@ -53,7 +53,7 @@ export class FacturamaInvoicedOrdersGateway implements InvoicedOrdersGateway {
       if (normalized) orderReferences.add(normalized)
     }
 
-    return { orderIds: new Set(), orderReferences }
+    return { orderIds: new Set(), unresolvedOrderIds: new Set(), orderReferences }
   }
 
   /**

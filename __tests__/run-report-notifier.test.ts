@@ -15,6 +15,7 @@ function makeStore(overrides: Partial<StoreReport> = {}): StoreReport {
     skippedUnpaid: { count: 0, orders: [] },
     skippedFullyRefunded: { count: 0, orders: [] },
     excludedAlreadyInvoiced: { count: 0, orders: [] },
+    unresolvedHeaders: [],
     unmapped: { count: 0, orderIds: [] },
     buckets: [{
       bucket: 'efectivo',
@@ -35,7 +36,7 @@ function makeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
     dryRun: false,
     summary: {
       chunks: 1, emitted: 1, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0, stampedUnconfirmed: 0,
-      empty: 0, dryRun: 0, ordersEligible: 1, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false,
+      empty: 0, dryRun: 0, ordersEligible: 1, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false,
     },
     stores: [makeStore()],
     ...overrides,
@@ -43,6 +44,29 @@ function makeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
 }
 
 describe('formatGlobalRunReportEmail', () => {
+  it('identifica pedidos y headers bloqueados y exige conciliación previa', () => {
+    const store = makeStore({
+      excludedAlreadyInvoiced: { count: 1, orders: [{ orderId: 'gid-1', reference: '#1 2-1', matchedBy: 'db_unresolved' }] },
+      unresolvedHeaders: [{ storeName: 'ariat', bucket: 'efectivo', chunkIndex: 2, status: 'stamped_unconfirmed', createdAt: new Date('2026-07-23T21:00:00Z'), itemCount: 1 }],
+    })
+    const { text } = formatGlobalRunReportEmail(makeReport({ stores: [store], summary: { ...makeReport().summary, unresolvedOrders: 1, unresolvedHeaders: 1, hasFailures: true } }))
+    expect(text).toContain('PEDIDOS BLOQUEADOS SIN CONFIRMAR TIMBRADO')
+    expect(text).toContain('chunk 2 / stamped_unconfirmed / 1 pedido(s)')
+    expect(text).toContain('gid-1')
+    expect(text).toContain('Conciliar en Facturama antes de liberar')
+    expect(text).not.toContain('Ninguno ✅')
+  })
+  it('header pending sin membresías indica cuándo se puede borrar manualmente', () => {
+    const store = makeStore({
+      buckets: [],
+      unresolvedHeaders: [{ storeName: 'ariat', bucket: 'efectivo', chunkIndex: 2, status: 'pending', createdAt: new Date('2026-07-23T21:00:00Z'), itemCount: 0 }],
+    })
+    const { text } = formatGlobalRunReportEmail(makeReport({ stores: [store], summary: { ...makeReport().summary, unresolvedHeaders: 1, hasFailures: true } }))
+    expect(text).toContain('invoices')
+    expect(text).toContain('global_invoice_id')
+    expect(text).toContain('borrar')
+    expect(text).not.toContain('Ninguno ✅')
+  })
   it('separa rollback fallido y reserva fallida sin prometer liberación por TTL', () => {
     const store = makeStore({ buckets: [{ bucket: 'efectivo', orders: 2, chunks: [
       { chunkIndex: 0, itemCount: 1, outcome: 'rollback_failed', error: 'DB down' },
@@ -53,8 +77,7 @@ describe('formatGlobalRunReportEmail', () => {
     expect(text).toContain('Facturama no timbró')
     expect(text).toContain('Limpiar header y membresías en BD')
     expect(text).toContain('falló la reserva antes de llamar a Facturama')
-    expect(text).toContain('header quedó pending con membresías')
-    expect(text).toContain('el TTL no lo libera')
+    expect(text).toContain('Se liberaron el header y las membresías')
   })
   it('veredicto ✅, desglose y folio+UUID de auditoría en el cuerpo', () => {
     const { subject, text, html } = formatGlobalRunReportEmail(makeReport())
@@ -112,7 +135,7 @@ describe('formatGlobalRunReportEmail — totales de PEDIDOS (no CFDIs)', () => {
 
   const report = makeReport({
     day: undefined,
-    summary: { chunks: 9, emitted: 9, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0, ordersEligible: 50, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false },
+    summary: { chunks: 9, emitted: 9, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0, ordersEligible: 50, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false },
     stores: [billedStore('western-brothers', 3, 12, 5), billedStore('stetson', 8, 9, 3), billedStore('ariat', 2, 6, 2)],
   })
 
@@ -167,15 +190,14 @@ describe('formatGlobalRunReportEmail — excluidos, errores e idempotencia', () 
     expect(text).not.toContain('250 pedido(s) NO se facturaron')
   })
 
-  it('caso idempotente: 0 pedidos nuevos y nota explicativa (no lo trata como error)', () => {
+  it('colisión de header con pedidos se reporta como fallo pendiente', () => {
     const store = makeStore({
       store: 'ariat',
       buckets: [{ bucket: 'efectivo', orders: 10, chunks: [{ chunkIndex: 0, itemCount: 10, outcome: 'skipped_idempotent', excludedByRace: 0 }] }],
     })
-    const { subject, text } = formatGlobalRunReportEmail(makeReport({ day: undefined, stores: [store] }))
+    const { subject, text } = formatGlobalRunReportEmail(makeReport({ day: undefined, stores: [store], summary: { ...makeReport().summary, skippedIdempotent: 1, hasFailures: true } }))
     expect(subject).toContain('0 pedidos facturados')
-    expect(text).toContain('idempotencia')
-    expect(text).toContain('no facturó nada nuevo')
+    expect(text).toContain('quedaron sin timbrar por colisión de header')
   })
 })
 

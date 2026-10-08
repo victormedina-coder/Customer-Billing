@@ -5,6 +5,16 @@
  */
 
 import type { GlobalInvoice, GlobalInvoiceIdentity, GlobalInvoiceStatus } from '../GlobalInvoice'
+import type { PaymentBucket } from '../PaymentBucket'
+
+export interface UnresolvedGlobalHeader {
+  storeName: string
+  bucket: PaymentBucket
+  chunkIndex: number
+  status: 'pending' | 'stamped_unconfirmed'
+  createdAt: Date
+  itemCount: number
+}
 
 export type CreateGlobalHeaderData = GlobalInvoiceIdentity
 
@@ -26,6 +36,11 @@ export interface UpdateGlobalStampData {
 }
 
 export interface GlobalInvoiceRepository {
+  /** Siguiente índice para la identidad del periodo y bucket, incluyendo todos los estados. */
+  nextChunkIndex(storeName: string, periodYear: number, periodMonth: number, periodDay: number | undefined, paymentBucket: PaymentBucket): Promise<number>
+
+  /** Headers que requieren conciliación antes de liberar sus membresías. */
+  listUnresolvedHeaders(storeName: string, periodYear: number, periodMonth: number, periodDay: number | undefined): Promise<UnresolvedGlobalHeader[]>
   /**
    * Reserva el encabezado (identidad única) antes de llamar a Facturama —
    * evita timbrar dos veces el mismo periodo/bucket/chunk en llamadas
@@ -33,13 +48,6 @@ export interface GlobalInvoiceRepository {
    * identidad (pending, emitted o stamped_unconfirmed).
    */
   createGlobalHeader(data: CreateGlobalHeaderData): Promise<CreateGlobalHeaderResult>
-
-  /**
-   * "Reap" solo de un encabezado 'pending' abandonado:
-   * si su antigüedad supera `ttlMinutes` (respecto a `now`), lo libera para
-   * poder reintentar. Devuelve true si se liberó algo.
-   */
-  reapStaleGlobalHeader(key: GlobalInvoiceIdentity, ttlMinutes: number, now: Date): Promise<boolean>
 
   /** Actualiza estado/ids de timbrado de un encabezado ya creado. */
   updateGlobalStamp(id: string, data: UpdateGlobalStampData): Promise<void>
