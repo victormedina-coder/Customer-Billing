@@ -17,11 +17,66 @@
 
 import type { GlobalRunReport } from "@/src/application/global/EmitGlobalInvoiceUseCase";
 import type { PaymentBucket } from "@/src/domain/global/PaymentBucket";
+import { MX_TZ, mxDayInvoiceCutoff, mxMonthInvoiceCutoff } from "@/src/domain/shared/MxCalendar";
 
 export interface RunReportEmail {
     subject: string;
     text: string;
     html: string;
+}
+
+export interface RunReportEmailContext {
+    finishedAt: Date
+    minAgeMinutes: number
+    cutoffHour: number
+}
+
+const MX_DATE_TIME = new Intl.DateTimeFormat('es-MX', {
+    timeZone: MX_TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+})
+
+function mxDateTime(date: Date): string {
+    const parts = Object.fromEntries(MX_DATE_TIME.formatToParts(date).map((part) => [part.type, part.value]))
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} MX`
+}
+
+function manualRerunSection(r: GlobalRunReport, context?: RunReportEmailContext): string[] {
+    if (r.dryRun || !context) return []
+
+    const pendingStores = new Set<string>()
+    const unresolvedHeaders = r.stores.flatMap((store) => {
+        if (store.excludedAlreadyInvoiced.orders.some((order) => order.matchedBy === 'db_unresolved') ||
+            store.buckets.some((bucket) => bucket.chunks.some((chunk) => chunk.itemCount > 0 &&
+                ['rolled_back', 'rollback_failed', 'reservation_failed', 'skipped_idempotent', 'stamped_unconfirmed'].includes(chunk.outcome)))) {
+            pendingStores.add(store.store)
+        }
+        const headers = store.unresolvedHeaders
+        if (headers.length > 0) pendingStores.add(store.store)
+        return headers
+    })
+    if (pendingStores.size === 0) return []
+
+    const lastHeaderTime = unresolvedHeaders.reduce((latest, header) => Math.max(latest, header.createdAt.getTime()), -Infinity)
+    const earliestBase = Number.isFinite(lastHeaderTime) ? lastHeaderTime : context.finishedAt.getTime()
+    const earliest = new Date(earliestBase + context.minAgeMinutes * 60_000)
+    const cutoff = r.day === undefined
+        ? mxMonthInvoiceCutoff(r.year, r.month, context.cutoffHour)
+        : mxDayInvoiceCutoff(r.year, r.month, r.day, context.cutoffHour)
+    const deadline = new Date(cutoff.getTime() + 24 * 60 * 60_000)
+    const bodies = [...pendingStores].map((storeName) => JSON.stringify({ year: r.year, month: r.month, storeName }))
+
+    return [
+        'Acción requerida: segunda corrida manual',
+        `Hora más temprana: ${mxDateTime(earliest)}`,
+        `Límite: ${mxDateTime(deadline)} (dentro de las 24 h posteriores al corte)`,
+        ...bodies,
+        ...(pendingStores.size > 1 ? [JSON.stringify({ year: r.year, month: r.month })] : []),
+        'No usar relative: current-month: después de medianoche resuelve al mes siguiente.',
+        'Correr primero con "dryRun": true para revisar las decisiones de conciliación (en dryRun la conciliación no escribe).',
+        '',
+    ]
 }
 
 // Etiquetas legibles. Mapas LOCALES a propósito (no se importa brands.ts) para
@@ -171,7 +226,7 @@ function bucketBreakdown(byBucket: Map<PaymentBucket, number>): string {
 
 const RULE = '━'.repeat(36)
 
-function buildText(r: GlobalRunReport): string {
+function buildText(r: GlobalRunReport, context?: RunReportEmailContext): string {
     const kind = r.day !== undefined ? 'DIARIA' : 'MENSUAL'
     const sim = r.dryRun ? ' — SIMULACRO (no se generan facturas)' : ''
     const billed = billedByBrand(r)
@@ -185,7 +240,7 @@ function buildText(r: GlobalRunReport): string {
     const billedVerb = r.dryRun ? 'Pedidos que se facturarían' : 'Pedidos facturados'
     const W = 26 // ancho de la etiqueta más larga del RESUMEN + 1 ("Ya facturados (excluidos)" = 25)
 
-    const L: string[] = []
+    const L: string[] = manualRerunSection(r, context)
 
     L.push(`Corrida ${r.runId} · Periodo ${periodIso(r)} (${kind})${sim} · Veredicto: ${r.summary.hasFailures ? 'REQUIERE ATENCIÓN' : 'OK'}`)
     L.push('')
@@ -237,7 +292,10 @@ function buildText(r: GlobalRunReport): string {
         else if (check.truncated) L.push(`${brandLabel(store.store)}: verificación truncada; no se determinó presencia por pedido.`)
         else for (const result of check.results) {
             const location = result.foundIn.map(item => `${item.serieFolio ?? '(sin serie/folio)'} [${item.facturamaId}]`).join(', ')
-            L.push(`${brandLabel(store.store)} / ${result.reference}: ${result.ambiguous ? 'AMBIGUO' : result.foundIn.length ? 'APARECE' : 'NO APARECE'}${location ? ` en ${location}` : ''}`)
+            const reason = result.ambiguityReason === 'shared_tail'
+                ? `: misma cola en ${result.sharedTailOrderCount} pedidos (posible devolución/cambio sobre el mismo ticket)`
+                : result.ambiguityReason === 'multiple_globals' ? ': cola presente en varias globales' : ''
+            L.push(`${brandLabel(store.store)} / ${result.reference}: ${result.ambiguous ? `AMBIGUO${reason}` : result.foundIn.length ? 'APARECE' : 'NO APARECE'}${location ? ` en ${location}` : ''}`)
         }
     }
     L.push('Esta verificación no liberó ni excluyó ningún pedido.', '')
@@ -388,13 +446,13 @@ function escapeHtml(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-export function formatGlobalRunReportEmail(r: GlobalRunReport): RunReportEmail {
+export function formatGlobalRunReportEmail(r: GlobalRunReport, context?: RunReportEmailContext): RunReportEmail {
     const verdict = r.summary.hasFailures ? '🔴' : '✅'
     const sim = r.dryRun ? ' [SIMULACRO]' : ''
     const totalBilled = billedByBrand(r).reduce((a, b) => a + b.total, 0)
     const noun = r.dryRun ? 'por facturar' : (totalBilled === 1 ? 'facturado' : 'facturados')
     const subject = `${verdict} Facturación Global — ${periodHuman(r)}${sim} — ${totalBilled} pedido${totalBilled === 1 ? '' : 's'} ${noun}`
-    const text = buildText(r)
+    const text = buildText(r, context)
     const color = r.summary.hasFailures ? '#b91c1c' : '#15803d'
     const html = [
         `<div style="font-family:system-ui,Arial,sans-serif">`,

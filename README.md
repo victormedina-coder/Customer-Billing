@@ -266,7 +266,7 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 | `GLOBAL_INVOICE_SECRET` | Secreto compartido que autentica al cron/job interno que dispara el endpoint (header `x-global-secret`, comparación en tiempo constante). Sin ella, el endpoint responde `503 FEATURE_NOT_CONFIGURED`. |
 | `FACTURAMA_GLOBAL_TIMEOUT_MS` | Tiempo máximo del POST de CFDI global en milisegundos (entero >= 1; default `120000`). No altera el timeout de `15000` ms del CFDI individual. Un timeout deja la reserva en `stamped_unconfirmed` para conciliación. |
 | `GLOBAL_RECONCILE_APPLY` | `true` (default) aplica confirmaciones y liberaciones tras consultar Facturama; `false` solo reporta decisiones para diagnóstico. |
-| `GLOBAL_RECONCILE_MIN_AGE_MINUTES` | Edad mínima antes de liberar reservas sin timbrado (entero >= 1; default `60`). Da tiempo a que aparezca un timbrado tardío. |
+| `GLOBAL_RECONCILE_MIN_AGE_MINUTES` | Edad mínima antes de liberar reservas sin timbrado (entero >= 1; default `30`). Da tiempo a que aparezca un timbrado tardío y permite lanzar la segunda corrida manual a los 30 min sin dejar de poder revisar la primera en Facturama. |
 | `GLOBAL_ORDER_CHECK_MAX_CFDIS` | Maximo de CFDI activos cuyos Items consulta la verificacion informativa por pedido (entero >= 1; default `30`); si se supera, reporta truncamiento. |
 | `GLOBAL_ORDER_CHECK_BUDGET_MS` | Presupuesto total para consultar Items después de emitir todos los chunks (entero >= 1; default `30000` ms); al agotarse, reporta truncamiento. |
 | `DEV_NOW_OVERRIDE` | **Solo fuera de producción** (guard duro por `NODE_ENV`, ver `getEvaluationNow`). Fecha ISO para simular el instante "ahora" al resolver periodos `relative` (R4) o la ventana de facturación (R3). **Nunca definir en el `.env` de producción.** |
@@ -297,11 +297,76 @@ negocio: contabilidad requiere el cierre el mismo día del mes (no el día 1
 de madrugada) porque las tiendas POS no venden después de las 21:00 — ver
 **`docs/adr/ADR-009-corte-mensual-2100.md`**.
 
-**Segundo disparo de producción:** schedule `30 5 1 * *` UTC = 23:30 MX del
-último día del mes, con el mismo body `{"relative":"current-month"}`.
-`currentMxYearMonth` resuelve todavía el mes del corte a esa hora. Este disparo
-concilia timbrados ambiguos y vuelve a facturar pedidos liberados a las 23:30 MX,
-2.5 horas después del corte de las 21:00 y dentro del plazo de 24 horas.
+**No hay segundo cron.** Un solo disparo automático por mes (el de las 21:00 MX).
+Si deja pedidos sin facturar, la segunda corrida es **manual**, ver abajo.
+
+### Segunda corrida manual
+
+**Cuándo.** Solo si el correo de reporte de la primera corrida (o su `report`)
+muestra pedidos pendientes: headers `stamped_unconfirmed` o sin resolver,
+chunks `rolled_back` / `rollback_failed` / `reservation_failed`,
+`skipped_idempotent` con pedidos o pedidos `unresolvedOrders` (`db_unresolved`).
+Los `wait` dejan el header sin resolver y también quedan cubiertos. Las alertas
+puras de conciliación (`alert_duplicate`, `alert_cancelled`, `alert_late_stamp`,
+global no explicada) requieren revisión en Facturama/contabilidad según el runbook;
+no se resuelven con otra corrida ni disparan esa sección. Si la primera salió
+limpia, no se hace nada. El correo
+trae la sección "Acción requerida: segunda corrida manual" con la hora más
+temprana y el body exacto; **esa sección es la fuente de verdad** de ambos datos
+(este README solo explica el porqué).
+
+**Ventana de tiempo.**
+- No antes de `GLOBAL_RECONCILE_MIN_AGE_MINUTES` (default 30 min) desde que se
+  crearon los headers sin resolver de la primera corrida. Antes de eso la
+  conciliación responde `wait` ("dentro del plazo de seguridad") y no libera
+  nada: la corrida no hace daño, pero tampoco sirve.
+- Dentro de las 24 h posteriores al corte (21:00 MX del último día del mes), el
+  plazo del SAT para el CFDI global.
+
+**Cómo.** `POST /api/global/emit` con el header `x-global-secret` y el periodo
+**explícito**:
+
+```powershell
+$headers = @{ 'x-global-secret' = $env:GLOBAL_INVOICE_SECRET }
+$url = 'https://<dominio-del-portal>/api/global/emit'   # URL de producción
+
+# 1) Revisar primero: concilia en modo lectura y no timbra
+Invoke-RestMethod -Uri $url -Method Post -Headers $headers `
+  -ContentType 'application/json' `
+  -Body '{"year":2026,"month":10,"dryRun":true}'
+
+# 2) Corrida real (mismo body sin dryRun). storeName es opcional
+Invoke-RestMethod -Uri $url -Method Post -Headers $headers `
+  -ContentType 'application/json' `
+  -Body '{"year":2026,"month":10}'
+```
+
+- Usar `{"year":YYYY,"month":M}` (ambos juntos; opcional `"storeName":"..."` para
+  una sola marca, que debe estar configurada o responde `422 STORE_NOT_CONFIGURED`).
+  **Nunca `{"relative":"current-month"}`** en la segunda corrida: después de
+  las 00:00 MX "mes en curso" ya es el mes siguiente y facturaría el periodo
+  equivocado. Si la corrida es la del 31-oct, el body es `year: 2026, month: 10`
+  aunque se ejecute el 1-nov.
+- Con `dryRun: true` la conciliación **no escribe** (`apply` queda en `false`):
+  solo lista las decisiones por header y no timbra. Sirve para ver qué
+  confirmaría o liberaría la corrida real antes de lanzarla. Como no libera, los
+  pedidos que la corrida real liberaría pueden aparecer aún como bloqueados en
+  el dry-run.
+- Si el endpoint responde `500`, el body trae igualmente el `report` completo:
+  significa que aún quedan pendientes (`hasFailures`), no que la llamada falló.
+- El periodo es la ventana rodante de **ADR-010**: `[corte anterior 21:00 MX,
+  corte actual 21:00 MX)`. La segunda corrida usa la misma ventana que la
+  primera, así que **nunca incluye pedidos posteriores al corte**; esos entran
+  en la global del mes siguiente.
+
+**Qué esperar.** Antes de emitir, la corrida concilia los headers pendientes
+contra Facturama (por llave `GLB:`). Si el CFDI existe, el header se **confirma**.
+Si no existe, tiene edad mínima cumplida, el listado de Facturama es sano y no
+hay globales ajenas sin explicar, se **libera** la reserva y esos pedidos se
+facturan **en esa misma corrida**. En cualquier otro caso queda `wait` o una
+alerta, y no se factura nada a ciegas (ver el runbook de abajo). Si tras la
+segunda corrida siguen pendientes, no repetir en bucle: diagnosticar con el
+runbook y, si es necesario, decidir con contabilidad.
 
 **Runbook de conciliación:** `alert_duplicate` indica dos CFDI activos con la
 misma llave; `alert_cancelled`, un CFDI cancelado; `alert_late_stamp`, un timbrado
@@ -310,6 +375,7 @@ Facturama y decidir con contabilidad la cancelación correspondiente. Un `wait`
 indica edad mínima pendiente, listado incompleto o una global ajena sin explicar.
 En este último caso, identificar quién la emitió en Facturama antes de liberar reservas.
 La verificacion por pedido consulta conceptos de Facturama solo si hay pedidos bloqueados o globales no explicadas; es informativa y no libera ni excluye pedidos.
+Si varios pedidos del periodo comparten la misma cola de recibo, la verificación los marca como ambiguos aunque la cola aparezca en una sola global (posible devolución/cambio sobre el mismo ticket).
 La conciliación compara llaves `GLB:` sin distinguir mayúsculas ni espacios externos. Un CFDI activo con llave `GLB:` huérfana veta la liberación y genera alerta. Un header con `facturamaId` guardado nunca se libera: se confirma si ese CFDI aparece activo, alerta si está cancelado y espera si falta en el listado.
 
 ## Despliegue (Railway)

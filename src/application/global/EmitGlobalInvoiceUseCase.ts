@@ -58,6 +58,10 @@ import type { ReconcileReport } from './ReconcileGlobalStampsUseCase'
 import { ok, err } from '../shared/Result'
 import type { Result } from '../shared/Result'
 
+function orderReceiptTail(order: Order): string {
+  return order.sourceIdentifier?.trim() ? receiptTail(order.sourceIdentifier) : order.orderNumber
+}
+
 // ─── Tipos de entrada ─────────────────────────────────────────────────────────
 
 export interface EmitGlobalInvoiceInput {
@@ -513,7 +517,8 @@ export class EmitGlobalInvoiceUseCase {
 
     const { survivors, excludedAlreadyInvoiced } = await this.excludeAlreadyInvoiced(store, period, eligible)
     const blocked = eligible.filter(({ order }) => excludedAlreadyInvoiced.orders.some(excluded => excluded.orderId === order.id && excluded.matchedBy === 'db_unresolved'))
-      .map(({ order }) => ({ orderId: order.id, reference: buildOrderReference(order.orderNumber, order.sourceIdentifier ?? null), tail: order.sourceIdentifier?.trim() ? receiptTail(order.sourceIdentifier) : order.orderNumber }))
+      .map(({ order }) => ({ orderId: order.id, reference: buildOrderReference(order.orderNumber, order.sourceIdentifier ?? null), tail: orderReceiptTail(order) }))
+    const periodTails = monthlyOrders.map(({ order }) => orderReceiptTail(order))
     const unresolvedHeaders = await this.deps.globalRepo.listUnresolvedHeaders(store, period.year, period.month, period.day)
     if (unresolvedHeaders.length > 0 || excludedAlreadyInvoiced.orders.some((order) => order.matchedBy === 'db_unresolved')) {
       this.logger.error({ runId, store, unresolvedHeaders, unresolvedOrderIds: excludedAlreadyInvoiced.orders.filter((order) => order.matchedBy === 'db_unresolved').map((order) => order.orderId) }, '[global-invoice] pedidos bloqueados sin confirmar timbrado')
@@ -568,7 +573,7 @@ export class EmitGlobalInvoiceUseCase {
     for (const [bucket, bucketOrders] of buckets) {
       bucketReports.push(await this.runBucket(store, period, bucket, bucketOrders, dryRun, runId))
     }
-    const orderCheck = await this.checkBlockedOrders(blocked, reconcile, period, runId, store, itemCache, orderCheckDeadline)
+    const orderCheck = await this.checkBlockedOrders(blocked, periodTails, reconcile, period, runId, store, itemCache, orderCheckDeadline)
 
     return {
       store,
@@ -878,6 +883,7 @@ export class EmitGlobalInvoiceUseCase {
 
   private async checkBlockedOrders(
     blocked: { orderId: string; reference: string; tail: string }[],
+    periodTails: readonly string[],
     reconcile: ReconcileReport | undefined,
     period: GlobalPeriod,
     runId: string,
@@ -935,8 +941,8 @@ export class EmitGlobalInvoiceUseCase {
       this.logger.error({ runId, store, checkedCfdis: globals.length, error: message }, '[global-order-check] consulta de conceptos no disponible')
       return { ran: true, truncated: false, checkedCfdis: globals.length, results: [], unavailable: message }
     }
-    const results = matchBlockedOrdersToGlobalItems(blocked, globals)
-    this.logger.info({ runId, store, checkedCfdis: globals.length, blockedOrders: blocked.length, found: results.filter(item => item.foundIn.length > 0).length }, '[global-order-check] verificación informativa completada')
+    const results = matchBlockedOrdersToGlobalItems(blocked, globals, periodTails)
+    this.logger.info({ runId, store, checkedCfdis: globals.length, blockedOrders: blocked.length, found: results.filter(item => !item.ambiguous && item.foundIn.length > 0).length, ambiguous: results.filter(item => item.ambiguous).length }, '[global-order-check] verificación informativa completada')
     return { ran: true, truncated: false, checkedCfdis: globals.length, results }
   }
 }

@@ -24,11 +24,12 @@ export interface MailTransport {
 export class SmtpRunReportNotifier implements RunReportNotifier {
   constructor(
     private readonly transport: MailTransport,
-    private readonly opts: { from: string; to: string },
+    private readonly opts: { from: string; to: string; minAgeMinutes: number; cutoffHour: number },
   ) {}
 
   async notify(report: GlobalRunReport): Promise<void> {
-    const { subject, text, html } = formatGlobalRunReportEmail(report)
+    const context = { finishedAt: new Date(), minAgeMinutes: this.opts.minAgeMinutes, cutoffHour: this.opts.cutoffHour }
+    const { subject, text, html } = formatGlobalRunReportEmail(report, context)
     await this.transport.sendMail({ from: this.opts.from, to: this.opts.to, subject, text, html })
   }
 }

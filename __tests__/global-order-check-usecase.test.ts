@@ -18,15 +18,19 @@ const reconcile: ReconcileReport = {
   unexplainedGlobals: [{ facturamaId: 'cfdi-1', serieFolio: 'G-1', active: true, rfc: 'XAXX010101000', date: '2026-06-15' }],
 }
 
-function setup(blocked: boolean, report: ReconcileReport = reconcile, max = 30, budgetMs?: number) {
+function setup(blocked: boolean, report: ReconcileReport = reconcile, max = 30, budgetMs?: number, sharedTail = false) {
   const getItems = vi.fn(async () => ['2-1266'])
+  const otherOrder: Order = { ...order, id: 'o2', orderNumber: '#1001', financialStatus: 'REFUNDED' }
   const deps: EmitGlobalInvoiceDeps = {
-    monthlyOrderSource: { listOrdersInRange: async () => ({ orders: [{ order, payments: [{ gateway: 'cash', amount: 116 }] }], nextCursor: null }) },
+    monthlyOrderSource: { listOrdersInRange: async () => ({ orders: [
+      { order, payments: [{ gateway: 'cash', amount: 116 }] },
+      ...(sharedTail ? [{ order: otherOrder, payments: [{ gateway: 'cash', amount: 116 }] }] : []),
+    ], nextCursor: null }) },
     globalStamping: { emitirGlobal: vi.fn(async () => ({ facturamaId: 'new', uuidCfdi: 'uuid' })) },
     globalRepo: { listUnresolvedHeaders: async () => [], nextChunkIndex: async () => 0 } as unknown as EmitGlobalInvoiceDeps['globalRepo'],
     invoiceRepo: { createInvoice: vi.fn(), deleteByGlobalInvoiceId: vi.fn() },
     invoicedOrdersGateways: blocked ? [{ listInvoicedOrderKeys: async () => ({ orderIds: new Set(['o1']), unresolvedOrderIds: new Set(['o1']), orderReferences: new Set<string>() }) }] : [],
-    refundPolicy: { isFullyRefunded: () => false }, storeNames: ['store'],
+    refundPolicy: { isFullyRefunded: candidate => candidate.financialStatus === 'REFUNDED' }, storeNames: ['store'],
     issuedCfdiItemsLookup: { getItems }, orderCheckMaxCfdis: max, orderCheckBudgetMs: budgetMs,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   }
@@ -50,6 +54,22 @@ describe('informational global order check', () => {
     expect(result.value.stores[0].orderCheck.results[0].foundIn).toEqual([{ facturamaId: 'cfdi-1', serieFolio: 'G-1' }])
     expect(result.value.stores[0].excludedAlreadyInvoiced.orders[0].matchedBy).toBe('db_unresolved')
     expect(result.value.summary.orderCheckFound).toBe(1)
+  })
+
+  it('marks a blocked order ambiguous when a refunded order shares its receipt tail without changing emission outcomes', async () => {
+    const unique = await setup(true).useCase.execute({ year: 2026, month: 6, dryRun: true, reconcile })
+    const shared = await setup(true, reconcile, 30, undefined, true).useCase.execute({ year: 2026, month: 6, dryRun: true, reconcile })
+    expect(unique.ok && shared.ok).toBe(true)
+    if (!unique.ok || !shared.ok) return
+    expect(shared.value.stores[0].orderCheck.results[0]).toMatchObject({
+      ambiguous: true, ambiguityReason: 'shared_tail', sharedTailOrderCount: 2,
+    })
+    expect(shared.value.summary.orderCheckFound).toBe(0)
+    expect(shared.value.summary.orderCheckAmbiguous).toBe(1)
+    expect(shared.value.stores[0].buckets).toEqual(unique.value.stores[0].buckets)
+    expect(shared.value.stores[0].excludedAlreadyInvoiced).toEqual(unique.value.stores[0].excludedAlreadyInvoiced)
+    expect(shared.value.summary.emitted).toBe(unique.value.summary.emitted)
+    expect(shared.value.summary.dryRun).toBe(unique.value.summary.dryRun)
   })
 
   it('reports lookup errors without changing the run outcome', async () => {

@@ -11,6 +11,8 @@ import nodemailer from 'nodemailer'
 import type SMTPTransport from 'nodemailer/lib/smtp-transport'
 import type { RunReportNotifier } from '../application/global/ports/RunReportNotifier'
 import { SmtpRunReportNotifier } from '../infrastructure/notifications/SmtpRunReportNotifier'
+import { resolveInvoiceCutoffHour } from '../domain/shared/MxCalendar'
+import { getGlobalReconcileMinAgeMinutes } from './makeReconcileGlobalStampsUseCase'
 import { logger } from '../infrastructure/observability/logger'
 
 class NoOpRunReportNotifier implements RunReportNotifier {
@@ -61,5 +63,5 @@ export function makeRunReportNotifier(): RunReportNotifier {
 
   const transport = nodemailer.createTransport(options)
 
-  return new SmtpRunReportNotifier(transport, { from, to })
+  return new SmtpRunReportNotifier(transport, { from, to, minAgeMinutes: getGlobalReconcileMinAgeMinutes(), cutoffHour: resolveInvoiceCutoffHour() })
 }

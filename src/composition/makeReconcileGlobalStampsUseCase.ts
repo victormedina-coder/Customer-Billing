@@ -3,7 +3,7 @@ import { DrizzleGlobalInvoiceRepository } from '../infrastructure/db/DrizzleGlob
 import { FacturamaIssuedCfdiLookup } from '../infrastructure/facturama/FacturamaIssuedCfdiLookup'
 import { logger } from '../infrastructure/observability/logger'
 
-const DEFAULT_MIN_AGE_MINUTES = 60
+const DEFAULT_MIN_AGE_MINUTES = 30
 
 export function getGlobalReconcileApply(): boolean {
   return process.env.GLOBAL_RECONCILE_APPLY !== 'false'

@@ -45,6 +45,119 @@ function makeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
 }
 
 describe('formatGlobalRunReportEmail', () => {
+  it('abre con segunda corrida manual, hora del último header y límite 24 h tras el corte', () => {
+    const ariat = makeStore({
+      unresolvedHeaders: [
+        { storeName: 'ariat', bucket: 'efectivo', chunkIndex: 1, status: 'stamped_unconfirmed', createdAt: new Date('2026-07-24T01:00:00Z'), itemCount: 1 },
+        { storeName: 'ariat', bucket: 'efectivo', chunkIndex: 2, status: 'pending', createdAt: new Date('2026-07-24T02:00:00Z'), itemCount: 1 },
+      ],
+    })
+    const stetson = makeStore({ store: 'stetson', buckets: [{ bucket: 'efectivo', orders: 2, chunks: [{ chunkIndex: 0, itemCount: 2, outcome: 'rolled_back' }] }] })
+    const { text } = formatGlobalRunReportEmail(makeReport({ stores: [ariat, stetson] }), { finishedAt: new Date('2026-07-24T02:05:00Z'), minAgeMinutes: 30, cutoffHour: 21 })
+    expect(text).toMatch(/^Acción requerida: segunda corrida manual/)
+    expect(text).toContain('20:30')
+    expect(text).toContain('2026-07-24 21:00')
+    expect(text).toContain('{"year":2026,"month":7,"storeName":"ariat"}')
+    expect(text).toContain('{"year":2026,"month":7,"storeName":"stetson"}')
+    expect(text).toContain('{"year":2026,"month":7}')
+    expect(text).toContain('No usar relative: current-month: después de medianoche resuelve al mes siguiente.')
+    expect(text).toContain('"dryRun": true')
+  })
+
+  it('mensual julio: usa el header creado después de medianoche MX y el corte de fin de mes', () => {
+    const store = makeStore({
+      unresolvedHeaders: [{ storeName: 'ariat', bucket: 'efectivo', chunkIndex: 1, status: 'pending', createdAt: new Date('2026-08-01T06:20:00Z'), itemCount: 1 }],
+    })
+    const { text } = formatGlobalRunReportEmail(makeReport({ day: undefined, stores: [store] }), {
+      finishedAt: new Date('2026-08-01T06:25:00Z'), minAgeMinutes: 30, cutoffHour: 21,
+    })
+    expect(text).toContain('Hora más temprana: 2026-08-01 00:50 MX')
+    expect(text).toContain('Límite: 2026-08-01 21:00 MX')
+    expect(text).toContain('{"year":2026,"month":7,"storeName":"ariat"}')
+  })
+
+  it('mensual diciembre: cruza al año siguiente en el límite', () => {
+    const store = makeStore({ buckets: [{ bucket: 'efectivo', orders: 1, chunks: [{ chunkIndex: 0, itemCount: 1, outcome: 'rolled_back' }] }] })
+    const { text } = formatGlobalRunReportEmail(makeReport({ day: undefined, month: 12, stores: [store] }), {
+      finishedAt: new Date('2027-01-01T05:00:00Z'), minAgeMinutes: 30, cutoffHour: 21,
+    })
+    expect(text).toContain('Límite: 2027-01-01 21:00 MX')
+    expect(text).toContain('{"year":2026,"month":12,"storeName":"ariat"}')
+  })
+
+  it('respeta la hora de corte configurada en periodos diario y mensual', () => {
+    const store = makeStore({ buckets: [{ bucket: 'efectivo', orders: 1, chunks: [{ chunkIndex: 0, itemCount: 1, outcome: 'rolled_back' }] }] })
+    const context = { finishedAt: new Date('2026-07-24T03:00:00Z'), minAgeMinutes: 30, cutoffHour: 22 }
+    expect(formatGlobalRunReportEmail(makeReport({ stores: [store] }), context).text).toContain('Límite: 2026-07-24 22:00 MX')
+    expect(formatGlobalRunReportEmail(makeReport({ day: undefined, stores: [store] }), context).text).toContain('Límite: 2026-08-01 22:00 MX')
+  })
+
+  it('considera pendiente un header sin membresías', () => {
+    const store = makeStore({
+      buckets: [],
+      unresolvedHeaders: [{ storeName: 'ariat', bucket: 'efectivo', chunkIndex: 1, status: 'pending', createdAt: new Date('2026-08-01T06:20:00Z'), itemCount: 0 }],
+    })
+    const { text } = formatGlobalRunReportEmail(makeReport({ day: undefined, stores: [store] }), {
+      finishedAt: new Date('2026-08-01T06:25:00Z'), minAgeMinutes: 30, cutoffHour: 21,
+    })
+    expect(text).toContain('Acción requerida: segunda corrida manual')
+    expect(text).toContain('Hora más temprana: 2026-08-01 00:50 MX')
+  })
+
+  it('no propone otra corrida ante alertas puras de conciliación', () => {
+    const report = makeReport({
+      day: undefined,
+      reconcile: {
+        unexplainedGlobals: [{ facturamaId: 'manual-1', active: true, rfc: 'XAXX010101000', serieFolio: 'G-7', total: 120, date: '2026-07-31' }],
+        unexplainedGlobalsInPeriod: 1,
+        counts: { confirm: 0, release: 0, wait: 0, alert_duplicate: 1, alert_cancelled: 0, alert_late_stamp: 0 },
+        alerts: [],
+        decisions: [{ headerId: 'h1', store: 'ariat', period: '2026-07', bucket: 'efectivo', chunkIndex: 1, status: 'stamped_unconfirmed', decision: 'alert_duplicate', reason: 'dos CFDI', matches: [] }],
+      },
+    })
+    const { text } = formatGlobalRunReportEmail(report, { finishedAt: new Date('2026-08-01T04:00:00Z'), minAgeMinutes: 30, cutoffHour: 21 })
+    expect(text).not.toContain('Acción requerida: segunda corrida manual')
+  })
+
+  it('omite la segunda corrida manual cuando no hay pendientes o es dryRun', () => {
+    const context = { finishedAt: new Date('2026-07-24T03:55:00Z'), minAgeMinutes: 30, cutoffHour: 21 }
+    expect(formatGlobalRunReportEmail(makeReport(), context).text).not.toContain('Acción requerida: segunda corrida manual')
+    const store = makeStore({ buckets: [{ bucket: 'efectivo', orders: 1, chunks: [{ chunkIndex: 0, itemCount: 1, outcome: 'reservation_failed' }] }] })
+    expect(formatGlobalRunReportEmail(makeReport({ dryRun: true, stores: [store] }), context).text).not.toContain('Acción requerida: segunda corrida manual')
+  })
+
+  it('usa la hora de fin cuando los pendientes no tienen headers', () => {
+    const store = makeStore({
+      buckets: [{ bucket: 'efectivo', orders: 1, chunks: [{ chunkIndex: 0, itemCount: 1, outcome: 'skipped_idempotent' }] }],
+    })
+    const { text } = formatGlobalRunReportEmail(makeReport({ stores: [store] }), { finishedAt: new Date('2026-07-24T03:55:00Z'), minAgeMinutes: 30, cutoffHour: 21 })
+    expect(text).toContain('Acción requerida: segunda corrida manual')
+    expect(text).toContain('22:25')
+  })
+
+  it('incluye pedidos db_unresolved y respeta la edad configurada', () => {
+    const store = makeStore({
+      buckets: [],
+      excludedAlreadyInvoiced: { count: 1, orders: [{ orderId: 'o-1', reference: '#1', matchedBy: 'db_unresolved' }] },
+    })
+    const { text } = formatGlobalRunReportEmail(makeReport({ stores: [store] }), { finishedAt: new Date('2026-07-24T03:55:00Z'), minAgeMinutes: 45, cutoffHour: 21 })
+    expect(text).toContain('Acción requerida: segunda corrida manual')
+    expect(text).toContain('22:40')
+    expect(text).toContain('{"year":2026,"month":7,"storeName":"ariat"}')
+  })
+
+  it('explains shared receipt tails in the informational order check', () => {
+    const store = makeStore({ orderCheck: { ran: true, truncated: false, checkedCfdis: 1, results: [{
+      orderId: 'o1', reference: '#1000 2-1266', tail: '2-1266',
+      foundIn: [{ facturamaId: 'cfdi-1', serieFolio: 'G-1' }],
+      ambiguous: true, ambiguityReason: 'shared_tail', sharedTailOrderCount: 2,
+    }] } })
+    const { text } = formatGlobalRunReportEmail(makeReport({ stores: [store] }))
+    expect(text).toContain('AMBIGUO')
+    expect(text).toContain('misma cola en 2 pedidos')
+    expect(text).toContain('posible devolución/cambio sobre el mismo ticket')
+    expect(text).not.toContain('#1000 2-1266: APARECE')
+  })
   it('muestra conciliación, espera y alertas con acción contable', () => {
     const report = makeReport({
       reconcile: {
@@ -231,7 +344,7 @@ describe('SmtpRunReportNotifier', () => {
   it('envía con el from/to configurado y un asunto no vacío', async () => {
     const sent: MailMessage[] = []
     const fakeTransport = { sendMail: async (m: MailMessage) => { sent.push(m); return {} } }
-    const notifier = new SmtpRunReportNotifier(fakeTransport, { from: 'a@1522.mx', to: 'b@1522.mx' })
+    const notifier = new SmtpRunReportNotifier(fakeTransport, { from: 'a@1522.mx', to: 'b@1522.mx', minAgeMinutes: 30, cutoffHour: 21 })
 
     await notifier.notify(makeReport())
 
@@ -244,7 +357,7 @@ describe('SmtpRunReportNotifier', () => {
 
   it('propaga el error del transport (el route es quien lo captura)', async () => {
     const failing = { sendMail: async () => { throw new Error('smtp caído') } }
-    const notifier = new SmtpRunReportNotifier(failing, { from: 'a@1522.mx', to: 'b@1522.mx' })
+    const notifier = new SmtpRunReportNotifier(failing, { from: 'a@1522.mx', to: 'b@1522.mx', minAgeMinutes: 30, cutoffHour: 21 })
     await expect(notifier.notify(makeReport())).rejects.toThrow('smtp caído')
   })
 })

@@ -11,9 +11,9 @@ describe('configuración de conciliación global', () => {
     expect(getGlobalReconcileApply()).toBe(false)
   })
 
-  it.each(['', '0', '-1', '1.5', 'abc'])('usa 60 minutos si el valor %s es inválido', (raw) => {
+  it.each(['', '0', '-1', '1.5', 'abc'])('usa 30 minutos si el valor %s es inválido', (raw) => {
     vi.stubEnv('GLOBAL_RECONCILE_MIN_AGE_MINUTES', raw)
-    expect(getGlobalReconcileMinAgeMinutes()).toBe(60)
+    expect(getGlobalReconcileMinAgeMinutes()).toBe(30)
   })
 
   it('acepta un entero positivo', () => {
