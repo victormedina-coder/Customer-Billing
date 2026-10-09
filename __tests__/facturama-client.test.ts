@@ -553,6 +553,20 @@ describe('descargarArchivo', () => {
 // describe: cancelarCFDI
 // ─────────────────────────────────────────────────────────────────────────────
 
+describe('obtenerCFDI', () => {
+  it('consulta el detalle con type=issued', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ Id: 'cfdi-id' })))
+    vi.stubEnv('FACTURAMA_USER', FAKE_USER)
+    vi.stubEnv('FACTURAMA_PASS', FAKE_PASS)
+    const { obtenerCFDI } = await importClient()
+    await obtenerCFDI('cfdi-id')
+    const [url] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string]
+    expect(url).toContain('/cfdi/cfdi-id?type=issued')
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+})
+
 describe('cancelarCFDI', () => {
   let fetchMock: ReturnType<typeof vi.fn>
 
@@ -578,16 +592,11 @@ describe('cancelarCFDI', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('motivo 01 con uuidReemplazo → llama al endpoint con el UUID de reemplazo', async () => {
+  it('motivo 01 con uuidReemplazo → rechaza ruta no verificada sin llamar a Facturama', async () => {
     const { cancelarCFDI } = await importClient()
 
-    fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }))
-
-    await cancelarCFDI('cfdi-id', '01', 'uuid-reemplazo-123')
-
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(init.method).toBe('DELETE')
-    expect(url).toContain('/cfdi/cfdi-id/issued/01/uuid-reemplazo-123')
+    await expect(cancelarCFDI('cfdi-id', '01', 'uuid-reemplazo-123')).rejects.toThrow(/no verificado/)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('motivo 02 sin uuidReemplazo → llama al endpoint correctamente', async () => {
@@ -599,9 +608,7 @@ describe('cancelarCFDI', () => {
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(init.method).toBe('DELETE')
-    expect(url).toContain('/cfdi/cfdi-id-x/issued/02')
-    // No debe tener un cuarto segmento de uuid-reemplazo
-    expect(url).not.toContain('/issued/02/')
+    expect(url).toContain('/cfdi/cfdi-id-x?type=issued&motive=02')
   })
 })
 
@@ -734,10 +741,9 @@ describe('listarCfdisEmitidos', () => {
   })
 
   // El paro es por página VACÍA (no por tamaño de página) — el sondeo de
-  // producción (2026-07-15) mostró que el tamaño real (10) no coincide con
-  // el documentado (100), así que los tests usan páginas de 10 elementos
-  // (como producción) para no reintroducir una dependencia implícita del
-  // tamaño documentado.
+  // producción (2026-07-15) mostró 10 elementos, como indica la documentación;
+  // los tests usan páginas de 10 elementos
+  // para no introducir una dependencia implícita del tamaño de página.
 
   it('página con items (aunque sean pocos) siempre pide la siguiente página', async () => {
     const { listarCfdisEmitidos } = await importClient()
@@ -751,6 +757,7 @@ describe('listarCfdisEmitidos', () => {
     const [firstUrl] = fetchMock.mock.calls[0] as [string]
     const [secondUrl] = fetchMock.mock.calls[1] as [string]
     expect(new URL(firstUrl).searchParams.get('page')).toBe('0')
+    expect(new URL(firstUrl).searchParams.get('status')).toBe('all')
     expect(new URL(secondUrl).searchParams.get('page')).toBe('1')
   })
 

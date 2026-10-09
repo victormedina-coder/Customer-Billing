@@ -11,6 +11,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { EmitGlobalInvoiceUseCase } from '../src/application/global/EmitGlobalInvoiceUseCase'
+import { ReconcileGlobalStampsUseCase } from '../src/application/global/ReconcileGlobalStampsUseCase'
 import { StampPreparationError } from '../src/application/shared/StampPreparationError'
 import type {
   EmitGlobalInvoiceDeps,
@@ -67,6 +68,45 @@ class FakeGlobalInvoiceRepository implements GlobalInvoiceRepository {
 
   constructor(private readonly failFirstUpdateOnce = false) {}
   private failedOnce = false
+  onRelease?: (id: string) => Promise<void>
+
+  async listForReconciliation() {
+    return [...this.store.values()].filter(({ header }) => header.status !== 'emitted').map(({ header, createdAt }) => ({
+      id: header.id, storeName: header.storeName, periodYear: header.periodYear, periodMonth: header.periodMonth,
+      periodDay: header.periodDay, paymentBucket: header.paymentBucket, chunkIndex: header.chunkIndex,
+      status: header.status as 'pending' | 'stamped_unconfirmed' | 'released', createdAt,
+      correlationKey: `GLB:${header.id}`,
+      facturamaId: header.facturamaId, uuidCfdi: header.uuidCfdi,
+    }))
+  }
+
+  async listAllGlobalFacturamaIds(): Promise<string[]> {
+    return [...this.store.values()].flatMap(({ header }) => header.facturamaId ? [header.facturamaId] : [])
+  }
+
+  async listEmittedHeaderIds(): Promise<string[]> {
+    return [...this.store.values()].filter(({ header }) => header.status === 'emitted').map(({ header }) => header.id)
+  }
+
+  async listEmittedFacturamaIdsBetween(from: Date, to: Date): Promise<string[]> {
+    return [...this.store.values()].filter(({ header, createdAt }) => header.status === 'emitted' && createdAt >= from && createdAt <= to)
+      .flatMap(({ header }) => header.facturamaId ? [header.facturamaId] : [])
+  }
+
+  async releaseHeader(id: string): Promise<'applied' | 'already_applied'> {
+    await this.onRelease?.(id)
+    for (const rec of this.store.values()) if (rec.header.id === id) rec.header.status = 'released'
+    return 'applied'
+  }
+
+  async confirmHeader(id: string, stamp: { facturamaId: string; uuidCfdi: string }): Promise<'applied' | 'already_applied'> {
+    for (const rec of this.store.values()) if (rec.header.id === id) {
+      rec.header.status = 'emitted'
+      rec.header.facturamaId = stamp.facturamaId
+      rec.header.uuidCfdi = stamp.uuidCfdi
+    }
+    return 'applied'
+  }
 
   private keyOf(k: GlobalInvoiceIdentity): string {
     // periodDay ?? 0 replica el sentinela de persistencia (D3 del plan de
@@ -120,7 +160,9 @@ class FakeGlobalInvoiceRepository implements GlobalInvoiceRepository {
     }
   }
 
-  async filterInvoicedOrderIds(): Promise<Set<string>> {
+  async filterInvoicedOrderIds(_storeName: string, _orderIds: string[]): Promise<Set<string>> {
+    void _storeName
+    void _orderIds
     return new Set()
   }
 
@@ -129,13 +171,13 @@ class FakeGlobalInvoiceRepository implements GlobalInvoiceRepository {
     return this.store.get(this.keyOf(key))?.header
   }
 
-  seed(identity: GlobalInvoiceIdentity, status: GlobalInvoiceStatus, createdAt: Date): GlobalInvoice {
+  seed(identity: GlobalInvoiceIdentity, status: GlobalInvoiceStatus, createdAt: Date, stamp?: { facturamaId: string; uuidCfdi: string }): GlobalInvoice {
     const header: GlobalInvoice = {
       ...identity,
       id: crypto.randomUUID(),
       status,
-      facturamaId: status === 'pending' ? null : 'SEED-FACT',
-      uuidCfdi: status === 'pending' ? null : 'SEED-UUID',
+      facturamaId: stamp?.facturamaId ?? (status === 'emitted' ? 'SEED-FACT' : null),
+      uuidCfdi: stamp?.uuidCfdi ?? (status === 'emitted' ? 'SEED-UUID' : null),
       itemCount: 0,
     }
     this.store.set(this.keyOf(identity), { header, createdAt })
@@ -250,6 +292,92 @@ function makeDeps(overrides: Partial<EmitGlobalInvoiceDeps> = {}): EmitGlobalInv
 function pageSource(store: string, pages: ListOrdersInRangeResult[]): FakeMonthlyOrderSource {
   return new FakeMonthlyOrderSource(new Map([[store, pages]]))
 }
+
+describe('Conciliación seguida de emisión en la misma corrida', () => {
+  it('emite todos los chunks antes de consultar Items aunque la consulta falle', async () => {
+    const stamping = makeSuccessfulStamping()
+    let stampsWhenChecking = -1
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [
+      makeMonthlyOrder({ id: 'eligible' }),
+      makeMonthlyOrder({ id: 'blocked', orderNumber: '#1001' }),
+    ], nextCursor: null }])
+    const gateway = new FakeInvoicedOrdersGateway({
+      orderIds: new Set(['blocked']), unresolvedOrderIds: new Set(['blocked']), orderReferences: new Set<string>(),
+    })
+    const result = await new EmitGlobalInvoiceUseCase(makeDeps({
+      monthlyOrderSource, globalStamping: stamping, invoicedOrdersGateways: [gateway],
+      issuedCfdiItemsLookup: { getItems: async () => {
+        stampsWhenChecking = stamping.calls.length
+        throw new Error('Items unavailable')
+      } },
+    })).execute({ year: 2026, month: 6, reconcile: {
+      decisions: [], counts: { confirm: 0, release: 0, wait: 0, alert_duplicate: 0, alert_cancelled: 0, alert_late_stamp: 0 },
+      alerts: [], unexplainedGlobalsInPeriod: 1,
+      unexplainedGlobals: [{ facturamaId: 'older', active: true, rfc: 'XAXX010101000', date: '2026-06-01' }],
+    } })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.summary.emitted).toBe(1)
+    expect(stampsWhenChecking).toBe(1)
+    expect(result.value.stores[0].orderCheck.unavailable).toBe('Items unavailable')
+  })
+  it('libera membresía de un CFDI incierto sin match y vuelve a facturar el pedido', async () => {
+    const globalRepo = new FakeGlobalInvoiceRepository()
+    const invoiceRepo = new FakeGlobalMembershipRepo()
+    const old = new Date(FIXED_NOW.getTime() - 2 * 60 * 60 * 1000)
+    const identity: GlobalInvoiceIdentity = { storeName: STORE, periodYear: 2026, periodMonth: 6, paymentBucket: 'efectivo', chunkIndex: 0 }
+    const stuck = globalRepo.seed(identity, 'stamped_unconfirmed', old)
+    expect(stuck.facturamaId).toBeNull()
+    expect(stuck.uuidCfdi).toBeNull()
+    await globalRepo.updateGlobalStamp(stuck.id, { status: 'stamped_unconfirmed' })
+    await invoiceRepo.createInvoice({ orderId: 'stuck-order', orderNumber: '#1000', storeName: STORE, invoiceType: 'global', globalInvoiceId: stuck.id })
+    globalRepo.onRelease = id => invoiceRepo.deleteByGlobalInvoiceId(id)
+    globalRepo.filterInvoicedOrderIds = async (_store: string, orderIds: string[]) => new Set(orderIds.filter(id => invoiceRepo.allRows.some(row => row.orderId === id)))
+    const logger = { info: () => {}, warn: () => {}, error: () => {} }
+    const reconcile = new ReconcileGlobalStampsUseCase({
+      repo: globalRepo,
+      lookup: { listIssuedBetween: async () => [{ facturamaId: 'other-cfdi', active: true, rfc: 'AAA010101AAA' }] },
+      logger,
+      minAgeMinutes: 60,
+      now: () => FIXED_NOW,
+    })
+    const reconciliation = await reconcile.execute({ runId: 'september', apply: true })
+    expect(reconciliation.counts.release).toBe(1)
+    expect(invoiceRepo.rowsFor(stuck.id)).toHaveLength(0)
+
+    const stamping = makeSuccessfulStamping()
+    const monthlyOrderSource = pageSource(STORE, [{ orders: [makeMonthlyOrder({ id: 'stuck-order' })], nextCursor: null }])
+    const emission = await new EmitGlobalInvoiceUseCase(makeDeps({ globalRepo, invoiceRepo, monthlyOrderSource, globalStamping: stamping })).execute({ year: 2026, month: 6, runId: 'september' })
+    expect(emission.ok).toBe(true)
+    if (emission.ok) expect(emission.value.summary.emitted).toBe(1)
+    expect(stamping.calls).toHaveLength(1)
+    expect(invoiceRepo.allRows.some(row => row.orderId === 'stuck-order')).toBe(true)
+  })
+
+  it('conserva membresía de un CFDI incierto con facturamaId ausente del listado', async () => {
+    const globalRepo = new FakeGlobalInvoiceRepository()
+    const invoiceRepo = new FakeGlobalMembershipRepo()
+    const old = new Date(FIXED_NOW.getTime() - 2 * 60 * 60 * 1000)
+    const identity: GlobalInvoiceIdentity = { storeName: STORE, periodYear: 2026, periodMonth: 6, paymentBucket: 'efectivo', chunkIndex: 0 }
+    const stuck = globalRepo.seed(identity, 'stamped_unconfirmed', old, { facturamaId: 'BACKUP-FACT', uuidCfdi: 'BACKUP-UUID' })
+    await invoiceRepo.createInvoice({ orderId: 'stuck-order', orderNumber: '#1000', storeName: STORE, invoiceType: 'global', globalInvoiceId: stuck.id })
+    globalRepo.onRelease = id => invoiceRepo.deleteByGlobalInvoiceId(id)
+    const reconcile = new ReconcileGlobalStampsUseCase({
+      repo: globalRepo,
+      lookup: { listIssuedBetween: async () => [{ facturamaId: 'other-cfdi', active: true, rfc: 'AAA010101AAA' }] },
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+      minAgeMinutes: 60,
+      now: () => FIXED_NOW,
+    })
+
+    const reconciliation = await reconcile.execute({ runId: 'september', apply: true })
+
+    expect(reconciliation.counts.wait).toBe(1)
+    expect(reconciliation.counts.release).toBe(0)
+    expect(globalRepo.getByIdentity(identity)?.status).toBe('stamped_unconfirmed')
+    expect(invoiceRepo.rowsFor(stuck.id)).toHaveLength(1)
+  })
+})
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

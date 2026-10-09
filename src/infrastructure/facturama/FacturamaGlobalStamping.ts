@@ -38,7 +38,7 @@ export class FacturamaGlobalStamping implements GlobalInvoiceStamping {
         ? createDailyGlobalPeriod(periodYear, periodMonth, periodDay)
         : createGlobalPeriod(periodYear, periodMonth)
       const expeditionPlace = await resolveExpeditionPlace()
-      cfdiPayload = buildGlobalCfdiPayload(period, paymentBucket, orders, storeName, expeditionPlace)
+      cfdiPayload = buildGlobalCfdiPayload(period, paymentBucket, orders, storeName, expeditionPlace, payload.correlationKey)
     } catch (cause: unknown) {
       throw new StampPreparationError(cause)
     }

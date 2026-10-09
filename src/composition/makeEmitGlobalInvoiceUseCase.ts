@@ -23,6 +23,7 @@ import { FacturamaGlobalStamping } from '../infrastructure/facturama/FacturamaGl
 import { DrizzleGlobalInvoiceRepository } from '../infrastructure/db/DrizzleGlobalInvoiceRepository'
 import { DrizzleInvoicedOrdersGateway } from '../infrastructure/db/DrizzleInvoicedOrdersGateway'
 import { FacturamaInvoicedOrdersGateway } from '../infrastructure/facturama/FacturamaInvoicedOrdersGateway'
+import { FacturamaIssuedCfdiItemsLookup } from '../infrastructure/facturama/FacturamaIssuedCfdiItemsLookup'
 import { listConfiguredBrands } from '../infrastructure/shopify/brands'
 import { logger } from '../infrastructure/observability/logger'
 
@@ -34,6 +35,22 @@ import { isFullyRefunded } from '../domain/orders/RefundPolicy'
 
 const DEFAULT_MAX_ITEMS_PER_CFDI = 250
 const DEFAULT_GLOBAL_TIMEOUT_MS = 120000
+const DEFAULT_ORDER_CHECK_MAX_CFDIS = 30
+const DEFAULT_ORDER_CHECK_BUDGET_MS = 30000
+
+export function getOrderCheckBudgetMs(): number {
+  const raw = process.env.GLOBAL_ORDER_CHECK_BUDGET_MS
+  if (!raw) return DEFAULT_ORDER_CHECK_BUDGET_MS
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : DEFAULT_ORDER_CHECK_BUDGET_MS
+}
+
+export function getOrderCheckMaxCfdis(): number {
+  const raw = process.env.GLOBAL_ORDER_CHECK_MAX_CFDIS
+  if (!raw) return DEFAULT_ORDER_CHECK_MAX_CFDIS
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : DEFAULT_ORDER_CHECK_MAX_CFDIS
+}
 
 export function getFacturamaGlobalTimeoutMs(): number {
   const raw = process.env.FACTURAMA_GLOBAL_TIMEOUT_MS
@@ -67,6 +84,9 @@ export function makeEmitGlobalInvoiceUseCase(): EmitGlobalInvoiceUseCase {
       deleteByGlobalInvoiceId: (id) => deleteByGlobalInvoiceId(id),
     },
     invoicedOrdersGateways: [new DrizzleInvoicedOrdersGateway(), new FacturamaInvoicedOrdersGateway()],
+    issuedCfdiItemsLookup: new FacturamaIssuedCfdiItemsLookup(),
+    orderCheckMaxCfdis: getOrderCheckMaxCfdis(),
+    orderCheckBudgetMs: getOrderCheckBudgetMs(),
     refundPolicy: {
       isFullyRefunded: (order) => isFullyRefunded(order),
     },

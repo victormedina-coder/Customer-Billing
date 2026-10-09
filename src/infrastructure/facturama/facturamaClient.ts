@@ -12,6 +12,7 @@ import { MX_TZ } from '../../domain/shared/MxCalendar'
 
 export interface FacturamaCfdiResponse {
   Id: string
+  Items?: { IdentificationNumber?: string }[]
   Folio?: string
   /**
    * Facturama responde `Serie` en SINGULAR — confirmado contra la doc oficial
@@ -22,6 +23,8 @@ export interface FacturamaCfdiResponse {
    */
   Serie?: string
   Date?: string
+  Rfc?: string
+  Total?: number
   Complement?: {
     TaxStamp?: {
       Uuid?: string
@@ -201,7 +204,7 @@ export async function emitirCFDI(
 }
 
 export async function obtenerCFDI(id: string): Promise<FacturamaCfdiResponse> {
-  return request<FacturamaCfdiResponse>('GET', `/cfdi/${encodeURIComponent(id)}/issued`)
+  return request<FacturamaCfdiResponse>('GET', `/cfdi/${encodeURIComponent(id)}?type=issued`)
 }
 
 /**
@@ -215,6 +218,10 @@ export async function obtenerCFDI(id: string): Promise<FacturamaCfdiResponse> {
  */
 export interface FacturamaCfdiListItem {
   Id: string
+  Rfc?: string
+  Total?: number
+  Uuid?: string
+  Serie?: string
   Folio?: string
   Date?: string
   OrderNumber?: string
@@ -225,8 +232,8 @@ export interface FacturamaCfdiListItem {
 
 /**
  * Tope de seguridad de páginas a recorrer. La doc oficial de Facturama
- * (https://apisandbox.facturama.mx/guias/api-web/cfdi/consultar) dice que el
- * listado `GET /cfdi` pagina a 100 elementos por página, pero un sondeo de
+ * (https://facturama.mx/docs/es/api-web/consultar-cfdi) indica que el
+ * listado `GET /cfdi` pagina a 10 elementos por página, y un sondeo de
  * solo lectura contra PRODUCCIÓN (2026-07-15) observó 10 elementos por
  * página cuando se filtra por fecha (`dateStart`/`dateEnd`) — `page` sí
  * avanza correctamente (folios y fechas descendiendo, cero repetidos), solo
@@ -275,7 +282,7 @@ function formatMxDate(date: Date): string {
  * pedidos ya facturados por la app externa de Facturama en Shopify.
  *
  * El listado está PAGINADO, pero el tamaño real de página NO es confiable:
- * la doc oficial dice 100 elementos por página y el sondeo de producción
+ * la doc oficial indica 10 elementos por página y el sondeo de producción
  * (2026-07-15) observó 10 con filtros de fecha. Por eso el paro NO depende
  * del tamaño ("menos que N elementos"), sino de encontrar una página VACÍA:
  * se pagina con `page=0,1,2…` acumulando resultados hasta que una página
@@ -306,7 +313,7 @@ export async function listarCfdisEmitidos(
   for (let page = 0; page < CFDI_LIST_MAX_PAGES; page++) {
     const data = await request<FacturamaCfdiListItem[] | { Items?: FacturamaCfdiListItem[] }>(
       'GET',
-      `/cfdi?type=issued&page=${page}${dateParams}`
+      `/cfdi?type=issued&status=all&page=${page}${dateParams}`
     )
     const items = Array.isArray(data) ? data : data.Items ?? []
     results.push(...items)
@@ -373,9 +380,10 @@ export async function cancelarCFDI(
     err.statusCode = 400
     throw err
   }
-  const base = `/cfdi/${encodeURIComponent(id)}/issued/${motivo}`
-  const path = uuidReemplazo ? `${base}/${encodeURIComponent(uuidReemplazo)}` : base
-  return request('DELETE', path)
+  if (motivo === '01') {
+    throw new Error('Cancelación con motivo 01: parámetro de UUID de reemplazo no verificado.')
+  }
+  return request('DELETE', `/cfdi/${encodeURIComponent(id)}?type=issued&motive=${encodeURIComponent(motivo)}`)
 }
 
 // ─── Perfil fiscal del emisor (TaxEntity) ─────────────────────────────────────

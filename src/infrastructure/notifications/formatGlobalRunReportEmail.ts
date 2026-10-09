@@ -201,6 +201,47 @@ function buildText(r: GlobalRunReport): string {
     }
     L.push('')
 
+    // Conciliación previa: decisiones sobre reservas de corridas anteriores.
+    if (r.reconcile) {
+        const decisions = r.reconcile.decisions
+        L.push(RULE, 'CONCILIACIÓN', RULE)
+        L.push(`Confirmados: ${decisions.filter((d) => d.decision === 'confirm').length}`)
+        L.push(`Liberados: ${decisions.filter((d) => d.decision === 'release').length}`)
+        const waiting = decisions.filter((d) => d.decision === 'wait')
+        L.push(`En espera: ${waiting.length}`)
+        for (const item of waiting) {
+            L.push(`   • ${brandLabel(item.store)} / ${item.period} / ${item.bucket} / chunk ${item.chunkIndex}: ${item.reason}`)
+        }
+        const alerts = decisions.filter((d) => d.decision.startsWith('alert_'))
+        for (const item of alerts) {
+            L.push(`🔴 ALERTA ${item.decision}: ${brandLabel(item.store)} / ${item.period} / ${item.bucket} / chunk ${item.chunkIndex}: ${item.reason}`)
+        }
+        L.push(`Globales no explicadas del periodo: ${r.reconcile.unexplainedGlobalsInPeriod}`)
+        for (const item of r.reconcile.unexplainedGlobals) {
+            L.push(`ALERTA global no explicada: Id ${item.facturamaId} / ${item.serieFolio ?? 'sin serie/folio'} / Total ${item.total ?? 'sin dato'} / Date ${item.date ?? 'sin dato'}`)
+        }
+        if (alerts.length > 0) {
+            L.push('   → Revisar los CFDI en Facturama y decidir la cancelación con contabilidad.')
+        }
+        if (r.reconcile.unexplainedGlobals.length > 0) {
+            L.push('   • Identificar quién emitió cada global en Facturama antes de liberar reservas; decidir cancelación con contabilidad.')
+        }
+        L.push('')
+    }
+
+    L.push(RULE, 'VERIFICACIÓN POR PEDIDO EN FACTURAMA (SOLO INFORMATIVA)', RULE)
+    for (const store of r.stores) {
+        const check = store.orderCheck
+        if (!check) continue
+        if (check.unavailable) L.push(`${brandLabel(store.store)}: no disponible — ${check.unavailable}`)
+        else if (check.truncated) L.push(`${brandLabel(store.store)}: verificación truncada; no se determinó presencia por pedido.`)
+        else for (const result of check.results) {
+            const location = result.foundIn.map(item => `${item.serieFolio ?? '(sin serie/folio)'} [${item.facturamaId}]`).join(', ')
+            L.push(`${brandLabel(store.store)} / ${result.reference}: ${result.ambiguous ? 'AMBIGUO' : result.foundIn.length ? 'APARECE' : 'NO APARECE'}${location ? ` en ${location}` : ''}`)
+        }
+    }
+    L.push('Esta verificación no liberó ni excluyó ningún pedido.', '')
+
     // FACTURADOS POR MARCA Y FORMA DE PAGO
     L.push(RULE, `${billedVerb.toUpperCase()} POR MARCA Y FORMA DE PAGO`, RULE)
     const billedBrands = billed.filter((b) => b.total > 0)

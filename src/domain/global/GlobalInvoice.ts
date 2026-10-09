@@ -20,7 +20,7 @@ import type { PaymentBucket } from './PaymentBucket'
  *     confirmada (timeout/error de red) — requiere reconciliación
  *     antes de reintentar, para no duplicar el timbrado.
  */
-export type GlobalInvoiceStatus = 'pending' | 'emitted' | 'stamped_unconfirmed'
+export type GlobalInvoiceStatus = 'pending' | 'emitted' | 'stamped_unconfirmed' | 'released'
 
 export interface GlobalInvoiceIdentity {
   storeName: string

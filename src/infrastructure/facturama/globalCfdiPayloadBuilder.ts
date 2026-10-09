@@ -39,6 +39,7 @@ export interface GlobalInformation {
 }
 
 export interface GlobalCfdiPayload {
+  OrderNumber?: string
   NameId: string
   Serie?: string
    /**
@@ -172,7 +173,8 @@ export function buildGlobalCfdiPayload(
   bucket: PaymentBucket,
   orders: readonly MonthlyOrder[],
   storeName: string,
-  expeditionPlace: string
+  expeditionPlace: string,
+  correlationKey?: string,
 ): GlobalCfdiPayload {
   const nameId = process.env.FACTURAMA_NAME_ID ?? '1'
 
@@ -189,6 +191,7 @@ export function buildGlobalCfdiPayload(
 
   const payload: GlobalCfdiPayload = {
     NameId: nameId,
+    ...(correlationKey ? { OrderNumber: correlationKey } : {}),
     CfdiType: 'I',
     ExpeditionPlace: expeditionPlace,
     Exportation: '01',

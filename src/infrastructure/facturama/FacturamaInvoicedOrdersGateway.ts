@@ -22,6 +22,7 @@ import type { FacturamaCfdiListItem } from './facturamaClient'
 import type { InvoicedOrdersGateway, InvoicedOrderKeys } from '../../domain/global/ports/InvoicedOrdersGateway'
 import type { GlobalPeriod } from '../../domain/global/GlobalPeriod'
 import { normalizeOrderReference } from '../../domain/orders/OrderReference'
+import { isCancelledIssuedCfdi } from './isCancelledIssuedCfdi'
 
 /**
  * CFDI cancelado según las señales observadas en el sandbox (2026-07-09):
@@ -30,12 +31,6 @@ import { normalizeOrderReference } from '../../domain/orders/OrderReference'
  * de las dos presentes se asume vigente (comportamiento conservador: no
  * excluir pedidos por error de un CFDI que en realidad sí está activo).
  */
-function isCancelled(item: FacturamaCfdiListItem): boolean {
-  if (item.IsActive === false) return true
-  if (typeof item.Status === 'string' && item.Status.trim().toLowerCase() !== 'active') return true
-  return false
-}
-
 export class FacturamaInvoicedOrdersGateway implements InvoicedOrdersGateway {
   async listInvoicedOrderKeys(
     storeName: string,
@@ -46,8 +41,9 @@ export class FacturamaInvoicedOrdersGateway implements InvoicedOrdersGateway {
 
     const orderReferences = new Set<string>()
     for (const item of inPeriod) {
-      if (isCancelled(item)) continue
+      if (isCancelledIssuedCfdi(item)) continue
       if (!item.OrderNumber) continue
+      if (item.OrderNumber.startsWith('GLB:')) continue
 
       const normalized = normalizeOrderReference(item.OrderNumber)
       if (normalized) orderReferences.add(normalized)

@@ -33,6 +33,11 @@ vi.mock('../src/composition/makeEmitGlobalInvoiceUseCase', () => ({
   makeEmitGlobalInvoiceUseCase: vi.fn(),
 }))
 
+vi.mock('../src/composition/makeReconcileGlobalStampsUseCase', () => ({
+  makeReconcileGlobalStampsUseCase: vi.fn(),
+  getGlobalReconcileApply: vi.fn(() => true),
+}))
+
 // El aviso por correo es un efecto de RED que el route dispara tras resolver el
 // reporte. Se mockea aquí para que estos tests (resolución de periodo) no abran
 // una conexión SMTP real: si el .env trae SMTP_*, makeRunReportNotifier
@@ -46,7 +51,18 @@ vi.mock('../src/composition/makeRunReportNotifier', () => ({
 
 let rateLimitMod: typeof import('../src/infrastructure/rate-limit')
 let compositionMod: typeof import('../src/composition/makeEmitGlobalInvoiceUseCase')
+let reconcileMod: typeof import('../src/composition/makeReconcileGlobalStampsUseCase')
 let POST: typeof import('../app/api/global/emit/route')['POST']
+
+const EMPTY_RECONCILE = { decisions: [], counts: {}, alerts: [], unexplainedGlobals: [] }
+
+function expectEmittedWith(execute: ReturnType<typeof vi.fn>, args: { year: number; month: number; storeName?: string; dryRun: boolean }) {
+  const reconciliation = vi.mocked(reconcileMod.makeReconcileGlobalStampsUseCase).mock.results.at(-1)?.value
+  const runId = reconciliation.execute.mock.calls[0][0].runId as string
+  expect(runId).toMatch(/^[0-9a-f-]{36}$/)
+  expect(execute).toHaveBeenCalledWith({ ...args, runId, reconcile: EMPTY_RECONCILE })
+  expect(reconciliation.execute).toHaveBeenCalledWith({ runId, apply: !args.dryRun, period: { year: args.year, month: args.month } })
+}
 
 const SECRET = 'test-global-secret'
 
@@ -54,7 +70,7 @@ const SECRET = 'test-global-secret'
 const EMPTY_SUMMARY: GlobalRunSummary = {
   chunks: 0, emitted: 0, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0,
   skippedUnpaid: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0,
-  ordersEligible: 0, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, hasFailures: false,
+  ordersEligible: 0, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, orderCheckFound: 0, orderCheckNotFound: 0, orderCheckAmbiguous: 0, hasFailures: false,
 }
 
 function makeFakeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
@@ -90,6 +106,7 @@ beforeEach(async () => {
 
   rateLimitMod = await import('../src/infrastructure/rate-limit')
   compositionMod = await import('../src/composition/makeEmitGlobalInvoiceUseCase')
+  reconcileMod = await import('../src/composition/makeReconcileGlobalStampsUseCase')
   ;({ POST } = await import('../app/api/global/emit/route'))
 
   vi.mocked(rateLimitMod.rateLimit).mockImplementation(async () => ({
@@ -101,6 +118,10 @@ beforeEach(async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     makeUseCase(async () => ({ ok: true, value: makeFakeReport() })) as any,
   )
+  vi.mocked(reconcileMod.makeReconcileGlobalStampsUseCase).mockReturnValue(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    { execute: vi.fn(async () => ({ decisions: [], counts: {}, alerts: [], unexplainedGlobals: [] })) } as any,
+  )
 })
 
 afterEach(() => {
@@ -110,6 +131,47 @@ afterEach(() => {
 })
 
 describe('POST /api/global/emit', () => {
+  it('concilia antes de emitir y respeta dryRun sin aplicar cambios', async () => {
+    const order: string[] = []
+    const reconcileExecute = vi.fn(async (input: { runId: string; apply: boolean; period: { year: number; month: number } }) => {
+      void input
+      order.push('reconcile')
+      return { decisions: [], counts: {}, alerts: [], unexplainedGlobals: [] }
+    })
+    vi.mocked(reconcileMod.makeReconcileGlobalStampsUseCase).mockReturnValue(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { execute: reconcileExecute } as any,
+    )
+    vi.mocked(compositionMod.makeEmitGlobalInvoiceUseCase).mockReturnValue(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      makeUseCase(async () => { order.push('emit'); return { ok: true, value: makeFakeReport() } }) as any,
+    )
+
+    const res = await POST(makePostRequest({ year: 2026, month: 6, dryRun: true }, withSecretHeader()) as never)
+    expect(res.status).toBe(200)
+    expect(order).toEqual(['reconcile', 'emit'])
+    const runId = reconcileExecute.mock.calls[0][0].runId
+    expect(reconcileExecute).toHaveBeenCalledWith({ runId, apply: false, period: { year: 2026, month: 6 } })
+  })
+
+  it('marca una alerta de conciliación como fallo HTTP', async () => {
+    vi.mocked(reconcileMod.makeReconcileGlobalStampsUseCase).mockReturnValue(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { execute: vi.fn(async () => ({ decisions: [{ headerId: 'h1', status: 'released', decision: 'alert_late_stamp', reason: 'late', matches: [] }], counts: {}, alerts: [], unexplainedGlobals: [] })) } as any,
+    )
+    const res = await POST(makePostRequest({ year: 2026, month: 6 }, withSecretHeader()) as never)
+    expect(res.status).toBe(500)
+    expect((await res.json()).report.summary.hasFailures).toBe(true)
+  })
+  it('marca una global no explicada como fallo HTTP antes de emitir', async () => {
+    vi.mocked(reconcileMod.makeReconcileGlobalStampsUseCase).mockReturnValue(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { execute: vi.fn(async () => ({ decisions: [], counts: {}, alerts: [], unexplainedGlobals: [{ facturamaId: 'manual', active: true, rfc: 'XAXX010101000' }] })) } as any,
+    )
+    const res = await POST(makePostRequest({ year: 2026, month: 9 }, withSecretHeader()) as never)
+    expect(res.status).toBe(500)
+    expect((await res.json()).report.reconcile.unexplainedGlobals).toHaveLength(1)
+  })
   it('responde 503 si GLOBAL_INVOICE_SECRET no está configurado', async () => {
     vi.stubEnv('GLOBAL_INVOICE_SECRET', '')
 
@@ -214,8 +276,8 @@ describe('POST /api/global/emit', () => {
     const json = await res.json()
 
     expect(res.status).toBe(200)
-    expect(json.report).toEqual(fakeReport)
-    expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: 'ariat', dryRun: false })
+    expect(json.report).toEqual({ ...fakeReport, reconcile: EMPTY_RECONCILE })
+    expectEmittedWith(execute, { year: 2026, month: 6, storeName: 'ariat', dryRun: false })
   })
 
   // Regresión 2026-07-22: una corrida con los 9 chunks en `rolled_back` (serie
@@ -238,7 +300,7 @@ describe('POST /api/global/emit', () => {
 
     expect(res.status).toBe(500)
     // El reporte NO se recorta al fallar: es lo único que permite diagnosticar.
-    expect(json.report).toEqual(fakeReport)
+    expect(json.report).toEqual({ ...fakeReport, reconcile: EMPTY_RECONCILE })
   })
 
   it('stamped_unconfirmed (timbrado sin registrar) también marca la corrida como fallida', async () => {
@@ -284,8 +346,9 @@ describe('POST /api/global/emit', () => {
     const json = await res.json()
 
     expect(res.status).toBe(200)
-    expect(json.report).toEqual(makeFakeReport({ year: 2026, month: 6 }))
-    expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: undefined, dryRun: true })
+    expect(json.report).toEqual({ ...makeFakeReport({ year: 2026, month: 6 }), reconcile: EMPTY_RECONCILE })
+    expect(json.report.reconcile).toEqual({ decisions: [], counts: {}, alerts: [], unexplainedGlobals: [] })
+    expectEmittedWith(execute, { year: 2026, month: 6, storeName: undefined, dryRun: true })
   })
 
   describe("body con relative (R4) — reloj inyectado con vi.setSystemTime", () => {
@@ -302,7 +365,7 @@ describe('POST /api/global/emit', () => {
       const res = await POST(makePostRequest({ relative: 'current-month', dryRun: true }, withSecretHeader()) as never)
 
       expect(res.status).toBe(200)
-      expect(execute).toHaveBeenCalledWith({ year: 2026, month: 7, storeName: undefined, dryRun: true })
+      expectEmittedWith(execute, { year: 2026, month: 7, storeName: undefined, dryRun: true })
     })
 
     it("relative: 'previous-month' resuelve al mes MX anterior (mismo resultado que el default histórico)", async () => {
@@ -318,7 +381,7 @@ describe('POST /api/global/emit', () => {
       const res = await POST(makePostRequest({ relative: 'previous-month', dryRun: true }, withSecretHeader()) as never)
 
       expect(res.status).toBe(200)
-      expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: undefined, dryRun: true })
+      expectEmittedWith(execute, { year: 2026, month: 6, storeName: undefined, dryRun: true })
     })
 
     it('responde 400 con relative + year/month (mutuamente excluyentes) — no llama al use case', async () => {
@@ -345,7 +408,7 @@ describe('POST /api/global/emit', () => {
     )
 
     expect(res.status).toBe(200)
-    expect(execute).toHaveBeenCalledWith({ year: 2026, month: 6, storeName: undefined, dryRun: true })
+    expectEmittedWith(execute, { year: 2026, month: 6, storeName: undefined, dryRun: true })
   })
 
 

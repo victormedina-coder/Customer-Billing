@@ -1,7 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getFacturamaGlobalTimeoutMs } from '../src/composition/makeEmitGlobalInvoiceUseCase'
+import { getFacturamaGlobalTimeoutMs, getOrderCheckBudgetMs } from '../src/composition/makeEmitGlobalInvoiceUseCase'
 
 afterEach(() => vi.unstubAllEnvs())
+
+describe('GLOBAL_ORDER_CHECK_BUDGET_MS', () => {
+  it('uses 30000 by default and accepts only positive integers', () => {
+    vi.stubEnv('GLOBAL_ORDER_CHECK_BUDGET_MS', '')
+    expect(getOrderCheckBudgetMs()).toBe(30000)
+    vi.stubEnv('GLOBAL_ORDER_CHECK_BUDGET_MS', 'invalid')
+    expect(getOrderCheckBudgetMs()).toBe(30000)
+    vi.stubEnv('GLOBAL_ORDER_CHECK_BUDGET_MS', '2500')
+    expect(getOrderCheckBudgetMs()).toBe(2500)
+  })
+})
 
 describe('FACTURAMA_GLOBAL_TIMEOUT_MS', () => {
   it('usa 120000 cuando está ausente', () => {

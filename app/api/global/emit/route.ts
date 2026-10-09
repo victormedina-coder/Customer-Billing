@@ -36,7 +36,7 @@ export const runtime = 'nodejs'
 // el máximo permitido en ese plan para no cortar la corrida a la mitad.
 export const maxDuration = 300
 
-import { createHash, timingSafeEqual } from 'crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { RATE_LIMITS } from '@/src/infrastructure/rate-limit'
 import { GlobalEmitSchema } from '@/lib/api/schemas'
@@ -49,6 +49,7 @@ import { getEvaluationNow } from '@/src/infrastructure/time/getEvaluationNow'
 import { logger } from '@/src/infrastructure/observability/logger'
 import { makeRunReportNotifier } from '@/src/composition/makeRunReportNotifier'
 import { shouldEmailRunReport } from '@/src/application/global/RunReportEmailPolicy'
+import { makeReconcileGlobalStampsUseCase, getGlobalReconcileApply } from '@/src/composition/makeReconcileGlobalStampsUseCase'
 
 const SECRET_HEADER = 'x-global-secret'
 
@@ -142,15 +143,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   logger.info({ resolvedBy, year, month }, '[global-emit-route] periodo resuelto')
 
   // ── 5. Orquestación delegada al use case ──────────────────────────────────
+  const runId = randomUUID()
+  const reconcile = await makeReconcileGlobalStampsUseCase().execute({
+    runId,
+    apply: !dryRun && getGlobalReconcileApply(),
+    period: { year, month },
+  })
   const useCase = makeEmitGlobalInvoiceUseCase()
-  const result = await useCase.execute({ year, month, storeName, dryRun })
+  const result = await useCase.execute({ year, month, storeName, dryRun, runId, reconcile })
 
   if (!result.ok) {
     const { code, message } = result.error
     return httpError(code, message, ERROR_STATUS[code])
   }
 
-  const report = result.value
+  const reconcileFailure = reconcile.decisions.some((item) =>
+    item.decision.startsWith('alert_') || (item.decision === 'wait' && item.status === 'stamped_unconfirmed'),
+  )
+  const report = {
+    ...result.value,
+    reconcile,
+    summary: { ...result.value.summary, hasFailures: result.value.summary.hasFailures || reconcileFailure || reconcile.failed === true || reconcile.unexplainedGlobals.length > 0 },
+  }
 
   // ── 5b. Aviso por correo (best-effort) ────────────────────────────────────
   // NUNCA puede afectar la corrida fiscal: la facturación ya ocurrió arriba.

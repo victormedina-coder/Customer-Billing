@@ -16,6 +16,15 @@ export interface UnresolvedGlobalHeader {
   itemCount: number
 }
 
+export interface ReconciliationHeader extends GlobalInvoiceIdentity {
+  id: string
+  status: 'pending' | 'stamped_unconfirmed' | 'released'
+  createdAt: Date
+  correlationKey: string
+  facturamaId: string | null
+  uuidCfdi: string | null
+}
+
 export type CreateGlobalHeaderData = GlobalInvoiceIdentity
 
 export type CreateGlobalHeaderResult =
@@ -36,6 +45,12 @@ export interface UpdateGlobalStampData {
 }
 
 export interface GlobalInvoiceRepository {
+  listForReconciliation(now: Date): Promise<ReconciliationHeader[]>
+  listAllGlobalFacturamaIds(): Promise<string[]>
+  listEmittedHeaderIds(): Promise<string[]>
+  listEmittedFacturamaIdsBetween(from: Date, to: Date): Promise<string[]>
+  releaseHeader(id: string): Promise<'applied' | 'already_applied'>
+  confirmHeader(id: string, stamp: { facturamaId: string; uuidCfdi: string }): Promise<'applied' | 'already_applied'>
   /** Siguiente índice para la identidad del periodo y bucket, incluyendo todos los estados. */
   nextChunkIndex(storeName: string, periodYear: number, periodMonth: number, periodDay: number | undefined, paymentBucket: PaymentBucket): Promise<number>
 

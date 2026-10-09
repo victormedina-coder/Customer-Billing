@@ -14,6 +14,7 @@ import type { PaymentBucket } from '../PaymentBucket'
 import type { MonthlyOrder } from './MonthlyOrderSource'
 
 export interface EmitGlobalInvoicePayload {
+  correlationKey: string
   storeName: string
   periodYear: number
   periodMonth: number

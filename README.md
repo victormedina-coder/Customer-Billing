@@ -265,6 +265,10 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 |---|---|
 | `GLOBAL_INVOICE_SECRET` | Secreto compartido que autentica al cron/job interno que dispara el endpoint (header `x-global-secret`, comparación en tiempo constante). Sin ella, el endpoint responde `503 FEATURE_NOT_CONFIGURED`. |
 | `FACTURAMA_GLOBAL_TIMEOUT_MS` | Tiempo máximo del POST de CFDI global en milisegundos (entero >= 1; default `120000`). No altera el timeout de `15000` ms del CFDI individual. Un timeout deja la reserva en `stamped_unconfirmed` para conciliación. |
+| `GLOBAL_RECONCILE_APPLY` | `true` (default) aplica confirmaciones y liberaciones tras consultar Facturama; `false` solo reporta decisiones para diagnóstico. |
+| `GLOBAL_RECONCILE_MIN_AGE_MINUTES` | Edad mínima antes de liberar reservas sin timbrado (entero >= 1; default `60`). Da tiempo a que aparezca un timbrado tardío. |
+| `GLOBAL_ORDER_CHECK_MAX_CFDIS` | Maximo de CFDI activos cuyos Items consulta la verificacion informativa por pedido (entero >= 1; default `30`); si se supera, reporta truncamiento. |
+| `GLOBAL_ORDER_CHECK_BUDGET_MS` | Presupuesto total para consultar Items después de emitir todos los chunks (entero >= 1; default `30000` ms); al agotarse, reporta truncamiento. |
 | `DEV_NOW_OVERRIDE` | **Solo fuera de producción** (guard duro por `NODE_ENV`, ver `getEvaluationNow`). Fecha ISO para simular el instante "ahora" al resolver periodos `relative` (R4) o la ventana de facturación (R3). **Nunca definir en el `.env` de producción.** |
 
 ### Otros
@@ -282,13 +286,10 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 
 ## Cron — Facturación Global (Railway)
 
-`POST /api/global/emit` está pensado para dispararse desde un *Scheduled
-Job* de Railway (no desde el navegador). El body soporta periodo explícito
-(`{year, month[, day]}`) o resolución `relative` (`current-month` /
-`previous-month` / `yesterday` / `today`), mutuamente excluyente con lo
-explícito; un body vacío usa el default histórico (mes anterior en zona MX). Detalle
-completo de los dos cron jobs (sandbox diario y producción mensual), sus
-bodies y schedules — ver **`docs/11-cron-facturacion-global.md`**.
+`POST /api/global/emit` se dispara desde un *Scheduled Job* de Railway.
+El body admite `{year, month}` o `{"relative":"current-month"}` /
+`{"relative":"previous-month"}`; un body vacío usa el mes anterior en zona MX.
+El endpoint actual solo factura periodos mensuales.
 
 **Cron de producción (mensual):** schedule `0 3 1 * *` UTC = 21:00 MX del
 último día del mes, con body `{"relative":"current-month"}`. Regla de
@@ -296,22 +297,20 @@ negocio: contabilidad requiere el cierre el mismo día del mes (no el día 1
 de madrugada) porque las tiendas POS no venden después de las 21:00 — ver
 **`docs/adr/ADR-009-corte-mensual-2100.md`**.
 
-**Cron de sandbox (diario):** schedule `0 3 * * *` UTC = **21:00 MX**, con body
-`{"relative":"today"}` — la MISMA hora de corte que producción, y `today` es el
-análogo diario de `current-month`: al correr a las 21:00 el periodo sigue
-abierto, así que el diario ejercita el mismo riesgo del ADR-009 que la mensual
-(pedidos posteriores al corte no entran) en vez de facturar días ya cerrados.
-Pasar a producción es entonces solo `*` → `1` en el día-del-mes y cambiar el
-body a `{"relative":"current-month"}`.
+**Segundo disparo de producción:** schedule `30 5 1 * *` UTC = 23:30 MX del
+último día del mes, con el mismo body `{"relative":"current-month"}`.
+`currentMxYearMonth` resuelve todavía el mes del corte a esa hora. Este disparo
+concilia timbrados ambiguos y vuelve a facturar pedidos liberados a las 23:30 MX,
+2.5 horas después del corte de las 21:00 y dentro del plazo de 24 horas.
 
-> ⚠️ El cron sandbox diario y los modos `relative: 'yesterday'` / `'today'` son
-> **[DAILY-SCAFFOLDING] test-only** — existen solo para probar el timbrado
-> diario en sandbox y se eliminarán antes del PR a `main`.
-
-> ⚠️ **No dispares el cron dos veces el mismo día MX con `today`.** La clave de
-> idempotencia es `(store, year, month, day, bucket, chunk)`: la segunda corrida
-> cae en `skipped_idempotent` y los pedidos creados ENTRE ambas corridas no se
-> facturan nunca. Una corrida por día.
+**Runbook de conciliación:** `alert_duplicate` indica dos CFDI activos con la
+misma llave; `alert_cancelled`, un CFDI cancelado; `alert_late_stamp`, un timbrado
+tras liberar la reserva. En cualquiera de esos casos, revisar los CFDI en
+Facturama y decidir con contabilidad la cancelación correspondiente. Un `wait`
+indica edad mínima pendiente, listado incompleto o una global ajena sin explicar.
+En este último caso, identificar quién la emitió en Facturama antes de liberar reservas.
+La verificacion por pedido consulta conceptos de Facturama solo si hay pedidos bloqueados o globales no explicadas; es informativa y no libera ni excluye pedidos.
+La conciliación compara llaves `GLB:` sin distinguir mayúsculas ni espacios externos. Un CFDI activo con llave `GLB:` huérfana veta la liberación y genera alerta. Un header con `facturamaId` guardado nunca se libera: se confirma si ese CFDI aparece activo, alerta si está cancelado y espera si falta en el listado.
 
 ## Despliegue (Railway)
 

@@ -46,6 +46,7 @@ function makeOrder(overrides: Partial<Order> = {}): Order {
 function makePayload(overrides: Partial<EmitGlobalInvoicePayload> = {}): EmitGlobalInvoicePayload {
   const orders: MonthlyOrder[] = overrides.orders ?? [{ order: makeOrder(), payments: [] }]
   return {
+    correlationKey: 'GLB:test-header',
     storeName: 'tienda-ariat',
     periodYear: 2026,
     periodMonth: 6,
@@ -133,7 +134,7 @@ describe('FacturamaGlobalStamping.emitirGlobal', () => {
     expect(init.method).toBe('POST')
   })
 
-  it('el body enviado es el payload global: GlobalInformation presente, sin OrderNumber', async () => {
+  it('el body enviado es el payload global: GlobalInformation presente y OrderNumber igual a la llave del header', async () => {
     const { FacturamaGlobalStamping } = await importAdapter()
     fetchMock.mockResolvedValueOnce(jsonResponse({ Id: 'X', Complement: { TaxStamp: { Uuid: 'Y' } } }))
 
@@ -144,7 +145,7 @@ describe('FacturamaGlobalStamping.emitirGlobal', () => {
     const body = JSON.parse(String(init.body))
     expect(body.GlobalInformation).toEqual({ Periodicity: '04', Months: '06', Year: '2026' })
     expect(body.PaymentForm).toBe('28') // debito
-    expect(body).not.toHaveProperty('OrderNumber')
+    expect(body.OrderNumber).toBe(makePayload({ paymentBucket: 'debito' }).correlationKey)
     expect(body.Items).toHaveLength(1)
     expect(body.Receiver.Rfc).toBe('XAXX010101000')
   })

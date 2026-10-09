@@ -33,7 +33,12 @@
  */
 
 import type { Order } from '../../domain/orders/Order'
-import { buildOrderReference } from '../../domain/orders/OrderReference'
+import { buildOrderReference, receiptTail } from '../../domain/orders/OrderReference'
+import { matchBlockedOrdersToGlobalItems } from '../../domain/global/matchBlockedOrdersToGlobalItems'
+import { globalCorrelationKey } from '../../domain/global/globalCorrelationKey'
+import type { BlockedOrderMatch, GlobalItems } from '../../domain/global/matchBlockedOrdersToGlobalItems'
+import type { IssuedCfdiItemsLookup } from '../../domain/global/ports/IssuedCfdiItemsLookup'
+import type { IssuedCfdiRef } from '../../domain/global/ports/IssuedCfdiLookup'
 import { isDefinitiveStampRejection } from '../shared/isDefinitiveStampRejection'
 import { StampPreparationError } from '../shared/StampPreparationError'
 import type { GlobalPeriod } from '../../domain/global/GlobalPeriod'
@@ -49,12 +54,15 @@ import type { GlobalInvoiceRepository, UnresolvedGlobalHeader } from '../../doma
 import type { InvoicedOrdersGateway } from '../../domain/global/ports/InvoicedOrdersGateway'
 import type { CreateInvoiceData } from '../../infrastructure/db/invoice-repository'
 import type { Logger } from '../../domain/shared/ports/Logger'
+import type { ReconcileReport } from './ReconcileGlobalStampsUseCase'
 import { ok, err } from '../shared/Result'
 import type { Result } from '../shared/Result'
 
 // ─── Tipos de entrada ─────────────────────────────────────────────────────────
 
 export interface EmitGlobalInvoiceInput {
+  reconcile?: ReconcileReport
+  runId?: string
   year: number
   month: number
   /**
@@ -161,6 +169,7 @@ export interface RefundedOrdersReport {
 
 export interface StoreReport {
   store: string
+  orderCheck: OrderCheckReport
   enumerated: number
   eligible: number
   skippedNonPos: number
@@ -185,6 +194,14 @@ export interface StoreReport {
    * eleva por `summary.hasFailures`.
    */
   unaccounted: number
+}
+
+export interface OrderCheckReport {
+  ran: boolean
+  truncated: boolean
+  checkedCfdis: number
+  results: BlockedOrderMatch[]
+  unavailable?: string
 }
 
 /**
@@ -215,6 +232,9 @@ export interface GlobalRunSummary {
   unaccounted: number
   /** Suma de `StoreReport.skippedUnpaid.count` — pedidos POS sin cobro efectivo (finanzas 2026-07-24: alerta). */
   skippedUnpaid:number
+  orderCheckFound: number
+  orderCheckNotFound: number
+  orderCheckAmbiguous: number
   /**
    * true si la corrida dejó pedidos elegibles SIN facturar o en estado
    * inconsistente. Cinco causas, todas del mismo tipo (hueco fiscal que exige
@@ -236,6 +256,7 @@ export interface GlobalRunSummary {
 }
 
 export interface GlobalRunReport {
+  reconcile?: ReconcileReport
   runId: string
   year: number
   month: number
@@ -251,10 +272,18 @@ function computeSummary(stores: StoreReport[]): GlobalRunSummary {
   const s: GlobalRunSummary = {
     chunks: 0, emitted: 0, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0,
     stampedUnconfirmed: 0, empty: 0, dryRun: 0,
-    ordersEligible: 0, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false,
+    ordersEligible: 0, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0,
+    orderCheckFound: 0, orderCheckNotFound: 0, orderCheckAmbiguous: 0, hasFailures: false,
   }
 
   for (const store of stores) {
+    if (!store.orderCheck.unavailable && !store.orderCheck.truncated) {
+      for (const result of store.orderCheck.results) {
+        if (result.ambiguous) s.orderCheckAmbiguous++
+        else if (result.foundIn.length > 0) s.orderCheckFound++
+        else s.orderCheckNotFound++
+      }
+    }
     s.ordersEligible += store.eligible
     s.unresolvedOrders += store.excludedAlreadyInvoiced.orders.filter((order) => order.matchedBy === 'db_unresolved').length
     s.unresolvedHeaders += store.unresolvedHeaders.length
@@ -309,6 +338,9 @@ export interface ChunkPolicyPort {
 // ─── Deps ─────────────────────────────────────────────────────────────────────
 
 export interface EmitGlobalInvoiceDeps {
+  issuedCfdiItemsLookup?: IssuedCfdiItemsLookup
+  orderCheckMaxCfdis?: number
+  orderCheckBudgetMs?: number
   monthlyOrderSource: MonthlyOrderSource
   globalStamping: GlobalInvoiceStamping
   globalRepo: GlobalInvoiceRepository
@@ -368,7 +400,7 @@ export class EmitGlobalInvoiceUseCase {
 
   async execute(input: EmitGlobalInvoiceInput): Promise<Result<GlobalRunReport, GlobalRunError>> {
     const { year, month, day, storeName, dryRun = false } = input
-    const runId = this.runId
+    const runId = input.runId ?? this.runId
 
     let period: GlobalPeriod
     try {
@@ -393,8 +425,10 @@ export class EmitGlobalInvoiceUseCase {
     this.logger.info({ runId, year, month, day, stores: targetStores, dryRun }, '[global-invoice] inicio de corrida')
 
     const stores: StoreReport[] = []
+    const itemCache = new Map<string, Promise<string[]>>()
+    const orderCheckDeadline = Date.now() + (this.deps.orderCheckBudgetMs ?? 30000)
     for (const store of targetStores) {
-      stores.push(await this.runStore(store, period, dryRun, runId))
+      stores.push(await this.runStore(store, period, dryRun, runId, input.reconcile, itemCache, orderCheckDeadline))
     }
 
     const summary = computeSummary(stores)
@@ -406,7 +440,7 @@ export class EmitGlobalInvoiceUseCase {
 
   // ── Por tienda ────────────────────────────────────────────────────────────
 
-  private async runStore(store: string, period: GlobalPeriod, dryRun: boolean, runId: string): Promise<StoreReport> {
+  private async runStore(store: string, period: GlobalPeriod, dryRun: boolean, runId: string, reconcile: ReconcileReport | undefined, itemCache: Map<string, Promise<string[]>>, orderCheckDeadline: number): Promise<StoreReport> {
     const monthlyOrders = await this.enumerateAll(store, period)
 
     let skippedNonPos = 0
@@ -478,6 +512,8 @@ export class EmitGlobalInvoiceUseCase {
     }
 
     const { survivors, excludedAlreadyInvoiced } = await this.excludeAlreadyInvoiced(store, period, eligible)
+    const blocked = eligible.filter(({ order }) => excludedAlreadyInvoiced.orders.some(excluded => excluded.orderId === order.id && excluded.matchedBy === 'db_unresolved'))
+      .map(({ order }) => ({ orderId: order.id, reference: buildOrderReference(order.orderNumber, order.sourceIdentifier ?? null), tail: order.sourceIdentifier?.trim() ? receiptTail(order.sourceIdentifier) : order.orderNumber }))
     const unresolvedHeaders = await this.deps.globalRepo.listUnresolvedHeaders(store, period.year, period.month, period.day)
     if (unresolvedHeaders.length > 0 || excludedAlreadyInvoiced.orders.some((order) => order.matchedBy === 'db_unresolved')) {
       this.logger.error({ runId, store, unresolvedHeaders, unresolvedOrderIds: excludedAlreadyInvoiced.orders.filter((order) => order.matchedBy === 'db_unresolved').map((order) => order.orderId) }, '[global-invoice] pedidos bloqueados sin confirmar timbrado')
@@ -532,9 +568,11 @@ export class EmitGlobalInvoiceUseCase {
     for (const [bucket, bucketOrders] of buckets) {
       bucketReports.push(await this.runBucket(store, period, bucket, bucketOrders, dryRun, runId))
     }
+    const orderCheck = await this.checkBlockedOrders(blocked, reconcile, period, runId, store, itemCache, orderCheckDeadline)
 
     return {
       store,
+      orderCheck,
       enumerated: monthlyOrders.length,
       eligible: eligible.length,
       skippedNonPos,
@@ -756,6 +794,7 @@ export class EmitGlobalInvoiceUseCase {
     const stampStartedAt = Date.now()
     try {
       stampResult = await this.deps.globalStamping.emitirGlobal({
+        correlationKey: globalCorrelationKey(headerId),
         storeName: store,
         periodYear: period.year,
         periodMonth: period.month,
@@ -835,5 +874,69 @@ export class EmitGlobalInvoiceUseCase {
       this.logger.error({ runId, headerId, error: message }, '[global-invoice] rollback: no se pudo borrar el header')
     }
     return completed
+  }
+
+  private async checkBlockedOrders(
+    blocked: { orderId: string; reference: string; tail: string }[],
+    reconcile: ReconcileReport | undefined,
+    period: GlobalPeriod,
+    runId: string,
+    store: string,
+    cache: Map<string, Promise<string[]>>,
+    deadline: number,
+  ): Promise<OrderCheckReport> {
+    const empty: OrderCheckReport = { ran: false, truncated: false, checkedCfdis: 0, results: [] }
+    if (blocked.length === 0 && !reconcile?.unexplainedGlobalsInPeriod) return empty
+    if (!reconcile || reconcile.failed) return { ...empty, unavailable: 'Conciliación de Facturama no disponible' }
+    if (!this.deps.issuedCfdiItemsLookup) return { ...empty, unavailable: 'Consulta de conceptos de Facturama no configurada' }
+
+    const prefix = `${period.year}-${String(period.month).padStart(2, '0')}`
+    const inPeriod = (item: IssuedCfdiRef) => !item.date || item.date.startsWith(prefix)
+    const candidates = [
+      ...reconcile.unexplainedGlobals.filter(inPeriod),
+      ...reconcile.decisions.flatMap(decision => decision.matches.filter(item => item.orderNumber?.startsWith('GLB:') && inPeriod(item))),
+    ].filter(item => item.active && item.rfc === 'XAXX010101000')
+    const unique = [...new Map(candidates.map(item => [item.facturamaId, item])).values()]
+    const max = this.deps.orderCheckMaxCfdis ?? 30
+    if (new Set([...cache.keys(), ...unique.map(item => item.facturamaId)]).size > max) {
+      this.logger.warn({ runId, store, candidates: unique.length, max }, '[global-order-check] verificación truncada por tope de CFDI')
+      return { ran: true, truncated: true, checkedCfdis: 0, results: [] }
+    }
+
+    const globals: GlobalItems[] = []
+    try {
+      for (const candidate of unique) {
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) {
+          this.logger.warn({ runId, store, checkedCfdis: globals.length }, '[global-order-check] presupuesto de tiempo agotado')
+          return { ran: true, truncated: true, checkedCfdis: globals.length, results: [] }
+        }
+        let items = cache.get(candidate.facturamaId)
+        if (!items) {
+          items = this.deps.issuedCfdiItemsLookup.getItems(candidate.facturamaId)
+          cache.set(candidate.facturamaId, items)
+        }
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const timeout = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), remaining) })
+        let found: string[] | undefined
+        try {
+          found = await Promise.race([items, timeout])
+        } finally {
+          if (timer) clearTimeout(timer)
+        }
+        if (!found) {
+          this.logger.warn({ runId, store, checkedCfdis: globals.length }, '[global-order-check] presupuesto de tiempo agotado')
+          return { ran: true, truncated: true, checkedCfdis: globals.length, results: [] }
+        }
+        globals.push({ facturamaId: candidate.facturamaId, serieFolio: candidate.serieFolio, items: found })
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.logger.error({ runId, store, checkedCfdis: globals.length, error: message }, '[global-order-check] consulta de conceptos no disponible')
+      return { ran: true, truncated: false, checkedCfdis: globals.length, results: [], unavailable: message }
+    }
+    const results = matchBlockedOrdersToGlobalItems(blocked, globals)
+    this.logger.info({ runId, store, checkedCfdis: globals.length, blockedOrders: blocked.length, found: results.filter(item => item.foundIn.length > 0).length }, '[global-order-check] verificación informativa completada')
+    return { ran: true, truncated: false, checkedCfdis: globals.length, results }
   }
 }

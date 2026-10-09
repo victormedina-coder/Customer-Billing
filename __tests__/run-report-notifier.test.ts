@@ -7,6 +7,7 @@ import type { GlobalRunReport, StoreReport } from '../src/application/global/Emi
 function makeStore(overrides: Partial<StoreReport> = {}): StoreReport {
   return {
     store: 'ariat',
+    orderCheck: { ran: false, truncated: false, checkedCfdis: 0, results: [] },
     enumerated: 1,
     eligible: 1,
     skippedNonPos: 0,
@@ -36,7 +37,7 @@ function makeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
     dryRun: false,
     summary: {
       chunks: 1, emitted: 1, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0, stampedUnconfirmed: 0,
-      empty: 0, dryRun: 0, ordersEligible: 1, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false,
+      empty: 0, dryRun: 0, ordersEligible: 1, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, orderCheckFound: 0, orderCheckNotFound: 0, orderCheckAmbiguous: 0, hasFailures: false,
     },
     stores: [makeStore()],
     ...overrides,
@@ -44,6 +45,31 @@ function makeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
 }
 
 describe('formatGlobalRunReportEmail', () => {
+  it('muestra conciliación, espera y alertas con acción contable', () => {
+    const report = makeReport({
+      reconcile: {
+        unexplainedGlobals: [{ facturamaId: 'manual-1', active: true, rfc: 'XAXX010101000', serieFolio: 'G-7', total: 120, date: '2026-07-31' }],
+        unexplainedGlobalsInPeriod: 1,
+        counts: { confirm: 1, release: 1, wait: 1, alert_duplicate: 1, alert_cancelled: 0, alert_late_stamp: 0 },
+        alerts: [],
+        decisions: [
+          { headerId: 'h1', store: 'ariat', period: '2026-07', bucket: 'efectivo', chunkIndex: 0, status: 'stamped_unconfirmed', decision: 'confirm', reason: 'encontrado', matches: [] },
+          { headerId: 'h2', store: 'ariat', period: '2026-07', bucket: 'efectivo', chunkIndex: 1, status: 'stamped_unconfirmed', decision: 'release', reason: 'sin timbrado', matches: [] },
+          { headerId: 'h3', store: 'ariat', period: '2026-07', bucket: 'efectivo', chunkIndex: 2, status: 'stamped_unconfirmed', decision: 'wait', reason: 'listado incompleto', matches: [] },
+          { headerId: 'h4', store: 'ariat', period: '2026-07', bucket: 'efectivo', chunkIndex: 3, status: 'stamped_unconfirmed', decision: 'alert_duplicate', reason: 'dos CFDI', matches: [] },
+        ],
+      },
+    })
+    const { text } = formatGlobalRunReportEmail(report)
+    expect(text).toContain('CONCILIACIÓN')
+    expect(text).toContain('Confirmados: 1')
+    expect(text).toContain('Liberados: 1')
+    expect(text).toContain('Globales no explicadas del periodo: 1')
+    expect(text).toContain('manual-1')
+    expect(text).toContain('listado incompleto')
+    expect(text).toContain('alert_duplicate')
+    expect(text).toContain('decidir la cancelación con contabilidad')
+  })
   it('identifica pedidos y headers bloqueados y exige conciliación previa', () => {
     const store = makeStore({
       excludedAlreadyInvoiced: { count: 1, orders: [{ orderId: 'gid-1', reference: '#1 2-1', matchedBy: 'db_unresolved' }] },
@@ -135,7 +161,7 @@ describe('formatGlobalRunReportEmail — totales de PEDIDOS (no CFDIs)', () => {
 
   const report = makeReport({
     day: undefined,
-    summary: { chunks: 9, emitted: 9, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0, ordersEligible: 50, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, hasFailures: false },
+    summary: { chunks: 9, emitted: 9, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0, ordersEligible: 50, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, orderCheckFound: 0, orderCheckNotFound: 0, orderCheckAmbiguous: 0, hasFailures: false },
     stores: [billedStore('western-brothers', 3, 12, 5), billedStore('stetson', 8, 9, 3), billedStore('ariat', 2, 6, 2)],
   })
 
