@@ -4,20 +4,23 @@
  *
  * Sigue el mismo patrón maduro de `invoice-repository.ts`: insert-first
  * atrapando la violación UNIQUE (23505 — postgres-js la pone en `err.cause`),
- * reap-lazy de encabezados 'pending' huérfanos, y rollback vía delete.
+ * índices crecientes por periodo/bucket, y rollback vía delete.
  */
 
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, gte, inArray, lte, max, ne, or } from 'drizzle-orm'
 import { getDb } from './client'
 import { globalInvoices, invoices } from './schema'
 import type {
   CreateGlobalHeaderData,
   CreateGlobalHeaderResult,
   GlobalInvoiceRepository,
+  ReconciliationHeader,
   UpdateGlobalStampData,
+  UnresolvedGlobalHeader,
 } from '../../domain/global/ports/GlobalInvoiceRepository'
-import type { GlobalInvoice, GlobalInvoiceIdentity } from '../../domain/global/GlobalInvoice'
+import type { GlobalInvoice } from '../../domain/global/GlobalInvoice'
 import type { PaymentBucket } from '../../domain/global/PaymentBucket'
+import { globalCorrelationKey } from '../../domain/global/globalCorrelationKey'
 
 export type GlobalInvoiceRow = typeof globalInvoices.$inferSelect
 
@@ -36,17 +39,6 @@ function isUniqueViolation(err: unknown): boolean {
     return (cause as Record<string, unknown>)['code'] === PG_UNIQUE_VIOLATION
   }
   return false
-}
-
-function identityWhere(key: GlobalInvoiceIdentity) {
-  return and(
-    eq(globalInvoices.storeName, key.storeName),
-    eq(globalInvoices.periodYear, key.periodYear),
-    eq(globalInvoices.periodMonth, key.periodMonth),
-    eq(globalInvoices.periodDay, key.periodDay ?? 0),
-    eq(globalInvoices.paymentBucket, key.paymentBucket),
-    eq(globalInvoices.chunkIndex, key.chunkIndex),
-  )
 }
 
 /**
@@ -76,6 +68,95 @@ export function mapRowToGlobalInvoice(row: GlobalInvoiceRow): GlobalInvoice {
 // ---------------------------------------------------------------------------
 
 export class DrizzleGlobalInvoiceRepository implements GlobalInvoiceRepository {
+  async listForReconciliation(now: Date): Promise<ReconciliationHeader[]> {
+    const since = new Date(now.getTime() - 35 * 24 * 60 * 60 * 1000)
+    const rows = await getDb().select().from(globalInvoices).where(and(
+      or(inArray(globalInvoices.status, ['pending', 'stamped_unconfirmed']), and(eq(globalInvoices.status, 'released'), gte(globalInvoices.createdAt, since))),
+    ))
+    return rows.map(row => ({
+      id: row.id,
+      storeName: row.storeName,
+      periodYear: row.periodYear,
+      periodMonth: row.periodMonth,
+      periodDay: row.periodDay === 0 ? undefined : row.periodDay,
+      paymentBucket: row.paymentBucket as PaymentBucket,
+      chunkIndex: row.chunkIndex,
+      status: row.status as ReconciliationHeader['status'],
+      createdAt: row.createdAt,
+      correlationKey: globalCorrelationKey(row.id),
+      facturamaId: row.facturamaId,
+      uuidCfdi: row.uuidCfdi,
+    }))
+  }
+
+  async listAllGlobalFacturamaIds(): Promise<string[]> {
+    const rows = await getDb().select({ facturamaId: globalInvoices.facturamaId }).from(globalInvoices)
+    return rows.flatMap(row => row.facturamaId ? [row.facturamaId] : [])
+  }
+
+  async listEmittedHeaderIds(): Promise<string[]> {
+    const rows = await getDb().select({ id: globalInvoices.id }).from(globalInvoices).where(eq(globalInvoices.status, 'emitted'))
+    return rows.map(row => row.id)
+  }
+
+  async listEmittedFacturamaIdsBetween(from: Date, to: Date): Promise<string[]> {
+    const rows = await getDb().select({ facturamaId: globalInvoices.facturamaId })
+      .from(globalInvoices).where(and(
+        eq(globalInvoices.status, 'emitted'),
+        gte(globalInvoices.createdAt, from),
+        lte(globalInvoices.createdAt, to),
+      ))
+    return rows.flatMap(row => row.facturamaId ? [row.facturamaId] : [])
+  }
+
+  async releaseHeader(id: string): Promise<'applied' | 'already_applied'> {
+    return getDb().transaction(async tx => {
+      const rows = await tx.select({ status: globalInvoices.status }).from(globalInvoices)
+        .where(eq(globalInvoices.id, id)).for('update')
+      if (rows.length === 1 && rows[0].status === 'released') return 'already_applied'
+      if (rows.length !== 1 || !['pending', 'stamped_unconfirmed'].includes(rows[0].status)) {
+        throw new Error(`Header global ${id} no está disponible para liberar`)
+      }
+      await tx.delete(invoices).where(eq(invoices.globalInvoiceId, id))
+      await tx.update(globalInvoices).set({ status: 'released' }).where(eq(globalInvoices.id, id))
+      return 'applied'
+    })
+  }
+
+  async confirmHeader(id: string, stamp: { facturamaId: string; uuidCfdi: string }): Promise<'applied' | 'already_applied'> {
+    const rows = await getDb().update(globalInvoices)
+      .set({ status: 'emitted', facturamaId: stamp.facturamaId, uuidCfdi: stamp.uuidCfdi })
+      .where(and(eq(globalInvoices.id, id), eq(globalInvoices.status, 'stamped_unconfirmed')))
+      .returning({ id: globalInvoices.id })
+    if (rows.length !== 1) {
+      const existing = await getDb().select({ status: globalInvoices.status, facturamaId: globalInvoices.facturamaId }).from(globalInvoices).where(eq(globalInvoices.id, id))
+      if (existing.length === 1 && existing[0].status === 'emitted' && existing[0].facturamaId === stamp.facturamaId) return 'already_applied'
+      throw new Error(`Header global ${id} no está disponible para confirmar`)
+    }
+    return 'applied'
+  }
+  async nextChunkIndex(storeName: string, periodYear: number, periodMonth: number, periodDay: number | undefined, paymentBucket: PaymentBucket): Promise<number> {
+    const rows = await getDb().select({ highest: max(globalInvoices.chunkIndex) }).from(globalInvoices).where(and(
+      eq(globalInvoices.storeName, storeName),
+      eq(globalInvoices.periodYear, periodYear),
+      eq(globalInvoices.periodMonth, periodMonth),
+      eq(globalInvoices.periodDay, periodDay ?? 0),
+      eq(globalInvoices.paymentBucket, paymentBucket),
+    ))
+    return (rows[0]?.highest ?? -1) + 1
+  }
+
+  async listUnresolvedHeaders(storeName: string, periodYear: number, periodMonth: number, periodDay: number | undefined): Promise<UnresolvedGlobalHeader[]> {
+    const rows = await getDb().select().from(globalInvoices).where(and(
+      eq(globalInvoices.storeName, storeName),
+      eq(globalInvoices.periodYear, periodYear),
+      eq(globalInvoices.periodMonth, periodMonth),
+      eq(globalInvoices.periodDay, periodDay ?? 0),
+      inArray(globalInvoices.status, ['pending', 'stamped_unconfirmed']),
+    ))
+    return rows.map(row => ({ storeName: row.storeName, bucket: row.paymentBucket as PaymentBucket, chunkIndex: row.chunkIndex, status: row.status as UnresolvedGlobalHeader['status'], createdAt: row.createdAt, itemCount: row.itemCount }))
+  }
+
   async createGlobalHeader(data: CreateGlobalHeaderData): Promise<CreateGlobalHeaderResult> {
     const db = getDb()
     try {
@@ -99,33 +180,9 @@ export class DrizzleGlobalInvoiceRepository implements GlobalInvoiceRepository {
     }
   }
 
-  async reapStaleGlobalHeader(
-    key: GlobalInvoiceIdentity,
-    ttlMinutes: number,
-    now: Date,
-  ): Promise<boolean> {
-    const db = getDb()
-    const rows = await db.select().from(globalInvoices).where(identityWhere(key)).limit(1)
-    const row = rows[0]
-    if (!row) return false
-    // Invariante anti-doble-timbre: jamás reapear 'emitted' ni
-    // 'stamped_unconfirmed' — este último indica que el CFDI YA existe en
-    // Facturama aunque la fila no se haya podido confirmar.
-    if (row.status !== 'pending') return false
-
-    const ageMs = now.getTime() - row.createdAt.getTime()
-    const ttlMs = ttlMinutes * 60_000
-    if (ageMs <= ttlMs) return false
-
-    await db
-      .delete(globalInvoices)
-      .where(and(eq(globalInvoices.id, row.id), eq(globalInvoices.status, 'pending')))
-    return true
-  }
-
   async updateGlobalStamp(id: string, data: UpdateGlobalStampData): Promise<void> {
     const db = getDb()
-    await db
+    const rows = await db
       .update(globalInvoices)
       .set({
         status: data.status,
@@ -133,7 +190,9 @@ export class DrizzleGlobalInvoiceRepository implements GlobalInvoiceRepository {
         ...(data.uuidCfdi !== undefined ? { uuidCfdi: data.uuidCfdi } : {}),
         ...(data.itemCount !== undefined ? { itemCount: data.itemCount } : {}),
       })
-      .where(eq(globalInvoices.id, id))
+      .where(and(eq(globalInvoices.id, id), ne(globalInvoices.status, 'released')))
+      .returning({ id: globalInvoices.id })
+    if (rows.length === 0) throw new Error(`No se encontró el header global ${id} al actualizar timbrado`)
   }
 
   async deleteGlobalHeader(id: string): Promise<void> {

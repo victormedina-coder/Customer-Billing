@@ -13,6 +13,7 @@ import {
   currentMxYearMonth,
   mxDayBounds,
   mxMonthInvoiceCutoff,
+  parseMxLocalDateTime,
   previousMxYearMonth,
 } from '../src/domain/shared/MxCalendar'
 
@@ -55,6 +56,8 @@ describe('mxDayBounds', () => {
     expect(durationMs).toBe(24 * 60 * 60 * 1000 - 1)
   })
 })
+
+
 
 describe('previousMxYearMonth', () => {
   it('mes normal: julio → junio (mismo año)', () => {
@@ -136,5 +139,40 @@ describe('mxMonthInvoiceCutoff (R3 — corte 21:00 MX del último día del mes)'
     // 30-jun 00:00 MX = 30-jun 06:00 UTC — un día antes de mxMonthStart(2026, 7).
     const cutoff = mxMonthInvoiceCutoff(2026, 6, 0)
     expect(cutoff.toISOString()).toBe('2026-06-30T06:00:00.000Z')
+  })
+})
+
+describe('parseMxLocalDateTime', () => {
+  it('interpreta una fecha sin zona como hora MX independientemente del TZ del proceso', () => {
+    expect(parseMxLocalDateTime('2026-09-30T21:04:05')?.toISOString())
+      .toBe('2026-10-01T03:04:05.000Z')
+  })
+
+  it('conserva la fracción de segundo', () => {
+    expect(parseMxLocalDateTime('2026-09-30T21:04:05.123')?.toISOString())
+      .toBe('2026-10-01T03:04:05.123Z')
+  })
+
+  it('respeta una Z explícita', () => {
+    expect(parseMxLocalDateTime('2026-09-30T21:04:05Z')?.toISOString())
+      .toBe('2026-09-30T21:04:05.000Z')
+  })
+
+  it('respeta un offset explícito', () => {
+    expect(parseMxLocalDateTime('2026-09-30T21:04:05-05:00')?.toISOString())
+      .toBe('2026-10-01T02:04:05.000Z')
+  })
+
+  it('rechaza un día inexistente', () => {
+    expect(parseMxLocalDateTime('2026-02-30T10:00:00')).toBeNull()
+  })
+
+  it('rechaza texto que no es una fecha', () => {
+    expect(parseMxLocalDateTime('basura')).toBeNull()
+  })
+
+  it('interpreta la medianoche MX sin depender del TZ del proceso', () => {
+    expect(parseMxLocalDateTime('2026-10-01T00:00:00')?.toISOString())
+      .toBe('2026-10-01T06:00:00.000Z')
   })
 })

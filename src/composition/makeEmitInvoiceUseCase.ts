@@ -20,7 +20,7 @@ import type { EmitInvoiceDeps } from '../application/invoice/EmitInvoiceUseCase'
 import { getOrderSource } from './orderSource'
 import { getInvoiceService } from './invoiceService'
 import {
-  isAlreadyInvoiced,
+  findInvoiceStatus,
   createInvoice,
   updateInvoiceStamp,
   deleteById,
@@ -67,7 +67,7 @@ export function makeEmitInvoiceUseCase(): EmitInvoiceUseCase {
       // Las funciones del repo se importan desde infrastructure/db/ directamente
       // para que los vi.mock('.../infrastructure/db/invoice-repository') de los
       // tests las intercepten.
-      isAlreadyInvoiced: (orderId, storeName) => isAlreadyInvoiced(orderId, storeName),
+      findInvoiceStatus: (orderId, storeName) => findInvoiceStatus(orderId, storeName),
       createInvoice:     (data)               => createInvoice(data),
       updateInvoiceStamp: (id, data)          => updateInvoiceStamp(id, data),
       deleteById:        (id)                 => deleteById(id),

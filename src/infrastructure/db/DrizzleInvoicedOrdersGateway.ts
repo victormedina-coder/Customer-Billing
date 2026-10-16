@@ -28,7 +28,8 @@
  */
 
 import { getDb } from './client'
-import { invoices } from './schema'
+import { invoices, globalInvoices } from './schema'
+import { eq } from 'drizzle-orm'
 import type {
   InvoicedOrdersGateway,
   InvoicedOrderKeys,
@@ -39,10 +40,20 @@ export class DrizzleInvoicedOrdersGateway implements InvoicedOrdersGateway {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async listInvoicedOrderKeys(_storeName: string, _period: GlobalPeriod): Promise<InvoicedOrderKeys> {
     const db = getDb()
-    const rows = await db.select({ orderId: invoices.orderId }).from(invoices)
+    const rows = await db.select({
+      orderId: invoices.orderId,
+      invoiceType: invoices.invoiceType,
+      status: invoices.status,
+      globalStatus: globalInvoices.status,
+    }).from(invoices).leftJoin(globalInvoices, eq(invoices.globalInvoiceId, globalInvoices.id))
 
     return {
       orderIds: new Set(rows.map((r) => r.orderId)),
+      unresolvedOrderIds: new Set(rows.filter((r) =>
+        (r.invoiceType === 'individual' && r.status === 'stamped_unconfirmed') ||
+        // Un global_invoice_id NULL también queda sin resolver: no hay timbrado confirmado.
+        (r.invoiceType === 'global' && r.globalStatus !== 'emitted'),
+      ).map((r) => r.orderId)),
       orderReferences: new Set(),
     }
   }

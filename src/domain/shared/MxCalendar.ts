@@ -64,6 +64,42 @@ export function getMxOffsetMs(utcDate: Date): number {
   return mxMs - utcMs // negativo para UTC-6
 }
 
+/** Interpreta una fecha sin zona como hora local de America/Mexico_City. */
+export function parseMxLocalDateTime(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/.exec(value)
+  if (!match) return null
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fraction, zone] = match
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  const hour = Number(hourText)
+  const minute = Number(minuteText)
+  const second = Number(secondText)
+  const millisecond = Number((fraction?.slice(1) ?? '').padEnd(3, '0').slice(0, 3))
+
+  const calendar = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond))
+  if (
+    year < 100 ||
+    calendar.getUTCFullYear() !== year ||
+    calendar.getUTCMonth() + 1 !== month ||
+    calendar.getUTCDate() !== day ||
+    calendar.getUTCHours() !== hour ||
+    calendar.getUTCMinutes() !== minute ||
+    calendar.getUTCSeconds() !== second
+  ) return null
+
+  if (zone) {
+    const parsed = new Date(value)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+
+  const localMs = calendar.getTime()
+  let instantMs = localMs - getMxOffsetMs(calendar)
+  instantMs = localMs - getMxOffsetMs(new Date(instantMs))
+  return new Date(instantMs)
+}
+
 /**
  * Retorna el instante UTC que corresponde al primer segundo (00:00:00.000 MX)
  * del día `day` del mes `month` (1-indexed) del año `year`, en zona horaria

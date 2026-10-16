@@ -74,22 +74,13 @@ function isUniqueViolation(err: unknown): boolean {
 // Funciones de repositorio (API funcional — compatible con los imports existentes)
 // ---------------------------------------------------------------------------
 
-export async function isAlreadyInvoiced(
-  orderId: string,
-  storeName: string,
-): Promise<boolean> {
+export async function findInvoiceStatus(orderId: string, storeName: string): Promise<string | null> {
   const db = getDb()
-  const rows = await db
-    .select({ id: invoices.id })
-    .from(invoices)
-    .where(
-      and(
-        eq(invoices.orderId, orderId),
-        eq(invoices.storeName, storeName),
-      ),
-    )
-    .limit(1)
-  return rows.length > 0
+  const rows = await db.select({ status: invoices.status }).from(invoices).where(and(
+    eq(invoices.orderId, orderId),
+    eq(invoices.storeName, storeName),
+  )).limit(1)
+  return rows[0]?.status ?? null
 }
 
 export async function findByOrder(
@@ -158,10 +149,11 @@ export async function findById(id: string): Promise<InvoiceRow | null> {
  * fila queda huérfana y bloquea reintentos del mismo pedido para siempre
  * (UNIQUE(order_id, store_name)).
  *
- * Esta función borra la fila SOLO si sigue en 'pending' y es más vieja que
- * `ttlMinutes` — nunca toca 'emitted' ni 'stamped_unconfirmed' (ese último
- * status indica que el CFDI YA existe en Facturama aunque la fila no se haya
- * podido confirmar; reapearla permitiría un segundo timbrado duplicado).
+ * Esta función borra SOLO una fila individual si sigue en 'pending' y es más
+ * vieja que `ttlMinutes` — nunca toca membresías globales, 'emitted' ni
+ * 'stamped_unconfirmed' (ese último
+ * status indica que el intento pudo haber generado un CFDI en Facturama;
+ * reapearla permitiría un segundo timbrado duplicado).
  *
  * Devuelve `true` si liberó el cerrojo (la fila se borró), `false` si no
  * había nada que reapear (no existe, no es 'pending', o no es lo bastante
@@ -175,29 +167,30 @@ export async function reapIfStalePending(
 ): Promise<boolean> {
   const row = await findByOrder(orderId, storeName)
   if (!row) return false
-  if (row.status !== 'pending') return false
+  if (row.status !== 'pending' || row.invoiceType !== 'individual') return false
 
   const ageMs = now.getTime() - row.createdAt.getTime()
   const ttlMs = ttlMinutes * 60_000
   if (ageMs <= ttlMs) return false
 
   const db = getDb()
-  await db
+  const deleted = await db
     .delete(invoices)
-    .where(and(eq(invoices.id, row.id), eq(invoices.status, 'pending')))
-  return true
+    .where(and(eq(invoices.id, row.id), eq(invoices.status, 'pending'), eq(invoices.invoiceType, 'individual')))
+    .returning({ id: invoices.id })
+  return deleted.length > 0
 }
 
 export async function updateInvoiceStamp(
   id: string,
-  data: { facturamaId: string; uuidCfdi: string; status?: string },
+  data: { facturamaId?: string; uuidCfdi?: string; status?: string },
 ): Promise<InvoiceRow | null> {
   const db = getDb()
   const rows = await db
     .update(invoices)
     .set({
-      facturamaId: data.facturamaId,
-      uuidCfdi: data.uuidCfdi,
+      ...(data.facturamaId !== undefined ? { facturamaId: data.facturamaId } : {}),
+      ...(data.uuidCfdi !== undefined ? { uuidCfdi: data.uuidCfdi } : {}),
       status: data.status ?? 'emitted',
     })
     .where(eq(invoices.id, id))

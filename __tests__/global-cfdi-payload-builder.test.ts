@@ -79,8 +79,9 @@ describe('buildGlobalCfdiPayload — encabezado', () => {
     )
   })
 
-  it('NO manda OrderNumber (es exclusivo de las individuales)', () => {
-    expect(payload).not.toHaveProperty('OrderNumber')
+  it('manda la llave de correlación GLB en OrderNumber', () => {
+    const correlated = buildGlobalCfdiPayload(PERIOD, 'credito', [makeMonthlyOrder()], 'tienda-ariat', EXPEDITION_PLACE, 'GLB:header-1')
+    expect(correlated.OrderNumber).toBe('GLB:header-1')
   })
 })
 
@@ -339,7 +340,7 @@ describe('buildGlobalCfdiPayload — Serie por marca', () => {
   })
 
   it.each([
-    ['ariat', 'GDL1'],
+    ['ariat', 'gdl1'],
     ['stetson', 'STET'],
     ['western-brothers', 'WB'],
   ])('clave de marca "%s" → Serie "%s"', (storeName, expected) => {

@@ -10,7 +10,7 @@ import { LookupOrderUseCase } from '../application/invoice/LookupOrderUseCase'
 import type { LookupOrderDeps } from '../application/invoice/LookupOrderUseCase'
 
 import { getOrderSource }    from './orderSource'
-import { isAlreadyInvoiced } from '../infrastructure/db/invoice-repository'
+import { findInvoiceStatus } from '../infrastructure/db/invoice-repository'
 import { isFullyRefunded }   from '../domain/orders/RefundPolicy'
 import { isWithinInvoiceWindow } from '../domain/eligibility/InvoiceWindowPolicy'
 import { getEvaluationNow } from '../infrastructure/time/getEvaluationNow'
@@ -30,7 +30,7 @@ export function makeLookupOrderUseCase(): LookupOrderUseCase {
       isWithinInvoiceWindow: (createdAt) => isWithinInvoiceWindow(createdAt, getEvaluationNow()),
     },
     repo: {
-      isAlreadyInvoiced: (orderId, storeName) => isAlreadyInvoiced(orderId, storeName),
+      findInvoiceStatus: (orderId, storeName) => findInvoiceStatus(orderId, storeName),
     },
   }
 

@@ -28,6 +28,7 @@ import type {
 } from '../src/application/invoice/EmitInvoiceUseCase'
 import type { NormalizedOrderWithPayment } from '../src/domain/orders/Order'
 import type { EmitResult, InvoiceStampingService } from '../src/domain/invoicing/ports/InvoiceStampingService'
+import { StampPreparationError } from '../src/application/shared/StampPreparationError'
 
 const ORDER_ID   = 'gid://shopify/Order/reap-test-1'
 const STORE_NAME = 'Tienda Ariat Nogales'
@@ -98,7 +99,7 @@ function makeStamping(overrides: Partial<InvoiceStampingService> = {}): InvoiceS
  * choca, 2do intento tras reap tiene éxito).
  */
 function makeRepo(config: {
-  isAlreadyInvoiced?: boolean
+  invoiceStatus?: string | null
   createInvoiceResults: Array<{ created: true; invoice: { id: string } } | { created: false; reason: string }>
   reapIfStalePending?: (orderId: string, storeName: string, ttlMinutes: number, now: Date) => Promise<boolean>
   updateInvoiceStamp?: EmitInvoiceRepo['updateInvoiceStamp']
@@ -111,7 +112,9 @@ function makeRepo(config: {
   })
   const reapIfStalePending = vi.fn(config.reapIfStalePending ?? (async () => false))
   return {
-    isAlreadyInvoiced: vi.fn(async () => config.isAlreadyInvoiced ?? false),
+    findInvoiceStatus: vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(config.invoiceStatus ?? null),
     createInvoice,
     updateInvoiceStamp: config.updateInvoiceStamp ?? vi.fn(async () => ({})),
     deleteById: vi.fn(async () => {}),
@@ -174,6 +177,7 @@ describe('EmitInvoiceUseCase — reap-lazy de pending huérfanas', () => {
 
   it('fila emitted: ALREADY_INVOICED, reapIfStalePending no libera nada', async () => {
     const repo = makeRepo({
+      invoiceStatus: 'emitted',
       createInvoiceResults: [
         { created: false, reason: 'already_invoiced' },
       ],
@@ -190,7 +194,7 @@ describe('EmitInvoiceUseCase — reap-lazy de pending huérfanas', () => {
     expect(repo.createInvoice).toHaveBeenCalledTimes(1)
   })
 
-  it('fila stamped_unconfirmed: nunca se reapea, ALREADY_INVOICED', async () => {
+  it('fila stamped_unconfirmed: nunca se reapea, INVOICE_UNCONFIRMED', async () => {
     const repo = makeRepo({
       createInvoiceResults: [
         { created: false, reason: 'already_invoiced' },
@@ -198,6 +202,7 @@ describe('EmitInvoiceUseCase — reap-lazy de pending huérfanas', () => {
       // El repo real nunca borra 'stamped_unconfirmed' — simulamos ese contrato
       // devolviendo false incondicionalmente, sin importar la antigüedad.
       reapIfStalePending: async () => false,
+      invoiceStatus: 'stamped_unconfirmed',
     })
     const useCase = new EmitInvoiceUseCase(makeDeps({ repo, pendingTtlMinutes: 0, now: () => new Date(Date.now() + 999_999_999) }))
 
@@ -205,7 +210,7 @@ describe('EmitInvoiceUseCase — reap-lazy de pending huérfanas', () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.error.code).toBe('ALREADY_INVOICED')
+      expect(result.error.code).toBe('INVOICE_UNCONFIRMED')
     }
     expect(repo.createInvoice).toHaveBeenCalledTimes(1)
   })
@@ -246,6 +251,83 @@ describe('EmitInvoiceUseCase — reap-lazy de pending huérfanas', () => {
 })
 
 describe('EmitInvoiceUseCase — stamped_unconfirmed tras timbrado exitoso', () => {
+  it.each([401, 403])('rechazo %i libera la reserva', async (statusCode) => {
+    const repo = makeRepo({ createInvoiceResults: [{ created: true, invoice: { id: 'rejected' } }] })
+    const error = Object.assign(new Error('rechazado'), { statusCode })
+    const stamping = makeStamping({ emitir: vi.fn(async () => { throw error }) })
+    const result = await new EmitInvoiceUseCase(makeDeps({ repo, stamping })).execute(INPUT)
+    expect(result.ok).toBe(false)
+    expect(repo.deleteById).toHaveBeenCalledWith('rejected')
+  })
+
+  it('error de preparación libera la reserva', async () => {
+    const repo = makeRepo({ createInvoiceResults: [{ created: true, invoice: { id: 'preparation' } }] })
+    const stamping = makeStamping({ emitir: vi.fn(async () => { throw new StampPreparationError(new Error('builder')) }) })
+    const result = await new EmitInvoiceUseCase(makeDeps({ repo, stamping })).execute(INPUT)
+    expect(result.ok).toBe(false)
+    expect(repo.deleteById).toHaveBeenCalledWith('preparation')
+  })
+
+  it('si falla liberar la reserva informa que debe contactar a facturación', async () => {
+    const repo = makeRepo({ createInvoiceResults: [{ created: true, invoice: { id: 'failed-delete' } }] })
+    repo.deleteById = vi.fn(async () => { throw new Error('DB unavailable') })
+    const stamping = makeStamping({ emitir: vi.fn(async () => { throw new StampPreparationError(new Error('builder')) }) })
+    const result = await new EmitInvoiceUseCase(makeDeps({ repo, stamping })).execute(INPUT)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.message).toBe('No pudimos liberar la reserva de facturación. Contacta a facturación antes de reintentar.')
+  })
+
+  it('ante timeout conserva la reserva para impedir otro timbrado', async () => {
+    const repo = makeRepo({ createInvoiceResults: [{ created: true, invoice: { id: 'timeout-invoice' } }] })
+    const stamping = makeStamping({
+      emitir: vi.fn(async () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError') }),
+    })
+    const useCase = new EmitInvoiceUseCase(makeDeps({ repo, stamping }))
+
+    const result = await useCase.execute(INPUT)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.code).toBe('FACTURAMA_ERROR')
+      expect(result.error.message).toBe('No pudimos confirmar si se generó la factura. Contacta a facturación antes de reintentar.')
+    }
+    expect(repo.deleteById).not.toHaveBeenCalled()
+    expect(repo.updateInvoiceStamp).toHaveBeenCalledWith('timeout-invoice', { status: 'stamped_unconfirmed' })
+  })
+
+  it('fallo de red conserva la reserva y avisa resultado incierto', async () => {
+    const repo = makeRepo({ createInvoiceResults: [{ created: true, invoice: { id: 'network' } }] })
+    const stamping = makeStamping({ emitir: vi.fn(async () => { throw new TypeError('fetch failed') }) })
+    const result = await new EmitInvoiceUseCase(makeDeps({ repo, stamping })).execute(INPUT)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.message).toMatch(/No pudimos confirmar/)
+    expect(repo.deleteById).not.toHaveBeenCalled()
+  })
+
+  it('no llama a Facturama si falla el marcado previo', async () => {
+    const repo = makeRepo({
+      createInvoiceResults: [{ created: true, invoice: { id: 'mark-failed' } }],
+      updateInvoiceStamp: async () => { throw new Error('DB unavailable') },
+    })
+    const stamping = makeStamping()
+    const useCase = new EmitInvoiceUseCase(makeDeps({ repo, stamping }))
+
+    const result = await useCase.execute(INPUT)
+    expect(result.ok).toBe(false)
+    expect(stamping.emitir).not.toHaveBeenCalled()
+  })
+
+  it('no informa éxito si la reserva desaparece después de timbrar', async () => {
+    const repo = makeRepo({
+      createInvoiceResults: [{ created: true, invoice: { id: 'missing-after-stamp' } }],
+      updateInvoiceStamp: vi.fn(async (_id, data) => data.status === 'stamped_unconfirmed' && data.facturamaId === undefined ? {} : null),
+    })
+    const useCase = new EmitInvoiceUseCase(makeDeps({ repo }))
+
+    const result = await useCase.execute(INPUT)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.message).toMatch(/soporte/i)
+  })
+
   it('si updateInvoiceStamp falla tras timbrar con éxito, se reintenta marcando stamped_unconfirmed', async () => {
     const updateCalls: Array<{ id: string; data: { status: string } }> = []
     const updateInvoiceStamp = vi.fn(async (id: string, data: { facturamaId: string; uuidCfdi: string; status: string }) => {
@@ -269,10 +351,11 @@ describe('EmitInvoiceUseCase — stamped_unconfirmed tras timbrado exitoso', () 
     // (best-effort, no tumbamos la respuesta al cliente).
     expect(result.ok).toBe(true)
 
-    expect(updateCalls).toHaveLength(2)
-    expect(updateCalls[0].data.status).toBe('emitted')
-    expect(updateCalls[1].data.status).toBe('stamped_unconfirmed')
-    expect(updateCalls[1].id).toBe('invoice-x')
+    expect(updateCalls).toHaveLength(3)
+    expect(updateCalls[0].data.status).toBe('stamped_unconfirmed')
+    expect(updateCalls[1].data.status).toBe('emitted')
+    expect(updateCalls[2].data.status).toBe('stamped_unconfirmed')
+    expect(updateCalls[2].id).toBe('invoice-x')
   })
 
   it('updateInvoiceStamp exitoso (status emitted): NO se intenta marcar stamped_unconfirmed', async () => {
@@ -286,7 +369,7 @@ describe('EmitInvoiceUseCase — stamped_unconfirmed tras timbrado exitoso', () 
     const result = await useCase.execute(INPUT)
 
     expect(result.ok).toBe(true)
-    expect(updateInvoiceStamp).toHaveBeenCalledTimes(1)
+    expect(updateInvoiceStamp).toHaveBeenCalledTimes(2)
     expect(updateInvoiceStamp).toHaveBeenCalledWith('invoice-y', expect.objectContaining({ status: 'emitted' }))
   })
 })

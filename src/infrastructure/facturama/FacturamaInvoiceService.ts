@@ -12,8 +12,10 @@ import {
   cancelarCFDI,
   enviarCFDIEmail,
   getExpeditionPlace,
+  isFacturamaConfigured,
 } from './facturamaClient'
 import { buildCfdiPayload } from './cfdiPayloadBuilder'
+import { StampPreparationError } from '../../application/shared/StampPreparationError'
 
 /**
  * Resuelve el Lugar de Expedición del CFDI.
@@ -37,10 +39,17 @@ export class FacturamaInvoiceService implements InvoiceStampingService {
     fiscal: FiscalInput
   }): Promise<EmitResult> {
     const { order, fiscal } = payload
-    const expeditionPlace = await resolveExpeditionPlace()
-    // buildCfdiPayload espera NormalizedOrderWithPayment; Order es compatible
-    // porque ShopifyOrderSource siempre devuelve NormalizedOrderWithPayment.
-    const cfdiPayload = buildCfdiPayload(order as NormalizedOrderWithPayment, fiscal, expeditionPlace)
+    let cfdiPayload: ReturnType<typeof buildCfdiPayload>
+    try {
+      if (!isFacturamaConfigured()) {
+        throw new Error('Facturama no está configurado: faltan FACTURAMA_USER o FACTURAMA_PASS')
+      }
+      const expeditionPlace = await resolveExpeditionPlace()
+      // ShopifyOrderSource siempre devuelve NormalizedOrderWithPayment.
+      cfdiPayload = buildCfdiPayload(order as NormalizedOrderWithPayment, fiscal, expeditionPlace)
+    } catch (cause) {
+      throw new StampPreparationError(cause)
+    }
     const resp = await emitirCFDI(cfdiPayload)
 
     const facturamaId = resp.Id

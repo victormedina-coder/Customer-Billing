@@ -67,6 +67,12 @@ export interface GlobalPeriod {
    * contrato previo de `mxMonthBounds`/`mxDayBounds`.
    */
   rangeMx(): { from: Date; to: Date }
+  /**
+   * Ventana de timbrado: rangeMx desplazada 24 horas porque el cron timbra
+   * después del corte, dentro del plazo SAT. `to` es inclusivo, igual que
+   * en rangeMx: el último milisegundo anterior al siguiente corte.
+   */
+  stampWindowMx(): { from: Date; to: Date }
   /** Clave SAT c_Periodicidad: '04' = Mensual, '01' = Diario. */
   periodicityCode(): '01' | '04'
   /** Mes en formato SAT de 2 dígitos, '01'..'12'. */
@@ -87,6 +93,14 @@ function validateMonth(month: number): void {
   }
 }
 
+function shiftOneDay({ from, to }: { from: Date; to: Date }): { from: Date; to: Date } {
+  const dayMs = 24 * 60 * 60 * 1000
+  return {
+    from: new Date(from.getTime() + dayMs),
+    to: new Date(to.getTime() + dayMs),
+  }
+}
+
 /**
  * Construye un GlobalPeriod MENSUAL validado. `month` es 1-indexed (1 = enero).
  * Conservada INTACTA (misma firma/comportamiento) para no romper los call
@@ -102,15 +116,17 @@ export function createGlobalPeriod(
 
   const previousMonth = month === 1 ? 12 : month - 1
   const previousYear = month === 1 ? year - 1 : year
+  const rangeMx = () => ({
+    from: mxMonthInvoiceCutoff(previousYear, previousMonth, cutoffHour),
+    to: new Date(mxMonthInvoiceCutoff(year, month, cutoffHour).getTime() - 1),
+  })
 
   return {
     year,
     month,
     day: undefined,
-    rangeMx: () => ({
-      from: mxMonthInvoiceCutoff(previousYear, previousMonth, cutoffHour),
-      to: new Date(mxMonthInvoiceCutoff(year, month, cutoffHour).getTime() - 1),
-    }),
+    rangeMx,
+    stampWindowMx: () => shiftOneDay(rangeMx()),
     periodicityCode: () => '04',
     monthsCode: () => String(month).padStart(2, '0'),
     yearString: () => String(year),
@@ -136,14 +152,17 @@ export function createDailyGlobalPeriod(
     throw new Error(`GlobalPeriod: day inválido (${day}) para ${year}-${String(month).padStart(2, '0')}, debe ser 1..${daysInMonth}`)
   }
 
+  const rangeMx = () => ({
+    from: mxDayInvoiceCutoff(year, month, day - 1, cutoffHour),
+    to: new Date(mxDayInvoiceCutoff(year, month, day, cutoffHour).getTime() - 1),
+  })
+
   return {
     year,
     month,
     day,
-    rangeMx: () => ({
-      from: mxDayInvoiceCutoff(year, month, day - 1, cutoffHour),
-      to: new Date(mxDayInvoiceCutoff(year, month, day, cutoffHour).getTime() - 1),
-    }),
+    rangeMx,
+    stampWindowMx: () => shiftOneDay(rangeMx()),
     periodicityCode: () => '01',
     monthsCode: () => String(month).padStart(2, '0'),
     yearString: () => String(year),

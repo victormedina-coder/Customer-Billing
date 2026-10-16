@@ -46,6 +46,76 @@ const KEY: GlobalInvoiceIdentity = {
 
 describe.skipIf(skip)('DrizzleGlobalInvoiceRepository (integration, Railway test DB)', () => {
 
+  it('releaseHeader borra membresías y conserva la lápida para nextChunkIndex', async () => {
+    const created = await repo.createGlobalHeader(KEY)
+    if (!created.created) throw new Error('fixture inválida')
+    await repo.updateGlobalStamp(created.header.id, { status: 'stamped_unconfirmed' })
+    await createInvoice({ orderId: 'release-order', orderNumber: '#100', storeName: KEY.storeName, invoiceType: 'global', globalInvoiceId: created.header.id })
+
+    await repo.releaseHeader(created.header.id)
+    expect(await repo.releaseHeader(created.header.id)).toBe('already_applied')
+
+    const rows = await cleanupDb!.select().from(schema.globalInvoices).where(eq(schema.globalInvoices.id, created.header.id))
+    const memberships = await cleanupDb!.select().from(schema.invoices).where(eq(schema.invoices.globalInvoiceId, created.header.id))
+    expect(rows[0].status).toBe('released')
+    expect(memberships).toHaveLength(0)
+    expect(await repo.filterInvoicedOrderIds(KEY.storeName, ['release-order'])).toEqual(new Set())
+    expect(await repo.nextChunkIndex(KEY.storeName, KEY.periodYear, KEY.periodMonth, undefined, KEY.paymentBucket)).toBe(1)
+    await expect(repo.updateGlobalStamp(created.header.id, { status: 'emitted', facturamaId: 'late', uuidCfdi: 'late-uuid' })).rejects.toThrow()
+    await expect(repo.updateGlobalStamp(created.header.id, { status: 'stamped_unconfirmed' })).rejects.toThrow()
+    const afterLate = await cleanupDb!.select().from(schema.globalInvoices).where(eq(schema.globalInvoices.id, created.header.id))
+    expect(afterLate[0].status).toBe('released')
+  })
+
+  it('listForReconciliation incluye pendientes, inciertos y lápidas recientes; confirmHeader emite', async () => {
+    const pending = await repo.createGlobalHeader(KEY)
+    const uncertain = await repo.createGlobalHeader({ ...KEY, chunkIndex: 1 })
+    const released = await repo.createGlobalHeader({ ...KEY, chunkIndex: 2 })
+    if (!pending.created || !uncertain.created || !released.created) throw new Error('fixture inválida')
+    await repo.updateGlobalStamp(uncertain.header.id, { status: 'stamped_unconfirmed' })
+    await repo.updateGlobalStamp(released.header.id, { status: 'stamped_unconfirmed' })
+    await repo.releaseHeader(released.header.id)
+
+    const listed = await repo.listForReconciliation(new Date())
+    expect(listed.map(row => row.id).sort()).toEqual([pending.header.id, uncertain.header.id, released.header.id].sort())
+    expect(listed.find(row => row.id === uncertain.header.id)?.correlationKey).toBe(`GLB:${uncertain.header.id}`)
+    expect(listed.find(row => row.id === pending.header.id)?.correlationKey).toBe(`GLB:${pending.header.id}`)
+    expect(await repo.listAllGlobalFacturamaIds()).toEqual([])
+    await repo.confirmHeader(uncertain.header.id, { facturamaId: 'F-1', uuidCfdi: 'U-1' })
+    expect(await repo.confirmHeader(uncertain.header.id, { facturamaId: 'F-1', uuidCfdi: 'U-1' })).toBe('already_applied')
+    await expect(repo.confirmHeader(uncertain.header.id, { facturamaId: 'OTHER', uuidCfdi: 'U-1' })).rejects.toThrow()
+    const after = await cleanupDb!.select().from(schema.globalInvoices).where(eq(schema.globalInvoices.id, uncertain.header.id))
+    expect(after[0]).toMatchObject({ status: 'emitted', facturamaId: 'F-1', uuidCfdi: 'U-1' })
+    const emittedIds = await repo.listEmittedFacturamaIdsBetween(new Date(Date.now() - 60_000), new Date(Date.now() + 60_000))
+    expect(emittedIds).toContain('F-1')
+    expect((await repo.listForReconciliation(new Date())).map(row => row.id)).not.toContain(uncertain.header.id)
+    expect(await repo.listEmittedHeaderIds()).toContain(uncertain.header.id)
+  })
+
+  it('mantiene pendientes e inciertos antiguos y omite lápidas de más de 35 días', async () => {
+    const pending = await repo.createGlobalHeader(KEY)
+    const uncertain = await repo.createGlobalHeader({ ...KEY, chunkIndex: 1 })
+    const released = await repo.createGlobalHeader({ ...KEY, chunkIndex: 2 })
+    if (!pending.created || !uncertain.created || !released.created) throw new Error('fixture inválida')
+    await repo.updateGlobalStamp(uncertain.header.id, { status: 'stamped_unconfirmed' })
+    await repo.releaseHeader(released.header.id)
+    await cleanupDb!.update(schema.globalInvoices).set({ createdAt: new Date(Date.now() - 36 * 86_400_000) })
+    expect((await repo.listForReconciliation(new Date())).map(row => row.id).sort()).toEqual([pending.header.id, uncertain.header.id].sort())
+  })
+
+  it('lista sólo headers sin resolver de la tienda y periodo exactos', async () => {
+    const pending = await repo.createGlobalHeader(KEY)
+    const uncertain = await repo.createGlobalHeader({ ...KEY, chunkIndex: 1 })
+    const emitted = await repo.createGlobalHeader({ ...KEY, chunkIndex: 2 })
+    await repo.createGlobalHeader({ ...KEY, periodMonth: 7, chunkIndex: 3 })
+    if (!pending.created || !uncertain.created || !emitted.created) throw new Error('fixture inválida')
+    await repo.updateGlobalStamp(uncertain.header.id, { status: 'stamped_unconfirmed', itemCount: 3 })
+    await repo.updateGlobalStamp(emitted.header.id, { status: 'emitted', itemCount: 2 })
+
+    const unresolved = await repo.listUnresolvedHeaders(KEY.storeName, KEY.periodYear, KEY.periodMonth, KEY.periodDay)
+    expect(unresolved.map((header) => [header.chunkIndex, header.status, header.itemCount]).sort((a, b) => Number(a[0]) - Number(b[0]))).toEqual([[0, 'pending', 0], [1, 'stamped_unconfirmed', 3]])
+  })
+
   // ── createGlobalHeader — idempotencia del UNIQUE compuesto ─────────────────
 
   it('crea el encabezado en pending con facturamaId/uuidCfdi/itemCount en null/0', async () => {
@@ -87,63 +157,15 @@ describe.skipIf(skip)('DrizzleGlobalInvoiceRepository (integration, Railway test
     expect(stetson.created).toBe(true)
   })
 
-  // ── reapStaleGlobalHeader — SOLO pending viejo ──────────────────────────────
-
-  it('reapea un encabezado pending más viejo que el TTL y devuelve true', async () => {
-    const created = await repo.createGlobalHeader(KEY)
-    expect(created.created).toBe(true)
-
-    const future = new Date(Date.now() + 20 * 60_000)
-    const reaped = await repo.reapStaleGlobalHeader(KEY, 10, future)
-    expect(reaped).toBe(true)
-
-    // El cerrojo quedó libre: se puede volver a crear el mismo encabezado.
-    const retried = await repo.createGlobalHeader(KEY)
-    expect(retried.created).toBe(true)
-  })
-
-  it('NO reapea un encabezado pending reciente (dentro del TTL)', async () => {
-    const created = await repo.createGlobalHeader(KEY)
-    expect(created.created).toBe(true)
-
-    const reaped = await repo.reapStaleGlobalHeader(KEY, 10, new Date())
-    expect(reaped).toBe(false)
-  })
-
-  it('NUNCA reapea un encabezado emitted aunque sea viejo', async () => {
-    const created = await repo.createGlobalHeader(KEY)
-    expect(created.created).toBe(true)
-    if (!created.created) return
-    await repo.updateGlobalStamp(created.header.id, {
-      status: 'emitted',
-      facturamaId: 'GF-001',
-      uuidCfdi: crypto.randomUUID(),
-      itemCount: 5,
-    })
-
-    const future = new Date(Date.now() + 20 * 60_000)
-    const reaped = await repo.reapStaleGlobalHeader(KEY, 10, future)
-    expect(reaped).toBe(false)
-
-    // El choque del UNIQUE sigue vivo — no se liberó el cerrojo.
-    const retried = await repo.createGlobalHeader(KEY)
-    expect(retried.created).toBe(false)
-  })
-
-  it('NUNCA reapea un encabezado stamped_unconfirmed aunque sea viejo — invariante anti-doble-timbre', async () => {
-    const created = await repo.createGlobalHeader(KEY)
-    expect(created.created).toBe(true)
-    if (!created.created) return
-    await repo.updateGlobalStamp(created.header.id, { status: 'stamped_unconfirmed' })
-
-    const future = new Date(Date.now() + 20 * 60_000)
-    const reaped = await repo.reapStaleGlobalHeader(KEY, 10, future)
-    expect(reaped).toBe(false)
-  })
-
-  it('devuelve false cuando no existe encabezado para esa identidad', async () => {
-    const reaped = await repo.reapStaleGlobalHeader(KEY, 10, new Date())
-    expect(reaped).toBe(false)
+  it('calcula el siguiente índice sobre todos los estados del periodo y bucket', async () => {
+    expect(await repo.nextChunkIndex(KEY.storeName, KEY.periodYear, KEY.periodMonth, undefined, KEY.paymentBucket)).toBe(0)
+    const first = await repo.createGlobalHeader(KEY)
+    expect(first.created).toBe(true)
+    if (!first.created) return
+    await repo.updateGlobalStamp(first.header.id, { status: 'stamped_unconfirmed' })
+    await repo.createGlobalHeader({ ...KEY, chunkIndex: 1 })
+    expect(await repo.nextChunkIndex(KEY.storeName, KEY.periodYear, KEY.periodMonth, undefined, KEY.paymentBucket)).toBe(2)
+    expect(await repo.nextChunkIndex(KEY.storeName, KEY.periodYear, KEY.periodMonth, 15, KEY.paymentBucket)).toBe(0)
   })
 
   // ── updateGlobalStamp ────────────────────────────────────────────────────────

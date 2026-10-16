@@ -162,20 +162,56 @@ El servidor de desarrollo corre en `http://localhost:3000` (con `-H 0.0.0.0`, ta
 | `test` | `vitest run` | Corre la suite de tests una vez |
 | `test:watch` | `vitest` | Tests en modo watch |
 | `test:coverage` | `vitest run --coverage` | Tests con reporte de cobertura |
+| `test:e2e` | `playwright test` | Pruebas E2E del portal en Chromium (ver [Testing](#testing)) |
+| `test:e2e:ui` | `playwright test --ui` | E2E en modo interactivo, para depurar |
 | `db:generate` | `drizzle-kit generate` | Genera una migración a partir del schema |
 | `db:migrate` | `drizzle-kit migrate` | Aplica migraciones pendientes |
 
 ## Testing
 
-El proyecto usa **Vitest** (`__tests__/`), con 283 tests activos (más 19 de integración que se saltan si falta configuración). Cubre dominio (cálculo fiscal, ventana de facturación, reembolsos), clientes HTTP (Shopify, Facturama), handlers de rutas (mapa error→HTTP), orquestación de `emit` (insert-first, rollback, correo best-effort) y utilidades (redacción de logs, rate limiting, matching de monto).
+El proyecto usa **Vitest** (`__tests__/`) para unitarias e integración, y **Playwright** (`e2e/`) para el recorrido del portal en el navegador. No se documenta aquí un conteo de tests (envejece en cada commit): el número real sale de la corrida.
+
+Cobertura (Vitest): dominio (cálculo fiscal, ventana de facturación, reembolsos), clientes HTTP (Shopify, Facturama), handlers de rutas (mapa error→HTTP), orquestación de `emit` (insert-first, rollback, correo best-effort), clasificación de resultados de timbrado inciertos y manejo de timeouts, estados de error del portal, y utilidades (redacción de logs, rate limiting, matching de monto).
+
+### Vitest
+
+`vitest.config.ts` define dos proyectos:
+
+- **`unit`**: todo `__tests__/` salvo los archivos de integración. Usa fakes y mocks en memoria, no necesita base de datos y puede correr en paralelo.
+- **`integration`**: exactamente los archivos de `INTEGRATION_TEST_FILES` en `vitest.config.ts`: `invoice-repository.test.ts`, `invoiced-orders-gateway.test.ts` y `global-invoice-repository.test.ts`. Comparten las mismas tablas de una Postgres real, por eso se serializan entre sí (`fileParallelism: false`); en paralelo se pisarían y la suite quedaría intermitente. Se saltan solos si falta `DATABASE_URL_TEST`.
 
 ```bash
-npm test              # correr toda la suite una vez
-npm run test:watch    # modo watch
-npm run test:coverage # con cobertura
+npx vitest run --project unit      # solo unitarias, sin base de datos
+npm test -- --maxWorkers=1         # suite completa (unit + integration)
+npm run test:watch                 # modo watch
+npm run test:coverage              # con cobertura
 ```
 
-Los tests de `invoice-repository` (integración) requieren `DATABASE_URL_TEST` apuntando a una base de datos de test real (se recomienda una segunda base en el mismo proyecto de Railway); sin esa variable, se saltan automáticamente.
+El `--` de `npm test -- --maxWorkers=1` separa los argumentos de npm de los que se pasan a `vitest run`.
+
+`vitest.config.ts` lee el `.env` local y, si existe `DATABASE_URL_TEST`, **sobrescribe `DATABASE_URL` con ese valor** en el proceso de tests. Así el código de producción (`getDb()`) conecta a la base de test sin necesidad de mocks.
+
+> **⚠️ `DATABASE_URL_TEST` debe apuntar a una base usada ÚNICAMENTE para tests: nunca producción, nunca la base de la app sandbox.** Los tests de integración ejecutan `TRUNCATE TABLE invoices, global_invoices RESTART IDENTITY CASCADE` antes de cada test (`invoice-repository`, `invoiced-orders-gateway` y `global-invoice-repository`). Eso borra los candados anti-doble-facturación; ya vació la base del sandbox una vez, el 2026-10-07. Se recomienda una segunda base en el mismo proyecto de Railway.
+
+Ningún test llama de verdad a Facturama, Shopify ni SMTP: los clientes HTTP se prueban con `fetch` mockeado, el timbrado y el correo con fakes. Lo único real que tocan es esa base de test.
+
+Como el `.env` se carga en los tests, los que prueban el fallback de serie aíslan `ARIAT_FACTURAMA_SERIE`, `STETSON_FACTURAMA_SERIE` y `WB_FACTURAMA_SERIE` con `vi.stubEnv`, para que la serie real del `.env` no altere el resultado.
+
+### E2E con Playwright
+
+```bash
+npm ci
+npx playwright install chromium
+npm run test:e2e        # corrida normal
+npm run test:e2e:ui     # modo interactivo, para depurar
+```
+
+Playwright levanta su propio Next.js en `127.0.0.1:4173`; ese puerto debe estar libre (`reuseExistingServer=false`, para no reutilizar un servidor ajeno con otra configuración). Las trazas y capturas de los fallos quedan en `test-results/` y `playwright-report/`, que no se versionan.
+
+- `e2e/portal.spec.ts` recorre el portal en Chromium: consulta del ticket, validación fiscal y consentimientos, confirmación, emisión, descargas, reenvío, errores, reinicio y persistencia de la sesión. Intercepta todas las llamadas del navegador a `/api/**` y falla ante una ruta inesperada.
+- `e2e/api.spec.ts` llama a las rutas locales para verificar el rechazo de entradas inválidas y la respuesta de emisión simulada. No hace un timbrado real.
+
+**Aislamiento:** el servidor de Playwright arranca con `EMIT_MOCK=true`, credenciales de Facturama y Shopify vacías, y sin `DATABASE_URL`, `REDIS_URL` ni secreto del cron global (`GLOBAL_INVOICE_SECRET`). También fija una fecha de desarrollo (`DEV_NOW_OVERRIDE`) para que la ventana de facturación siga abierta. Por eso Playwright **no prueba** Facturama, Shopify, SMTP, la base de datos ni el cron global real: eso lo cubren las pruebas de `__tests__/`, y una prueba fiscal completa necesita un ambiente sandbox con datos separados de producción.
 
 ## Variables de entorno
 
@@ -228,6 +264,13 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 | Variable | Descripción |
 |---|---|
 | `GLOBAL_INVOICE_SECRET` | Secreto compartido que autentica al cron/job interno que dispara el endpoint (header `x-global-secret`, comparación en tiempo constante). Sin ella, el endpoint responde `503 FEATURE_NOT_CONFIGURED`. |
+| `FACTURAMA_GLOBAL_TIMEOUT_MS` | Tiempo máximo del POST de CFDI global en milisegundos (entero >= 1; default `120000`). No altera el timeout de `15000` ms del CFDI individual. Un timeout deja la reserva en `stamped_unconfirmed` para conciliación. |
+| `GLOBAL_RECONCILE_APPLY` | `true` (default) aplica confirmaciones y liberaciones tras consultar Facturama; `false` solo reporta decisiones para diagnóstico. |
+| `GLOBAL_RECONCILE_MIN_AGE_MINUTES` | Edad mínima antes de liberar reservas sin timbrado (entero >= 1; default `30`). Da tiempo a que aparezca un timbrado tardío y permite lanzar la segunda corrida manual a los 30 min sin dejar de poder revisar la primera en Facturama. |
+| `GLOBAL_ORDER_CHECK_MAX_CFDIS` | Maximo de CFDI activos cuyos Items consulta la verificacion informativa por pedido (entero >= 1; default `30`); si se supera, reporta truncamiento. |
+| `GLOBAL_ORDER_CHECK_BUDGET_MS` | Presupuesto total para consultar Items después de emitir todos los chunks (entero >= 1; default `30000` ms); al agotarse, reporta truncamiento. |
+| `GLOBAL_FACTURAMA_GLOBALS_CHECK` | Verificación de globales en Facturama activa por defecto. `off` la desactiva y devuelve el comportamiento anterior; usar solo como escape operativo con revisión de contabilidad. |
+| `GLOBAL_FACTURAMA_CHECK_BUDGET_MS` | Presupuesto por corrida para consultar conceptos de globales (entero >= 1; default `60000` ms). Al agotarse, la tienda afectada queda `unavailable` y no emite. |
 | `DEV_NOW_OVERRIDE` | **Solo fuera de producción** (guard duro por `NODE_ENV`, ver `getEvaluationNow`). Fecha ISO para simular el instante "ahora" al resolver periodos `relative` (R4) o la ventana de facturación (R3). **Nunca definir en el `.env` de producción.** |
 
 ### Otros
@@ -245,13 +288,10 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 
 ## Cron — Facturación Global (Railway)
 
-`POST /api/global/emit` está pensado para dispararse desde un *Scheduled
-Job* de Railway (no desde el navegador). El body soporta periodo explícito
-(`{year, month[, day]}`) o resolución `relative` (`current-month` /
-`previous-month` / `yesterday` / `today`), mutuamente excluyente con lo
-explícito; un body vacío usa el default histórico (mes anterior en zona MX). Detalle
-completo de los dos cron jobs (sandbox diario y producción mensual), sus
-bodies y schedules — ver **`docs/11-cron-facturacion-global.md`**.
+`POST /api/global/emit` se dispara desde un *Scheduled Job* de Railway.
+El body admite `{year, month}` o `{"relative":"current-month"}` /
+`{"relative":"previous-month"}`; un body vacío usa el mes anterior en zona MX.
+El endpoint actual solo factura periodos mensuales.
 
 **Cron de producción (mensual):** schedule `0 3 1 * *` UTC = 21:00 MX del
 último día del mes, con body `{"relative":"current-month"}`. Regla de
@@ -259,22 +299,99 @@ negocio: contabilidad requiere el cierre el mismo día del mes (no el día 1
 de madrugada) porque las tiendas POS no venden después de las 21:00 — ver
 **`docs/adr/ADR-009-corte-mensual-2100.md`**.
 
-**Cron de sandbox (diario):** schedule `0 3 * * *` UTC = **21:00 MX**, con body
-`{"relative":"today"}` — la MISMA hora de corte que producción, y `today` es el
-análogo diario de `current-month`: al correr a las 21:00 el periodo sigue
-abierto, así que el diario ejercita el mismo riesgo del ADR-009 que la mensual
-(pedidos posteriores al corte no entran) en vez de facturar días ya cerrados.
-Pasar a producción es entonces solo `*` → `1` en el día-del-mes y cambiar el
-body a `{"relative":"current-month"}`.
+**No hay segundo cron.** Un solo disparo automático por mes (el de las 21:00 MX).
+Si deja pedidos sin facturar, la segunda corrida es **manual**, ver abajo.
 
-> ⚠️ El cron sandbox diario y los modos `relative: 'yesterday'` / `'today'` son
-> **[DAILY-SCAFFOLDING] test-only** — existen solo para probar el timbrado
-> diario en sandbox y se eliminarán antes del PR a `main`.
+### Segunda corrida manual
 
-> ⚠️ **No dispares el cron dos veces el mismo día MX con `today`.** La clave de
-> idempotencia es `(store, year, month, day, bucket, chunk)`: la segunda corrida
-> cae en `skipped_idempotent` y los pedidos creados ENTRE ambas corridas no se
-> facturan nunca. Una corrida por día.
+**Cuándo.** Solo si el correo de reporte de la primera corrida (o su `report`)
+muestra pedidos pendientes: headers `stamped_unconfirmed` o sin resolver,
+chunks `rolled_back` / `rollback_failed` / `reservation_failed`,
+`skipped_idempotent` con pedidos o pedidos `unresolvedOrders` (`db_unresolved`).
+También se requiere segunda corrida si la verificación de globales de una tienda
+queda `unavailable` por fallo transitorio de Facturama o por agotarse el presupuesto.
+Si el motivo es `Dato inválido en CFDI de Facturama`, revisar ese CFDI antes de volver a correr.
+Los estados `unattributable_global`, `store_without_serie` y
+`unrecognized_concepts` requieren revisar las globales con contabilidad antes
+de reintentar. `checked` permite emitir los pedidos restantes; los pedidos
+`facturama_global` ya están facturados y los `facturama_global_held` quedan
+retenidos por cola ambigua para revisión con contabilidad. `disabled` significa
+que el interruptor está apagado y se conserva la exclusión anterior.
+Los `wait` dejan el header sin resolver y también quedan cubiertos. Las alertas
+puras de conciliación (`alert_duplicate`, `alert_cancelled`, `alert_late_stamp`,
+global no explicada) requieren revisión en Facturama/contabilidad según el runbook;
+no se resuelven con otra corrida ni disparan esa sección. Si la primera salió
+limpia, no se hace nada. El correo
+trae la sección "Acción requerida: segunda corrida manual" con la hora más
+temprana y el body exacto; **esa sección es la fuente de verdad** de ambos datos
+(este README solo explica el porqué).
+
+**Ventana de tiempo.**
+- No antes de `GLOBAL_RECONCILE_MIN_AGE_MINUTES` (default 30 min) desde que se
+  crearon los headers sin resolver de la primera corrida. Antes de eso la
+  conciliación responde `wait` ("dentro del plazo de seguridad") y no libera
+  nada: la corrida no hace daño, pero tampoco sirve.
+- Dentro de las 24 h posteriores al corte (21:00 MX del último día del mes), el
+  plazo del SAT para el CFDI global.
+
+**Cómo.** `POST /api/global/emit` con el header `x-global-secret` y el periodo
+**explícito**:
+
+```powershell
+$headers = @{ 'x-global-secret' = $env:GLOBAL_INVOICE_SECRET }
+$url = 'https://<dominio-del-portal>/api/global/emit'   # URL de producción
+
+# 1) Revisar primero: concilia en modo lectura y no timbra
+Invoke-RestMethod -Uri $url -Method Post -Headers $headers `
+  -ContentType 'application/json' `
+  -Body '{"year":2026,"month":10,"dryRun":true}'
+
+# 2) Corrida real (mismo body sin dryRun). storeName es opcional
+Invoke-RestMethod -Uri $url -Method Post -Headers $headers `
+  -ContentType 'application/json' `
+  -Body '{"year":2026,"month":10}'
+```
+
+- Usar `{"year":YYYY,"month":M}` (ambos juntos; opcional `"storeName":"..."` para
+  una sola marca, que debe estar configurada o responde `422 STORE_NOT_CONFIGURED`).
+  **Nunca `{"relative":"current-month"}`** en la segunda corrida: después de
+  las 00:00 MX "mes en curso" ya es el mes siguiente y facturaría el periodo
+  equivocado. Si la corrida es la del 31-oct, el body es `year: 2026, month: 10`
+  aunque se ejecute el 1-nov.
+- Con `dryRun: true` la conciliación **no escribe** (`apply` queda en `false`):
+  solo lista las decisiones por header y no timbra. Sirve para ver qué
+  confirmaría o liberaría la corrida real antes de lanzarla. Como no libera, los
+  pedidos que la corrida real liberaría pueden aparecer aún como bloqueados en
+  el dry-run.
+- Si el endpoint responde `500`, el body trae igualmente el `report` completo:
+  significa que aún quedan pendientes (`hasFailures`), no que la llamada falló.
+- El periodo es la ventana rodante de **ADR-010**: `[corte anterior 21:00 MX,
+  corte actual 21:00 MX)`. La segunda corrida usa la misma ventana que la
+  primera, así que **nunca incluye pedidos posteriores al corte**; esos entran
+  en la global del mes siguiente.
+- Las globales de Facturama se verifican por fecha de TIMBRADO en la ventana
+  `[corte M-1 + 24 h, corte M + 24 h]`. Una corrida tardía sigue viendo las
+  globales anteriores dentro de esa ventana; las timbradas después de `window.to`
+  quedan fuera de la verificación del periodo M y solo las protege la BD.
+
+**Qué esperar.** Antes de emitir, la corrida concilia los headers pendientes
+contra Facturama (por llave `GLB:`). Si el CFDI existe, el header se **confirma**.
+Si no existe, tiene edad mínima cumplida, el listado de Facturama es sano y no
+hay globales ajenas sin explicar, se **libera** la reserva y esos pedidos se
+facturan **en esa misma corrida**. En cualquier otro caso queda `wait` o una
+alerta, y no se factura nada a ciegas (ver el runbook de abajo). Si tras la
+segunda corrida siguen pendientes, no repetir en bucle: diagnosticar con el
+runbook y, si es necesario, decidir con contabilidad.
+
+**Runbook de conciliación:** `alert_duplicate` indica dos CFDI activos con la
+misma llave; `alert_cancelled`, un CFDI cancelado; `alert_late_stamp`, un timbrado
+tras liberar la reserva. En cualquiera de esos casos, revisar los CFDI en
+Facturama y decidir con contabilidad la cancelación correspondiente. Un `wait`
+indica edad mínima pendiente, listado incompleto o una global ajena sin explicar.
+En este último caso, identificar quién la emitió en Facturama antes de liberar reservas.
+La verificacion por pedido consulta conceptos de Facturama solo si hay pedidos bloqueados o globales no explicadas; es informativa y no libera ni excluye pedidos.
+Si varios pedidos del periodo comparten la misma cola de recibo, la verificación los marca como ambiguos aunque la cola aparezca en una sola global (posible devolución/cambio sobre el mismo ticket).
+La conciliación compara llaves `GLB:` sin distinguir mayúsculas ni espacios externos. Un CFDI activo con llave `GLB:` huérfana veta la liberación y genera alerta. Un header con `facturamaId` guardado nunca se libera: se confirma si ese CFDI aparece activo, alerta si está cancelado y espera si falta en el listado.
 
 ## Despliegue (Railway)
 

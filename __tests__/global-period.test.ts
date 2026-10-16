@@ -180,3 +180,43 @@ describe('createDailyGlobalPeriod — rangeMx (ventana rodante de 24 h entre cor
     expect(daily.to.getTime() - daily.from.getTime()).toBeLessThan(monthly.to.getTime() - monthly.from.getTime())
   })
 })
+
+describe('GlobalPeriod — stampWindowMx', () => {
+  const contains = (window: { from: Date; to: Date }, instant: string): boolean => {
+    const time = new Date(instant).getTime()
+    return time >= window.from.getTime() && time <= window.to.getTime()
+  }
+
+  it('incluye el timbrado del 31-oct a las 21:04 MX en octubre', () => {
+    const window = createGlobalPeriod(2026, 10, 21).stampWindowMx()
+    expect(window.from.toISOString()).toBe('2026-10-02T03:00:00.000Z')
+    expect(window.to.toISOString()).toBe('2026-11-02T02:59:59.999Z')
+    expect(contains(window, '2026-11-01T03:04:00.000Z')).toBe(true)
+  })
+
+  it('ubica el timbrado del 30-sep a las 21:04 MX en septiembre, no en octubre', () => {
+    const instant = '2026-10-01T03:04:00.000Z'
+    expect(contains(createGlobalPeriod(2026, 9, 21).stampWindowMx(), instant)).toBe(true)
+    expect(contains(createGlobalPeriod(2026, 10, 21).stampWindowMx(), instant)).toBe(false)
+  })
+
+  it('incluye el último milisegundo anterior al corte del 1-nov', () => {
+    expect(contains(
+      createGlobalPeriod(2026, 10, 21).stampWindowMx(),
+      '2026-11-02T02:59:59.999Z',
+    )).toBe(true)
+  })
+
+  it('excluye el corte exacto del 1-nov a las 21:00 MX', () => {
+    expect(contains(
+      createGlobalPeriod(2026, 10, 21).stampWindowMx(),
+      '2026-11-02T03:00:00.000Z',
+    )).toBe(false)
+  })
+
+  it('desplaza también la ventana de la fábrica diaria', () => {
+    const window = createDailyGlobalPeriod(2026, 10, 31, 21).stampWindowMx()
+    expect(window.from.toISOString()).toBe('2026-11-01T03:00:00.000Z')
+    expect(window.to.toISOString()).toBe('2026-11-02T02:59:59.999Z')
+  })
+})

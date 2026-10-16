@@ -15,6 +15,7 @@ import type { Order } from '../../domain/orders/Order'
 import { ok, err } from '../shared/Result'
 import type { Result } from '../shared/Result'
 import { amountMatches } from '../../../lib/amount-match'
+import { INVOICE_UNCONFIRMED_MESSAGE } from './INVOICE_UNCONFIRMED_MESSAGE'
 
 // ─── Tipos de error ───────────────────────────────────────────────────────────
 
@@ -24,6 +25,7 @@ export type LookupErrorCode =
   | 'FULLY_REFUNDED'
   | 'DEADLINE_EXCEEDED'
   | 'ALREADY_INVOICED'
+  | 'INVOICE_UNCONFIRMED'
 
 export interface LookupError {
   code: LookupErrorCode
@@ -45,7 +47,7 @@ export interface LookupWindowPolicy {
 }
 
 export interface LookupRepo {
-  isAlreadyInvoiced(orderId: string, storeName: string): Promise<boolean>
+  findInvoiceStatus(orderId: string, storeName: string): Promise<string | null>
 }
 
 // ─── Deps ─────────────────────────────────────────────────────────────────────
@@ -119,14 +121,18 @@ export class LookupOrderUseCase {
     }
 
     // ── 6. Verificar doble-facturación ────────────────────────────────────────
-    const invoiced = await repo.isAlreadyInvoiced(order.id, order.storeName)
-    if (invoiced) {
+    const invoiceStatus = await repo.findInvoiceStatus(order.id, order.storeName)
+    if (invoiceStatus === 'stamped_unconfirmed') {
+      return err({ code: 'INVOICE_UNCONFIRMED', message: INVOICE_UNCONFIRMED_MESSAGE })
+    }
+    if (invoiceStatus === 'emitted') {
       return err({
         code: 'ALREADY_INVOICED',
         message: 'Este pedido ya cuenta con un CFDI emitido.',
       })
     }
 
+    // pending no bloquea el lookup: emit decide si reapea la reserva o rechaza el intento.
     return ok(order)
   }
 }

@@ -12,6 +12,7 @@ interface StepTicketProps {
   amount: string
   busy: boolean
   lookupError: LookupError
+  contactEmail?: string
   ticket: Ticket | null
   showFolioHelp: boolean
   onFolioChange: (v: string) => void
@@ -51,7 +52,7 @@ const BTN_GHOST: React.CSSProperties = {
 }
 
 export function StepTicket({
-  folio, amount, busy, lookupError, ticket, showFolioHelp,
+  folio, amount, busy, lookupError, contactEmail, ticket, showFolioHelp,
   onFolioChange, onAmountChange, onToggleFolioHelp,
   onLookup, onProceed, onDismissError,
 }: StepTicketProps) {
@@ -353,6 +354,21 @@ export function StepTicket({
               }}>
                 Entendido
               </button>
+            }
+          />
+        </div>
+      )}
+
+      {lookupError === 'unconfirmed' && (
+        <div style={{ marginBottom: 14 }}>
+          <AlertBanner
+            variant="warning"
+            title="Factura en verificación"
+            description={
+              <>
+                Tu factura está en verificación. Si no la recibes en 24 horas, contacta a facturación.
+                {contactEmail && <> Correo: <a href={`mailto:${contactEmail}`}>{contactEmail}</a>.</>}
+              </>
             }
           />
         </div>

@@ -56,6 +56,7 @@ const ERROR_STATUS: Record<LookupErrorCode, number> = {
   FULLY_REFUNDED:    409,
   DEADLINE_EXCEEDED: 422,
   ALREADY_INVOICED:  409,
+  INVOICE_UNCONFIRMED: 409,
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {

@@ -6,7 +6,7 @@
  * 1. PATRÓN INSERT-FIRST:
  *    - createInvoice se llama antes de emitir()
  *    - quien pierde la carrera (created:false) → 409 sin llamar a emitir()
- *    - isAlreadyInvoiced=true → 409 sin llegar al INSERT
+ *    - findInvoiceStatus=emitted → 409 sin llegar al INSERT
  *
  * 2. ROLLBACK EN FALLO DE TIMBRADO:
  *    - si emitir() lanza → deleteById(invoiceId) es llamado
@@ -121,7 +121,7 @@ vi.mock('../src/composition/orderSource', async () => ({
 }))
 
 vi.mock('../src/infrastructure/db/invoice-repository', async () => ({
-  isAlreadyInvoiced:  vi.fn(async () => false),
+  findInvoiceStatus:  vi.fn(async () => null),
   createInvoice:      vi.fn(async () => ({ created: true, invoice: makeInvoiceRow() })),
   updateInvoiceStamp: vi.fn(async () => makeInvoiceRow({ status: 'emitted' })),
   deleteById:         vi.fn(async () => {}),
@@ -166,7 +166,7 @@ beforeEach(async () => {
   vi.mocked(orderSourceMod.getOrderSource).mockReturnValue({
     findOrder: vi.fn(async () => VALID_ORDER),
   })
-  vi.mocked(dbRepo.isAlreadyInvoiced).mockImplementation(async () => false)
+  vi.mocked(dbRepo.findInvoiceStatus).mockImplementation(async () => null)
   vi.mocked(dbRepo.createInvoice).mockImplementation(async () => ({
     created: true as const,
     invoice: makeInvoiceRow(),
@@ -268,7 +268,7 @@ describe('orquestación emit — patrón insert-first', () => {
   })
 
   it('409 ALREADY_INVOICED en el SELECT previo — createInvoice no se llama', async () => {
-    vi.mocked(dbRepo.isAlreadyInvoiced).mockImplementation(async () => true)
+    vi.mocked(dbRepo.findInvoiceStatus).mockImplementation(async () => 'emitted')
 
     const res = await POST(makeEmitRequest())
 
@@ -276,6 +276,15 @@ describe('orquestación emit — patrón insert-first', () => {
     const body = await res.json() as { error: { code: string } }
     expect(body.error.code).toBe('ALREADY_INVOICED')
     expect(dbRepo.createInvoice).not.toHaveBeenCalled()
+    expect(dbRepo.findInvoiceStatus).toHaveBeenCalledTimes(1)
+  })
+
+  it('status null permite reservar y timbrar con una sola consulta previa', async () => {
+    const res = await POST(makeEmitRequest())
+
+    expect(res.status).toBe(200)
+    expect(dbRepo.findInvoiceStatus).toHaveBeenCalledTimes(1)
+    expect(dbRepo.createInvoice).toHaveBeenCalledTimes(1)
   })
 
   it('flujo feliz: updateInvoiceStamp se llama con facturamaId y uuid del timbrado', async () => {
@@ -287,9 +296,10 @@ describe('orquestación emit — patrón insert-first', () => {
 
     await POST(makeEmitRequest())
 
-    expect(stampArgs).toHaveLength(1)
-    expect(stampArgs[0][0]).toBe(INVOICE_ID)
-    expect(stampArgs[0][1]).toMatchObject({
+    expect(stampArgs).toHaveLength(2)
+    expect(stampArgs[0][1]).toMatchObject({ status: 'stamped_unconfirmed' })
+    expect(stampArgs[1][0]).toBe(INVOICE_ID)
+    expect(stampArgs[1][1]).toMatchObject({
       facturamaId: EMIT_RESULT.facturamaId,
       uuidCfdi:    EMIT_RESULT.uuid,
       status:      'emitted',
@@ -317,7 +327,7 @@ describe('orquestación emit — patrón insert-first', () => {
 describe('orquestación emit — rollback en fallo de timbrado', () => {
   it('llama a deleteById(invoiceId) cuando emitir() lanza', async () => {
     mockInvoiceService({
-      emitir: async () => { throw new Error('Facturama: RFC inválido') },
+      emitir: async () => { throw Object.assign(new Error('Facturama: RFC inválido'), { statusCode: 400 }) },
     })
 
     const res = await POST(makeEmitRequest())
@@ -328,7 +338,7 @@ describe('orquestación emit — rollback en fallo de timbrado', () => {
 
   it('503 FACTURAMA_ERROR incluso si deleteById también falla', async () => {
     mockInvoiceService({
-      emitir: async () => { throw new Error('Facturama error') },
+      emitir: async () => { throw Object.assign(new Error('Facturama error'), { statusCode: 400 }) },
     })
     vi.mocked(dbRepo.deleteById).mockImplementation(async () => {
       throw new Error('DB: connection reset')
@@ -343,7 +353,7 @@ describe('orquestación emit — rollback en fallo de timbrado', () => {
     expect(body.error.code).toBe('FACTURAMA_ERROR')
 
     const allMessages = consoleError.mock.calls.flat().map(String).join(' ')
-    expect(allMessages).toMatch(/pendiente|pending|limpiar|clean/i)
+    expect(allMessages).toContain('[emit] No se pudo limpiar la reserva tras rechazo del timbrado:')
 
     consoleError.mockRestore()
   })
@@ -403,8 +413,9 @@ describe('orquestación emit — correo best-effort', () => {
   })
 
   it('200 OK incluso cuando updateInvoiceStamp falla', async () => {
-    vi.mocked(dbRepo.updateInvoiceStamp).mockImplementation(async () => {
-      throw new Error('DB connection lost')
+    vi.mocked(dbRepo.updateInvoiceStamp).mockImplementation(async (_id: unknown, data: unknown) => {
+      if ((data as { status?: string }).status === 'emitted') throw new Error('DB connection lost')
+      return makeInvoiceRow({ status: 'stamped_unconfirmed' })
     })
 
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -629,9 +640,10 @@ describe('orquestación emit — subcaso crítico: timbrado exitoso pero updateI
     // El CFDI YA se timbró en Facturama — la respuesta al cliente sigue siendo 200.
     expect(res.status).toBe(200)
 
-    expect(stampCalls).toHaveLength(2)
-    expect(stampCalls[0].data).toMatchObject({ status: 'emitted' })
-    expect(stampCalls[1].data).toMatchObject({
+    expect(stampCalls).toHaveLength(3)
+    expect(stampCalls[0].data).toMatchObject({ status: 'stamped_unconfirmed' })
+    expect(stampCalls[1].data).toMatchObject({ status: 'emitted' })
+    expect(stampCalls[2].data).toMatchObject({
       status:      'stamped_unconfirmed',
       facturamaId: EMIT_RESULT.facturamaId,
       uuidCfdi:    EMIT_RESULT.uuid,
@@ -640,18 +652,24 @@ describe('orquestación emit — subcaso crítico: timbrado exitoso pero updateI
     consoleError.mockRestore()
   })
 
-  it('si también falla el marcado de stamped_unconfirmed, sigue respondiendo 200 y loguea para revisión manual', async () => {
+  it('si falla también el respaldo stamped_unconfirmed, responde 503 y registra conciliación manual', async () => {
+    let updateCount = 0
     vi.mocked(dbRepo.updateInvoiceStamp).mockImplementation(async () => {
-      throw new Error('DB connection lost')
+      updateCount += 1
+      if (updateCount > 1) throw new Error('DB connection lost')
+      return makeInvoiceRow({ status: 'stamped_unconfirmed' })
     })
 
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const res = await POST(makeEmitRequest())
 
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(503)
+    const body = await res.json() as { error: { code: string } }
+    expect(body.error.code).toBe('FACTURAMA_ERROR')
+    expect(updateCount).toBe(3)
     const allMessages = consoleError.mock.calls.flat().map(String).join(' ')
-    expect(allMessages).toMatch(/stamped_unconfirmed|manual|conciliar/i)
+    expect(allMessages).toMatch(/No se pudo marcar la fila como stamped_unconfirmed.*conciliar manualmente/i)
 
     consoleError.mockRestore()
   })
