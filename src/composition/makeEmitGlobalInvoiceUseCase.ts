@@ -10,9 +10,10 @@
  * cada llamada (ver brands.ts) — por lo que instanciarlos aquí es seguro y no
  * necesita una fábrica intermedia como `getOrderSource()`.
  *
- * Exclusión de ya facturado = UNIÓN de los dos canales (ver plan §4):
+ * Exclusión de ya facturado = UNIÓN de los tres canales (ver plan §4):
  *   1. DrizzleInvoicedOrdersGateway  — DB del Portal (individual + global).
  *   2. FacturamaInvoicedOrdersGateway — CFDIs emitidos vía la app de Facturama.
+ *   3. FacturamaIssuedCfdiLookup — conceptos de globales vigentes del periodo.
  */
 
 import { EmitGlobalInvoiceUseCase } from '../application/global/EmitGlobalInvoiceUseCase'
@@ -24,6 +25,8 @@ import { DrizzleGlobalInvoiceRepository } from '../infrastructure/db/DrizzleGlob
 import { DrizzleInvoicedOrdersGateway } from '../infrastructure/db/DrizzleInvoicedOrdersGateway'
 import { FacturamaInvoicedOrdersGateway } from '../infrastructure/facturama/FacturamaInvoicedOrdersGateway'
 import { FacturamaIssuedCfdiItemsLookup } from '../infrastructure/facturama/FacturamaIssuedCfdiItemsLookup'
+import { FacturamaIssuedCfdiLookup } from '../infrastructure/facturama/FacturamaIssuedCfdiLookup'
+import { resolveSerie } from '../infrastructure/facturama/brandSerie'
 import { listConfiguredBrands } from '../infrastructure/shopify/brands'
 import { logger } from '../infrastructure/observability/logger'
 
@@ -37,6 +40,14 @@ const DEFAULT_MAX_ITEMS_PER_CFDI = 250
 const DEFAULT_GLOBAL_TIMEOUT_MS = 120000
 const DEFAULT_ORDER_CHECK_MAX_CFDIS = 30
 const DEFAULT_ORDER_CHECK_BUDGET_MS = 30000
+const DEFAULT_GLOBALS_CHECK_BUDGET_MS = 60000
+
+export function getGlobalsCheckBudgetMs(): number {
+  const raw = process.env.GLOBAL_FACTURAMA_CHECK_BUDGET_MS
+  if (!raw) return DEFAULT_GLOBALS_CHECK_BUDGET_MS
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : DEFAULT_GLOBALS_CHECK_BUDGET_MS
+}
 
 export function getOrderCheckBudgetMs(): number {
   const raw = process.env.GLOBAL_ORDER_CHECK_BUDGET_MS
@@ -75,6 +86,7 @@ function getMaxItemsPerChunk(): number {
  * Debe invocarse dentro del handler POST (en cada request).
  */
 export function makeEmitGlobalInvoiceUseCase(): EmitGlobalInvoiceUseCase {
+  const storeNames = listConfiguredBrands().map((brand) => brand.key)
   const deps: EmitGlobalInvoiceDeps = {
     monthlyOrderSource: new ShopifyMonthlyOrderSource(),
     globalStamping: new FacturamaGlobalStamping(getFacturamaGlobalTimeoutMs()),
@@ -91,7 +103,14 @@ export function makeEmitGlobalInvoiceUseCase(): EmitGlobalInvoiceUseCase {
       isFullyRefunded: (order) => isFullyRefunded(order),
     },
     // La application no lee config — recibe las marcas configuradas inyectadas.
-    storeNames: listConfiguredBrands().map((brand) => brand.key),
+    storeNames,
+    ...(process.env.GLOBAL_FACTURAMA_GLOBALS_CHECK === 'off' ? {} : {
+      periodGlobalsCheck: {
+        issuedCfdiLookup: new FacturamaIssuedCfdiLookup(),
+        seriesByStore: Object.fromEntries(storeNames.map((store) => [store, resolveSerie(store)])),
+        budgetMs: getGlobalsCheckBudgetMs(),
+      },
+    }),
     maxItemsPerChunk: getMaxItemsPerChunk(),
     logger,
   }

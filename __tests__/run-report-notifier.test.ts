@@ -8,6 +8,7 @@ function makeStore(overrides: Partial<StoreReport> = {}): StoreReport {
   return {
     store: 'ariat',
     orderCheck: { ran: false, truncated: false, checkedCfdis: 0, results: [] },
+    facturamaGlobals: { status: 'disabled', checkedCfdis: 0, globals: [] },
     enumerated: 1,
     eligible: 1,
     skippedNonPos: 0,
@@ -37,7 +38,7 @@ function makeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
     dryRun: false,
     summary: {
       chunks: 1, emitted: 1, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0, stampedUnconfirmed: 0,
-      empty: 0, dryRun: 0, ordersEligible: 1, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, orderCheckFound: 0, orderCheckNotFound: 0, orderCheckAmbiguous: 0, hasFailures: false,
+      empty: 0, dryRun: 0, ordersEligible: 1, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, orderCheckFound: 0, orderCheckNotFound: 0, orderCheckAmbiguous: 0, heldOrders: 0, storesBlockedByFacturamaCheck: 0, hasFailures: false,
     },
     stores: [makeStore()],
     ...overrides,
@@ -45,6 +46,32 @@ function makeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
 }
 
 describe('formatGlobalRunReportEmail', () => {
+  it('propone segunda corrida cuando Facturama no está disponible', () => {
+    const store = makeStore({ facturamaGlobals: { status: 'unavailable', checkedCfdis: 0, globals: [], reason: 'timeout' } })
+    const text = formatGlobalRunReportEmail(makeReport({ stores: [store] }), {
+      finishedAt: new Date('2026-07-24T03:00:00Z'), minAgeMinutes: 30, cutoffHour: 21,
+    }).text
+    expect(text).toContain('Acción requerida: segunda corrida manual')
+    expect(text).toContain('Ariat: unavailable')
+    expect(text).not.toContain('No se resuelve con otra corrida: revisar con contabilidad.')
+  })
+
+  it('muestra retenidos y series para revisión contable', () => {
+    const store = makeStore({
+      facturamaGlobals: { status: 'checked', checkedCfdis: 1, globals: ['GDL1-7'] },
+      excludedAlreadyInvoiced: { count: 1, orders: [{ orderId: '1', reference: '#1', matchedBy: 'facturama_global_held', serieFolios: ['GDL1-7'], held: true }] },
+    })
+    const text = formatGlobalRunReportEmail(makeReport({ stores: [store] })).text
+    expect(text).toContain('RETENIDOS POR VERIFICACIÓN EN FACTURAMA')
+    expect(text).toContain('Serie-folio: GDL1-7')
+    expect(text).toContain('retenidos 1')
+    expect(text).toContain('No se resuelve con otra corrida: revisar con contabilidad.')
+  })
+
+  it('avisa cuando la verificación de globales está desactivada', () => {
+    expect(formatGlobalRunReportEmail(makeReport()).text).toContain('Verificación de globales: DESACTIVADA')
+  })
+
   it('abre con segunda corrida manual, hora del último header y límite 24 h tras el corte', () => {
     const ariat = makeStore({
       unresolvedHeaders: [
@@ -274,7 +301,7 @@ describe('formatGlobalRunReportEmail — totales de PEDIDOS (no CFDIs)', () => {
 
   const report = makeReport({
     day: undefined,
-    summary: { chunks: 9, emitted: 9, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0, ordersEligible: 50, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, orderCheckFound: 0, orderCheckNotFound: 0, orderCheckAmbiguous: 0, hasFailures: false },
+    summary: { chunks: 9, emitted: 9, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0, ordersEligible: 50, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0, orderCheckFound: 0, orderCheckNotFound: 0, orderCheckAmbiguous: 0, heldOrders: 0, storesBlockedByFacturamaCheck: 0, hasFailures: false },
     stores: [billedStore('western-brothers', 3, 12, 5), billedStore('stetson', 8, 9, 3), billedStore('ariat', 2, 6, 2)],
   })
 

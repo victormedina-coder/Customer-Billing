@@ -38,7 +38,11 @@ import { matchBlockedOrdersToGlobalItems } from '../../domain/global/matchBlocke
 import { globalCorrelationKey } from '../../domain/global/globalCorrelationKey'
 import type { BlockedOrderMatch, GlobalItems } from '../../domain/global/matchBlockedOrdersToGlobalItems'
 import type { IssuedCfdiItemsLookup } from '../../domain/global/ports/IssuedCfdiItemsLookup'
-import type { IssuedCfdiRef } from '../../domain/global/ports/IssuedCfdiLookup'
+import type { IssuedCfdiLookup, IssuedCfdiRef } from '../../domain/global/ports/IssuedCfdiLookup'
+import { findUnexplainedGlobals } from '../../domain/global/findUnexplainedGlobals'
+import { matchOrdersToPeriodGlobals } from '../../domain/global/matchOrdersToPeriodGlobals'
+import type { PeriodGlobalMatch } from '../../domain/global/matchOrdersToPeriodGlobals'
+import { parseMxLocalDateTime } from '../../domain/shared/MxCalendar'
 import { isDefinitiveStampRejection } from '../shared/isDefinitiveStampRejection'
 import { StampPreparationError } from '../shared/StampPreparationError'
 import type { GlobalPeriod } from '../../domain/global/GlobalPeriod'
@@ -129,7 +133,9 @@ export interface ExcludedOrderIdentity {
   /** Referencia humana (`buildOrderReference`) — la que empata con el canal Facturama, ej. `"#1150 2-1244"`. */
   reference: string
   /** Canal que detectó la exclusión: `'db'` (match por `order.id`) o `'facturama'` (match por referencia). */
-  matchedBy: 'db' | 'db_unresolved' | 'facturama'
+  matchedBy: 'db' | 'db_unresolved' | 'facturama' | 'facturama_global' | 'facturama_global_held'
+  held?: boolean
+  serieFolios?: string[]
 }
 
 /** Reporte estructurado de exclusión por ya-facturado — mismo patrón que `UnmappedReport`, con identidad para auditoría fiscal. */
@@ -173,6 +179,7 @@ export interface RefundedOrdersReport {
 
 export interface StoreReport {
   store: string
+  facturamaGlobals: FacturamaGlobalsReport
   orderCheck: OrderCheckReport
   enumerated: number
   eligible: number
@@ -198,6 +205,15 @@ export interface StoreReport {
    * eleva por `summary.hasFailures`.
    */
   unaccounted: number
+}
+
+export interface FacturamaGlobalsReport {
+  status: 'checked' | 'disabled' | 'unavailable' | 'unattributable_global' | 'store_without_serie' | 'unrecognized_concepts'
+  checkedCfdis: number
+  globals: string[]
+  reason?: string
+  permanent?: boolean
+  facturamaId?: string
 }
 
 export interface OrderCheckReport {
@@ -239,6 +255,8 @@ export interface GlobalRunSummary {
   orderCheckFound: number
   orderCheckNotFound: number
   orderCheckAmbiguous: number
+  heldOrders: number
+  storesBlockedByFacturamaCheck: number
   /**
    * true si la corrida dejó pedidos elegibles SIN facturar o en estado
    * inconsistente. Cinco causas, todas del mismo tipo (hueco fiscal que exige
@@ -277,7 +295,8 @@ function computeSummary(stores: StoreReport[]): GlobalRunSummary {
     chunks: 0, emitted: 0, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0,
     stampedUnconfirmed: 0, empty: 0, dryRun: 0,
     ordersEligible: 0, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, skippedUnpaid: 0,
-    orderCheckFound: 0, orderCheckNotFound: 0, orderCheckAmbiguous: 0, hasFailures: false,
+    orderCheckFound: 0, orderCheckNotFound: 0, orderCheckAmbiguous: 0,
+    heldOrders: 0, storesBlockedByFacturamaCheck: 0, hasFailures: false,
   }
 
   for (const store of stores) {
@@ -289,6 +308,8 @@ function computeSummary(stores: StoreReport[]): GlobalRunSummary {
       }
     }
     s.ordersEligible += store.eligible
+    s.heldOrders += store.excludedAlreadyInvoiced.orders.filter(order => order.matchedBy === 'facturama_global_held').length
+    if (store.facturamaGlobals.status !== 'checked' && store.facturamaGlobals.status !== 'disabled') s.storesBlockedByFacturamaCheck++
     s.unresolvedOrders += store.excludedAlreadyInvoiced.orders.filter((order) => order.matchedBy === 'db_unresolved').length
     s.unresolvedHeaders += store.unresolvedHeaders.length
     s.unmapped += store.unmapped.count
@@ -311,7 +332,7 @@ function computeSummary(stores: StoreReport[]): GlobalRunSummary {
     }
   }
 
-  s.hasFailures = s.rolledBack > 0 || s.rollbackFailed > 0 || s.reservationFailed > 0 || s.skippedIdempotent > 0 || s.stampedUnconfirmed > 0 || s.unmapped > 0 || s.unaccounted !== 0 || s.skippedUnpaid > 0 || s.unresolvedOrders > 0 || s.unresolvedHeaders > 0
+  s.hasFailures = s.rolledBack > 0 || s.rollbackFailed > 0 || s.reservationFailed > 0 || s.skippedIdempotent > 0 || s.stampedUnconfirmed > 0 || s.unmapped > 0 || s.unaccounted !== 0 || s.skippedUnpaid > 0 || s.unresolvedOrders > 0 || s.unresolvedHeaders > 0 || s.heldOrders > 0 || s.storesBlockedByFacturamaCheck > 0
   return s
 }
 
@@ -342,6 +363,7 @@ export interface ChunkPolicyPort {
 // ─── Deps ─────────────────────────────────────────────────────────────────────
 
 export interface EmitGlobalInvoiceDeps {
+  periodGlobalsCheck?: { issuedCfdiLookup: IssuedCfdiLookup; seriesByStore: Record<string, string | undefined>; budgetMs: number }
   issuedCfdiItemsLookup?: IssuedCfdiItemsLookup
   orderCheckMaxCfdis?: number
   orderCheckBudgetMs?: number
@@ -384,6 +406,15 @@ const CONSOLE_LOGGER: Logger = {
 
 /** Estados de Shopify que representan un cobro efectivamente realizado (ver §b arriba). */
 const PAID_LIKE_STATUSES = new Set(['PAID', 'PARTIALLY_REFUNDED'])
+
+type PeriodGlobalsListing = { status: 'checked'; globals: IssuedCfdiRef[] } | { status: 'unavailable' | 'unattributable_global'; reason: string; permanent?: boolean; facturamaId?: string }
+
+class GlobalsCheckDataError extends Error {
+  constructor(readonly facturamaId: string) {
+    super(facturamaId)
+    this.name = 'GlobalsCheckDataError'
+  }
+}
 
 export class EmitGlobalInvoiceUseCase {
   private readonly paymentBucketPolicy: PaymentBucketClassifier
@@ -430,9 +461,10 @@ export class EmitGlobalInvoiceUseCase {
 
     const stores: StoreReport[] = []
     const itemCache = new Map<string, Promise<string[]>>()
-    const orderCheckDeadline = Date.now() + (this.deps.orderCheckBudgetMs ?? 30000)
+    const globalsDeadline = Date.now() + (this.deps.periodGlobalsCheck?.budgetMs ?? 0)
+    const periodGlobals = await this.listPeriodGlobals(period, runId, globalsDeadline)
     for (const store of targetStores) {
-      stores.push(await this.runStore(store, period, dryRun, runId, input.reconcile, itemCache, orderCheckDeadline))
+      stores.push(await this.runStore(store, period, dryRun, runId, input.reconcile, itemCache, periodGlobals, globalsDeadline))
     }
 
     const summary = computeSummary(stores)
@@ -444,7 +476,7 @@ export class EmitGlobalInvoiceUseCase {
 
   // ── Por tienda ────────────────────────────────────────────────────────────
 
-  private async runStore(store: string, period: GlobalPeriod, dryRun: boolean, runId: string, reconcile: ReconcileReport | undefined, itemCache: Map<string, Promise<string[]>>, orderCheckDeadline: number): Promise<StoreReport> {
+  private async runStore(store: string, period: GlobalPeriod, dryRun: boolean, runId: string, reconcile: ReconcileReport | undefined, itemCache: Map<string, Promise<string[]>>, periodGlobals: PeriodGlobalsListing | null, globalsDeadline: number): Promise<StoreReport> {
     const monthlyOrders = await this.enumerateAll(store, period)
 
     let skippedNonPos = 0
@@ -515,7 +547,8 @@ export class EmitGlobalInvoiceUseCase {
       eligible.push(monthlyOrder)
     }
 
-    const { survivors, excludedAlreadyInvoiced } = await this.excludeAlreadyInvoiced(store, period, eligible)
+    const { report: facturamaGlobals, matches } = await this.checkPeriodGlobals(store, eligible, periodGlobals, itemCache, globalsDeadline, runId)
+    const { survivors, excludedAlreadyInvoiced } = await this.excludeAlreadyInvoiced(store, period, eligible, matches)
     const blocked = eligible.filter(({ order }) => excludedAlreadyInvoiced.orders.some(excluded => excluded.orderId === order.id && excluded.matchedBy === 'db_unresolved'))
       .map(({ order }) => ({ orderId: order.id, reference: buildOrderReference(order.orderNumber, order.sourceIdentifier ?? null), tail: orderReceiptTail(order) }))
     const periodTails = monthlyOrders.map(({ order }) => orderReceiptTail(order))
@@ -570,13 +603,17 @@ export class EmitGlobalInvoiceUseCase {
     }
 
     const bucketReports: BucketReport[] = []
-    for (const [bucket, bucketOrders] of buckets) {
-      bucketReports.push(await this.runBucket(store, period, bucket, bucketOrders, dryRun, runId))
+    if (facturamaGlobals.status === 'checked' || facturamaGlobals.status === 'disabled') {
+      for (const [bucket, bucketOrders] of buckets) {
+        bucketReports.push(await this.runBucket(store, period, bucket, bucketOrders, dryRun, runId))
+      }
     }
+    const orderCheckDeadline = Date.now() + (this.deps.orderCheckBudgetMs ?? 30000)
     const orderCheck = await this.checkBlockedOrders(blocked, periodTails, reconcile, period, runId, store, itemCache, orderCheckDeadline)
 
     return {
       store,
+      facturamaGlobals,
       orderCheck,
       enumerated: monthlyOrders.length,
       eligible: eligible.length,
@@ -605,6 +642,112 @@ export class EmitGlobalInvoiceUseCase {
     return all
   }
 
+  private async listPeriodGlobals(period: GlobalPeriod, runId: string, deadline: number): Promise<PeriodGlobalsListing | null> {
+    const config = this.deps.periodGlobalsCheck
+    if (!config) {
+      this.logger.warn({ runId }, '[global-facturama-check] verificación desactivada')
+      return null
+    }
+    const window = period.stampWindowMx()
+    try {
+      const listed = await this.readBefore(config.issuedCfdiLookup.listIssuedBetween(window.from, window.to), deadline)
+      if (!listed) throw new Error('Presupuesto de verificación agotado')
+      const globals: IssuedCfdiRef[] = []
+      for (const item of listed) {
+        if (!item.active) continue
+        if (item.rfc && item.rfc !== 'XAXX010101000') continue
+        if (!item.rfc) throw new GlobalsCheckDataError(item.facturamaId)
+        const date = item.date ? parseMxLocalDateTime(item.date) : null
+        if (!date) throw new GlobalsCheckDataError(item.facturamaId)
+        if (date < window.from || date > window.to) continue
+        if (item.rfc !== 'XAXX010101000') continue
+        if (findUnexplainedGlobals([item], new Set()).length === 0) continue
+        globals.push(item)
+      }
+      const knownSeries = new Set(Object.values(config.seriesByStore).filter((serie): serie is string => Boolean(serie)).map(serie => serie.toLowerCase()))
+      const unattributable = globals.find(item => !item.serie?.trim() || !knownSeries.has(item.serie.toLowerCase()))
+      if (unattributable) {
+        this.logger.error({ runId, facturamaId: unattributable.facturamaId, serieFolio: unattributable.serieFolio }, '[global-facturama-check] global sin tienda atribuible')
+        return { status: 'unattributable_global', reason: `Global sin serie atribuible: ${unattributable.serieFolio ?? unattributable.facturamaId}` }
+      }
+      return { status: 'checked', globals }
+    } catch (error) {
+      const permanent = error instanceof GlobalsCheckDataError
+      const reason = permanent ? 'Dato inválido en CFDI de Facturama' : error instanceof Error && error.message === 'Presupuesto de verificación agotado'
+        ? 'Presupuesto de verificación agotado' : 'Listado de Facturama no disponible'
+      this.logger.error({ runId, reason, ...(permanent ? { facturamaId: error.facturamaId } : { errorName: error instanceof Error ? error.name : 'UnknownError' }) }, '[global-facturama-check] listado no disponible')
+      return { status: 'unavailable', reason, ...(permanent ? { permanent: true, facturamaId: error.facturamaId } : {}) }
+    }
+  }
+
+  private async checkPeriodGlobals(store: string, eligible: MonthlyOrder[], listing: PeriodGlobalsListing | null, cache: Map<string, Promise<string[]>>, deadline: number, runId: string): Promise<{ report: FacturamaGlobalsReport; matches: ReadonlyMap<string, PeriodGlobalMatch> }> {
+    const started = Date.now()
+    const serie = this.deps.periodGlobalsCheck?.seriesByStore[store]
+    const matches = new Map<string, PeriodGlobalMatch>()
+    let report: FacturamaGlobalsReport
+    if (!listing) report = { status: 'disabled', checkedCfdis: 0, globals: [] }
+    else if (listing.status !== 'checked') report = { status: listing.status, checkedCfdis: 0, globals: [], reason: listing.reason, ...(listing.permanent ? { permanent: true, facturamaId: listing.facturamaId } : {}) }
+    else if (!serie?.trim()) report = { status: 'store_without_serie', checkedCfdis: 0, globals: [], reason: 'Tienda sin serie configurada' }
+    else if (!this.deps.issuedCfdiItemsLookup) {
+      report = { status: 'unavailable', checkedCfdis: 0, globals: [], reason: 'Consulta de conceptos no configurada' }
+      this.logger.error({ runId, store }, '[global-facturama-check] consulta de conceptos no configurada')
+    }
+    else {
+      const globals = listing.globals.filter(item => item.serie?.toLowerCase() === serie.toLowerCase())
+      const read: GlobalItems[] = []
+      try {
+        for (const global of globals) {
+          let items: string[] | undefined
+          try {
+            items = await this.readItemsBefore(global.facturamaId, cache, deadline)
+          } catch (error) {
+            if (error instanceof Error && error.name === 'CfdiIdentificationNumberMissingError') {
+              throw new GlobalsCheckDataError(global.facturamaId)
+            }
+            throw error
+          }
+          if (!items) throw new Error('Presupuesto de conceptos agotado')
+          read.push({ facturamaId: global.facturamaId, serieFolio: global.serieFolio, items })
+        }
+        const result = matchOrdersToPeriodGlobals(eligible.map(({ order }) => ({ orderId: order.id, reference: buildOrderReference(order.orderNumber, order.sourceIdentifier ?? null), tail: orderReceiptTail(order) })), read)
+        report = { status: result.unrecognized.length ? 'unrecognized_concepts' : 'checked', checkedCfdis: read.length, globals: globals.map(item => item.serieFolio ?? item.facturamaId), ...(result.unrecognized.length ? { reason: `Conceptos no reconocidos: ${result.unrecognized.length}` } : {}) }
+        if (report.status === 'checked') for (const [id, match] of result.matches) matches.set(id, match)
+        if (result.unrecognized.length) this.logger.error({ runId, store, facturamaId: result.unrecognized[0].facturamaId }, '[global-facturama-check] conceptos no reconocidos')
+      } catch (error) {
+        const permanent = error instanceof GlobalsCheckDataError
+        const reason = permanent ? 'Dato inválido en CFDI de Facturama' : error instanceof Error && error.message === 'Presupuesto de conceptos agotado'
+          ? 'Presupuesto de conceptos agotado' : 'Conceptos de Facturama no disponibles'
+        report = { status: 'unavailable', checkedCfdis: read.length, globals: globals.map(item => item.serieFolio ?? item.facturamaId), reason, ...(permanent ? { permanent: true, facturamaId: error.facturamaId } : {}) }
+        this.logger.error({ runId, store, reason, ...(permanent ? { facturamaId: error.facturamaId } : { errorName: error instanceof Error ? error.name : 'UnknownError' }) }, '[global-facturama-check] conceptos no disponibles')
+      }
+    }
+    this.logger.info({ runId, store, serie, globalsInWindow: report.globals.length, checkedCfdis: report.checkedCfdis, excluded: [...matches.values()].filter(match => !match.held).length, held: [...matches.values()].filter(match => match.held).length, status: report.status, durationMs: Date.now() - started }, '[global-facturama-check] tienda verificada')
+    if (report.status === 'store_without_serie') this.logger.error({ runId, store }, '[global-facturama-check] tienda sin serie')
+    return { report, matches }
+  }
+
+  private async readBefore<T>(operation: Promise<T>, deadline: number): Promise<T | undefined> {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) return undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([operation, new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), remaining) })])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  private readItemsBefore(id: string, cache: Map<string, Promise<string[]>>, deadline: number): Promise<string[] | undefined> {
+    if (deadline <= Date.now()) return Promise.resolve(undefined)
+    let items = cache.get(id)
+    if (!items) {
+      items = this.deps.issuedCfdiItemsLookup!.getItems(id)
+      void items.catch(() => {})
+      cache.set(id, items)
+    }
+    return this.readBefore(items, deadline)
+  }
+
   /**
    * Excluye la UNIÓN de todos los invoicedOrdersGateways — por id O por
    * referencia. Registra la identidad de auditoría (order.id + referencia
@@ -617,6 +760,7 @@ export class EmitGlobalInvoiceUseCase {
     store: string,
     period: GlobalPeriod,
     candidates: MonthlyOrder[],
+    globalMatches: ReadonlyMap<string, PeriodGlobalMatch>,
   ): Promise<{ survivors: MonthlyOrder[]; excludedAlreadyInvoiced: ExcludedAlreadyInvoicedReport }> {
     const orderIds = new Set<string>()
     const unresolvedOrderIds = new Set<string>()
@@ -635,8 +779,13 @@ export class EmitGlobalInvoiceUseCase {
       const reference = buildOrderReference(order.orderNumber, order.sourceIdentifier ?? null)
       const matchedById = orderIds.has(order.id)
       const matchedByReference = orderReferences.has(reference)
-      if (matchedById || matchedByReference) {
-        excludedOrders.push({ orderId: order.id, reference, matchedBy: unresolvedOrderIds.has(order.id) ? 'db_unresolved' : matchedById ? 'db' : 'facturama' })
+      const globalMatch = globalMatches.get(order.id)
+      if (matchedById || matchedByReference || globalMatch) {
+        excludedOrders.push({
+          orderId: order.id, reference,
+          matchedBy: unresolvedOrderIds.has(order.id) ? 'db_unresolved' : matchedById ? 'db' : matchedByReference ? 'facturama' : globalMatch?.held ? 'facturama_global_held' : 'facturama_global',
+          ...(globalMatch ? { held: globalMatch.held, serieFolios: [...globalMatch.serieFolios] } : {}),
+        })
         continue
       }
       survivors.push(monthlyOrder)
@@ -904,7 +1053,7 @@ export class EmitGlobalInvoiceUseCase {
     ].filter(item => item.active && item.rfc === 'XAXX010101000')
     const unique = [...new Map(candidates.map(item => [item.facturamaId, item])).values()]
     const max = this.deps.orderCheckMaxCfdis ?? 30
-    if (new Set([...cache.keys(), ...unique.map(item => item.facturamaId)]).size > max) {
+    if (unique.filter(item => !cache.has(item.facturamaId)).length > max) {
       this.logger.warn({ runId, store, candidates: unique.length, max }, '[global-order-check] verificación truncada por tope de CFDI')
       return { ran: true, truncated: true, checkedCfdis: 0, results: [] }
     }
@@ -912,24 +1061,7 @@ export class EmitGlobalInvoiceUseCase {
     const globals: GlobalItems[] = []
     try {
       for (const candidate of unique) {
-        const remaining = deadline - Date.now()
-        if (remaining <= 0) {
-          this.logger.warn({ runId, store, checkedCfdis: globals.length }, '[global-order-check] presupuesto de tiempo agotado')
-          return { ran: true, truncated: true, checkedCfdis: globals.length, results: [] }
-        }
-        let items = cache.get(candidate.facturamaId)
-        if (!items) {
-          items = this.deps.issuedCfdiItemsLookup.getItems(candidate.facturamaId)
-          cache.set(candidate.facturamaId, items)
-        }
-        let timer: ReturnType<typeof setTimeout> | undefined
-        const timeout = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), remaining) })
-        let found: string[] | undefined
-        try {
-          found = await Promise.race([items, timeout])
-        } finally {
-          if (timer) clearTimeout(timer)
-        }
+        const found = await this.readItemsBefore(candidate.facturamaId, cache, deadline)
         if (!found) {
           this.logger.warn({ runId, store, checkedCfdis: globals.length }, '[global-order-check] presupuesto de tiempo agotado')
           return { ran: true, truncated: true, checkedCfdis: globals.length, results: [] }

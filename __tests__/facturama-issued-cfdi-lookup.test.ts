@@ -17,8 +17,23 @@ describe('FacturamaIssuedCfdiLookup', () => {
     const result = await new FacturamaIssuedCfdiLookup().listIssuedBetween(from, to)
     expect(listarCfdisEmitidos).toHaveBeenCalledWith({ from, to })
     expect(result).toEqual([
-      { facturamaId: 'f1', uuid: 'u1', correlationKey: 'GLB:h1', active: true, serieFolio: 'G-1', orderNumber: 'GLB:h1', rfc: undefined, total: undefined, date: '2026-10-08T13:07:33' },
-      { facturamaId: 'f2', uuid: undefined, correlationKey: undefined, active: false, serieFolio: undefined, orderNumber: '#123', rfc: undefined, total: undefined, date: undefined },
+      { facturamaId: 'f1', uuid: 'u1', correlationKey: 'GLB:h1', active: true, serie: 'G', serieFolio: 'G-1', orderNumber: 'GLB:h1', rfc: undefined, total: undefined, date: '2026-10-08T13:07:33' },
+      { facturamaId: 'f2', uuid: undefined, correlationKey: undefined, active: false, serie: undefined, serieFolio: undefined, orderNumber: '#123', rfc: undefined, total: undefined, date: undefined },
+    ])
+  })
+
+  it('conserva la Serie cruda y el formato previo de serieFolio', async () => {
+    vi.mocked(listarCfdisEmitidos).mockResolvedValue([
+      { Id: 'lower', Serie: 'gdl1', Folio: '45' },
+      { Id: 'upper', Serie: 'GDL1', Folio: '46' },
+    ])
+    const result = await new FacturamaIssuedCfdiLookup().listIssuedBetween(
+      new Date('2026-10-01T00:00:00Z'),
+      new Date('2026-11-01T00:00:00Z'),
+    )
+    expect(result.map(({ serie, serieFolio }) => ({ serie, serieFolio }))).toEqual([
+      { serie: 'gdl1', serieFolio: 'gdl1-45' },
+      { serie: 'GDL1', serieFolio: 'GDL1-46' },
     ])
   })
 })

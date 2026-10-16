@@ -3,6 +3,7 @@ export interface IssuedCfdiRef {
   correlationKey?: string
   uuid?: string
   active: boolean
+  serie?: string
   serieFolio?: string
   orderNumber?: string
   rfc?: string

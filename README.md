@@ -269,6 +269,8 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 | `GLOBAL_RECONCILE_MIN_AGE_MINUTES` | Edad mínima antes de liberar reservas sin timbrado (entero >= 1; default `30`). Da tiempo a que aparezca un timbrado tardío y permite lanzar la segunda corrida manual a los 30 min sin dejar de poder revisar la primera en Facturama. |
 | `GLOBAL_ORDER_CHECK_MAX_CFDIS` | Maximo de CFDI activos cuyos Items consulta la verificacion informativa por pedido (entero >= 1; default `30`); si se supera, reporta truncamiento. |
 | `GLOBAL_ORDER_CHECK_BUDGET_MS` | Presupuesto total para consultar Items después de emitir todos los chunks (entero >= 1; default `30000` ms); al agotarse, reporta truncamiento. |
+| `GLOBAL_FACTURAMA_GLOBALS_CHECK` | Verificación de globales en Facturama activa por defecto. `off` la desactiva y devuelve el comportamiento anterior; usar solo como escape operativo con revisión de contabilidad. |
+| `GLOBAL_FACTURAMA_CHECK_BUDGET_MS` | Presupuesto por corrida para consultar conceptos de globales (entero >= 1; default `60000` ms). Al agotarse, la tienda afectada queda `unavailable` y no emite. |
 | `DEV_NOW_OVERRIDE` | **Solo fuera de producción** (guard duro por `NODE_ENV`, ver `getEvaluationNow`). Fecha ISO para simular el instante "ahora" al resolver periodos `relative` (R4) o la ventana de facturación (R3). **Nunca definir en el `.env` de producción.** |
 
 ### Otros
@@ -306,6 +308,15 @@ Si deja pedidos sin facturar, la segunda corrida es **manual**, ver abajo.
 muestra pedidos pendientes: headers `stamped_unconfirmed` o sin resolver,
 chunks `rolled_back` / `rollback_failed` / `reservation_failed`,
 `skipped_idempotent` con pedidos o pedidos `unresolvedOrders` (`db_unresolved`).
+También se requiere segunda corrida si la verificación de globales de una tienda
+queda `unavailable` por fallo transitorio de Facturama o por agotarse el presupuesto.
+Si el motivo es `Dato inválido en CFDI de Facturama`, revisar ese CFDI antes de volver a correr.
+Los estados `unattributable_global`, `store_without_serie` y
+`unrecognized_concepts` requieren revisar las globales con contabilidad antes
+de reintentar. `checked` permite emitir los pedidos restantes; los pedidos
+`facturama_global` ya están facturados y los `facturama_global_held` quedan
+retenidos por cola ambigua para revisión con contabilidad. `disabled` significa
+que el interruptor está apagado y se conserva la exclusión anterior.
 Los `wait` dejan el header sin resolver y también quedan cubiertos. Las alertas
 puras de conciliación (`alert_duplicate`, `alert_cancelled`, `alert_late_stamp`,
 global no explicada) requieren revisión en Facturama/contabilidad según el runbook;
@@ -358,6 +369,10 @@ Invoke-RestMethod -Uri $url -Method Post -Headers $headers `
   corte actual 21:00 MX)`. La segunda corrida usa la misma ventana que la
   primera, así que **nunca incluye pedidos posteriores al corte**; esos entran
   en la global del mes siguiente.
+- Las globales de Facturama se verifican por fecha de TIMBRADO en la ventana
+  `[corte M-1 + 24 h, corte M + 24 h]`. Una corrida tardía sigue viendo las
+  globales anteriores dentro de esa ventana; las timbradas después de `window.to`
+  quedan fuera de la verificación del periodo M y solo las protege la BD.
 
 **Qué esperar.** Antes de emitir, la corrida concilia los headers pendientes
 contra Facturama (por llave `GLB:`). Si el CFDI existe, el header se **confirma**.

@@ -12,6 +12,7 @@ export class FacturamaIssuedCfdiLookup implements IssuedCfdiLookup {
       correlationKey: normalizeGlobalCorrelationKey(item.OrderNumber)?.startsWith('GLB:') ? item.OrderNumber : undefined,
       uuid: typeof item.Uuid === 'string' ? item.Uuid : undefined,
       active: !isCancelledIssuedCfdi(item),
+      serie: item.Serie,
       serieFolio: [item.Serie, item.Folio].filter(Boolean).join('-') || undefined,
       orderNumber: item.OrderNumber,
       rfc: item.Rfc,

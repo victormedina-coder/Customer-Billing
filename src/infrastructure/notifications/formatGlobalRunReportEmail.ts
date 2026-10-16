@@ -45,8 +45,12 @@ function mxDateTime(date: Date): string {
 function manualRerunSection(r: GlobalRunReport, context?: RunReportEmailContext): string[] {
     if (r.dryRun || !context) return []
 
+    const permanent = r.stores.filter((store) => store.facturamaGlobals.permanent)
+    const review = permanent.map((store) => `Revisar el CFDI ${store.facturamaGlobals.facturamaId} en Facturama antes de volver a correr.`)
+
     const pendingStores = new Set<string>()
     const unresolvedHeaders = r.stores.flatMap((store) => {
+        if (store.facturamaGlobals.status === 'unavailable' && !store.facturamaGlobals.permanent) pendingStores.add(store.store)
         if (store.excludedAlreadyInvoiced.orders.some((order) => order.matchedBy === 'db_unresolved') ||
             store.buckets.some((bucket) => bucket.chunks.some((chunk) => chunk.itemCount > 0 &&
                 ['rolled_back', 'rollback_failed', 'reservation_failed', 'skipped_idempotent', 'stamped_unconfirmed'].includes(chunk.outcome)))) {
@@ -56,7 +60,7 @@ function manualRerunSection(r: GlobalRunReport, context?: RunReportEmailContext)
         if (headers.length > 0) pendingStores.add(store.store)
         return headers
     })
-    if (pendingStores.size === 0) return []
+    if (pendingStores.size === 0) return review.length ? [...review, ''] : []
 
     const lastHeaderTime = unresolvedHeaders.reduce((latest, header) => Math.max(latest, header.createdAt.getTime()), -Infinity)
     const earliestBase = Number.isFinite(lastHeaderTime) ? lastHeaderTime : context.finishedAt.getTime()
@@ -68,6 +72,7 @@ function manualRerunSection(r: GlobalRunReport, context?: RunReportEmailContext)
     const bodies = [...pendingStores].map((storeName) => JSON.stringify({ year: r.year, month: r.month, storeName }))
 
     return [
+        ...review,
         'Acción requerida: segunda corrida manual',
         `Hora más temprana: ${mxDateTime(earliest)}`,
         `Límite: ${mxDateTime(deadline)} (dentro de las 24 h posteriores al corte)`,
@@ -244,6 +249,9 @@ function buildText(r: GlobalRunReport, context?: RunReportEmailContext): string 
 
     L.push(`Corrida ${r.runId} · Periodo ${periodIso(r)} (${kind})${sim} · Veredicto: ${r.summary.hasFailures ? 'REQUIERE ATENCIÓN' : 'OK'}`)
     L.push('')
+    if (r.stores.some((store) => store.facturamaGlobals.status === 'disabled')) {
+        L.push('Verificación de globales: DESACTIVADA', '')
+    }
 
     // RESUMEN
     L.push(RULE, 'RESUMEN', RULE)
@@ -284,6 +292,20 @@ function buildText(r: GlobalRunReport, context?: RunReportEmailContext): string 
         L.push('')
     }
 
+    if (r.stores.some((store) => store.facturamaGlobals.status !== 'checked' || store.excludedAlreadyInvoiced.orders.some((order) => order.matchedBy === 'facturama_global_held'))) {
+    L.push(RULE, 'RETENIDOS POR VERIFICACIÓN EN FACTURAMA', RULE)
+    for (const store of r.stores) {
+        const check = store.facturamaGlobals
+        const held = store.excludedAlreadyInvoiced.orders.filter((order) => order.matchedBy === 'facturama_global_held').length
+        L.push(`${brandLabel(store.store)}: ${check.status} · CFDI ${check.checkedCfdis} · retenidos ${held}`)
+        if (check.globals.length > 0) L.push(`   Serie-folio: ${check.globals.join(', ')}`)
+        if (check.reason) L.push(`   Motivo: ${check.reason}`)
+        if (check.status !== 'unavailable' && (held > 0 || !['checked', 'disabled'].includes(check.status))) {
+            L.push('   No se resuelve con otra corrida: revisar con contabilidad.')
+        }
+    }
+    }
+    L.push('')
     L.push(RULE, 'VERIFICACIÓN POR PEDIDO EN FACTURAMA (SOLO INFORMATIVA)', RULE)
     for (const store of r.stores) {
         const check = store.orderCheck

@@ -70,7 +70,7 @@ const SECRET = 'test-global-secret'
 const EMPTY_SUMMARY: GlobalRunSummary = {
   chunks: 0, emitted: 0, rolledBack: 0, rollbackFailed: 0, reservationFailed: 0, skippedIdempotent: 0,
   skippedUnpaid: 0, stampedUnconfirmed: 0, empty: 0, dryRun: 0,
-  ordersEligible: 0, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, orderCheckFound: 0, orderCheckNotFound: 0, orderCheckAmbiguous: 0, hasFailures: false,
+  ordersEligible: 0, unresolvedOrders: 0, unresolvedHeaders: 0, unmapped: 0, unaccounted: 0, orderCheckFound: 0, orderCheckNotFound: 0, orderCheckAmbiguous: 0, heldOrders: 0, storesBlockedByFacturamaCheck: 0, hasFailures: false,
 }
 
 function makeFakeReport(overrides: Partial<GlobalRunReport> = {}): GlobalRunReport {
