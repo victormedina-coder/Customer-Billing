@@ -41,6 +41,9 @@ const CLASSIFICATION_RULES: readonly ClassificationRule[] = [
       g.includes('crédito') ||
       g.includes('credito') ||
       g.includes('paypal') ||
+      g.includes('Valetodo') ||
+      g.includes('valetodo') ||
+      g.includes('ValeTodo') ||
       // Gateway genérico "Tarjeta" de la terminal POS Ariat (pre separación
       // crédito/débito de jun-2026, sin distinguir forma) — finanzas
       // 2026-07-10: esos pedidos históricos van a la global de CRÉDITO
