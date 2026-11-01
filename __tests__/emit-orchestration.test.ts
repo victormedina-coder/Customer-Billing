@@ -33,11 +33,12 @@ import type { EmitResult } from '../src/domain/invoicing/ports/InvoiceStampingSe
 const ORDER_ID   = 'gid://shopify/Order/orch-test-1'
 const STORE_NAME = 'Tienda Ariat Nogales'
 const INVOICE_ID = 'orch-invoice-id-fixed'
+const FIXED_NOW  = new Date('2026-10-15T18:00:00.000Z')
 
 const VALID_ORDER: NormalizedOrderWithPayment = {
   id:               ORDER_ID,
   orderNumber:      '#45371',
-  createdAt:        new Date().toISOString(),
+  createdAt:        '2026-10-15T17:00:00.000Z',
   currency:         'MXN',
   subtotal:         100,
   taxAmount:        16,
@@ -94,7 +95,7 @@ function makeInvoiceRow(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
     invoiceType: overrides.invoiceType ?? 'individual',
     paymentType: overrides.paymentType ?? null,
     globalInvoiceId: overrides.globalInvoiceId ?? null,
-    createdAt:   overrides.createdAt   ?? new Date(),
+    createdAt:   overrides.createdAt   ?? FIXED_NOW,
     cancelledAt: overrides.cancelledAt ?? null,
     privacyVersion: overrides.privacyVersion ?? null,
     termsVersion:   overrides.termsVersion   ?? null,
@@ -153,6 +154,9 @@ let orderSourceMod:  typeof import('../src/composition/orderSource')
 let invoiceService:  typeof import('../src/composition/invoiceService')
 
 beforeEach(async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(FIXED_NOW)
+  vi.stubEnv('DEV_NOW_OVERRIDE', '')
   // Deshabilitar mock de emit: el .env tiene EMIT_MOCK=true (modo dev),
   // pero estos tests deben ejercer el flujo de negocio real.
   vi.stubEnv('EMIT_MOCK', 'false')
@@ -191,6 +195,7 @@ beforeEach(async () => {
 afterEach(() => {
   vi.clearAllMocks()
   vi.unstubAllEnvs()
+  vi.useRealTimers()
 })
 
 const VALID_CONSENT = { acceptedPrivacy: true, acceptedTerms: true }
@@ -457,11 +462,7 @@ describe('orquestación emit — orden de validaciones', () => {
   it('DEADLINE_EXCEEDED: createInvoice NO se llama si el pedido está fuera de la ventana', async () => {
     mockFindOrder(async () => ({
       ...VALID_ORDER,
-      createdAt: new Date(
-        new Date().getFullYear(),
-        new Date().getMonth() - 1,
-        15
-      ).toISOString(),
+      createdAt: '2026-09-15T18:00:00.000Z',
     }))
 
     const res = await POST(makeEmitRequest())
