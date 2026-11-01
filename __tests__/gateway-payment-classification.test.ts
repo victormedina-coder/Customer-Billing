@@ -56,7 +56,7 @@ const GATEWAY_CLASS_TO_SAT: Record<string, string> = {
 describe('classifyGateway ↔ mapPaymentForm — misma tabla de clasificación', () => {
   const gateways = [
     'cash', 'efectivo', 'transfer', 'bogus', 'credit_card', 'paypal', 'debit_card', 'unknown_gateway',
-    'tarjeta', 'Tarjeta', 'TARJETA',
+    'tarjeta', 'Tarjeta', 'TARJETA', 'Valetodo', 'valetodo', 'ValeTodo',
   ]
 
   for (const gateway of gateways) {
@@ -83,6 +83,10 @@ describe('classifyGateway ↔ mapPaymentForm — misma tabla de clasificación',
       expect(classifyGateway(gateway)).toBe('credito')
     },
   )
+
+  it.each(['Valetodo', 'valetodo', 'VALETODO'])('"%s" clasifica como crédito', (gateway) => {
+    expect(classifyGateway(gateway)).toBe('credito')
+  })
 
   it('"tarjeta de debito" NO clasifica por el match exacto de "tarjeta" (match sigue siendo substring de "debito")', () => {
     expect(classifyGateway('tarjeta de debito')).toBe('debito')

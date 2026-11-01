@@ -27,10 +27,12 @@ import type { EmitResult } from '../src/domain/invoicing/ports/InvoiceStampingSe
 // Fixtures
 // ─────────────────────────────────────────────────────────────────────────────
 
+const FIXED_NOW = new Date('2026-10-15T18:00:00.000Z')
+
 const VALID_ORDER: NormalizedOrderWithPayment = {
   id:               'gid://shopify/Order/12345',
   orderNumber:      '#45371',
-  createdAt:        new Date().toISOString(),
+  createdAt:        '2026-10-15T17:00:00.000Z',
   currency:         'MXN',
   subtotal:         100,
   taxAmount:        16,
@@ -89,7 +91,7 @@ function makeInvoiceRow(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
     invoiceType: overrides.invoiceType ?? 'individual',
     paymentType: overrides.paymentType ?? null,
     globalInvoiceId: overrides.globalInvoiceId ?? null,
-    createdAt:   overrides.createdAt   ?? new Date(),
+    createdAt:   overrides.createdAt   ?? FIXED_NOW,
     cancelledAt: overrides.cancelledAt ?? null,
     privacyVersion: overrides.privacyVersion ?? null,
     termsVersion:   overrides.termsVersion   ?? null,
@@ -172,6 +174,9 @@ let downloadHandler: typeof import('../app/api/invoice/download/[invoiceId]/[for
 let validateHandler: typeof import('../app/api/fiscal/validate/route')['POST']
 
 beforeEach(async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(FIXED_NOW)
+  vi.stubEnv('DEV_NOW_OVERRIDE', '')
   // Deshabilitar el mock de emit para que los tests de negocio validen el flujo real.
   // El .env del proyecto tiene EMIT_MOCK=true (modo dev), pero en tests necesitamos
   // el flujo completo salvo el test específico que verifica el comportamiento del mock.
@@ -226,6 +231,7 @@ beforeEach(async () => {
 afterEach(() => {
   vi.clearAllMocks()
   vi.unstubAllEnvs()
+  vi.useRealTimers()
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -284,6 +290,32 @@ describe('POST /api/invoice/emit', () => {
     expect(body.factura.uuid).toBe(FAKE_EMIT_RESULT.uuid)
     expect(body.factura.serieFolio).toBe(FAKE_EMIT_RESULT.serieFolio)
     expect(body.factura.invoiceId).toBeTruthy()
+  })
+
+  it('200 antes del corte de las 21:00 MX del último día del mes', async () => {
+    vi.setSystemTime(new Date('2026-10-31T20:59:00-06:00'))
+    mockFindOrder(async () => ({
+      ...VALID_ORDER,
+      createdAt: '2026-10-31T15:00:00.000Z',
+    }))
+
+    const res = await emitHandler(makePostRequest(validBody) as never)
+
+    expect(res.status).toBe(200)
+  })
+
+  it('422 DEADLINE_EXCEEDED después del corte de las 21:00 MX del último día del mes', async () => {
+    vi.setSystemTime(new Date('2026-10-31T21:30:00-06:00'))
+    mockFindOrder(async () => ({
+      ...VALID_ORDER,
+      createdAt: '2026-10-31T15:00:00.000Z',
+    }))
+
+    const res = await emitHandler(makePostRequest(validBody) as never)
+
+    expect(res.status).toBe(422)
+    const body = await parseJson(res) as { error: { code: string } }
+    expect(body.error.code).toBe('DEADLINE_EXCEEDED')
   })
 
   it('400 FISCAL_INVALID cuando el body no pasa validación Zod', async () => {
@@ -417,11 +449,7 @@ describe('POST /api/invoice/emit', () => {
   it('422 DEADLINE_EXCEEDED cuando el pedido está fuera de la ventana (mes pasado)', async () => {
     mockFindOrder(async () => ({
       ...VALID_ORDER,
-      createdAt: new Date(
-        new Date().getFullYear(),
-        new Date().getMonth() - 1,
-        15
-      ).toISOString(),
+      createdAt: '2026-09-15T18:00:00.000Z',
     }))
 
     const req = makePostRequest(validBody)
@@ -632,11 +660,7 @@ describe('POST /api/invoice/lookup', () => {
   it('422 DEADLINE_EXCEEDED cuando pedido está fuera de la ventana', async () => {
     mockFindOrder(async () => ({
       ...VALID_ORDER,
-      createdAt: new Date(
-        new Date().getFullYear(),
-        new Date().getMonth() - 1,
-        15
-      ).toISOString(),
+      createdAt: '2026-09-15T18:00:00.000Z',
     }))
 
     const req = makePostRequest(validLookupBody)
