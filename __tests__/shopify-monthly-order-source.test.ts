@@ -87,16 +87,21 @@ function makeMonthlyShopifyOrder(overrides: {
   id?: string
   name?: string
   sourceIdentifier?: string | null
+  sourceName?: string
+  processedAt?: string
+  customAttributes?: Array<{ key: string; value: string | null }>
   transactions?: unknown[]
 } = {}) {
   return {
     id: overrides.id ?? 'gid://shopify/Order/1',
     name: overrides.name ?? '#1001',
     createdAt: '2026-06-15T10:00:00Z',
+    processedAt: overrides.processedAt ?? '2026-06-15T10:00:00Z',
     currencyCode: 'MXN',
     email: 'cliente@example.com',
-    sourceName: 'pos',
+    sourceName: overrides.sourceName ?? 'pos',
     sourceIdentifier: overrides.sourceIdentifier !== undefined ? overrides.sourceIdentifier : 'dev-1001',
+    customAttributes: overrides.customAttributes ?? [],
     displayFinancialStatus: 'PAID',
     totalRefundedSet: { shopMoney: { amount: '0.00', currencyCode: 'MXN' } },
     subtotalPriceSet: { shopMoney: { amount: '100.00', currencyCode: 'MXN' } },
@@ -335,6 +340,31 @@ describe('ShopifyMonthlyOrderSource.listOrdersInRange', () => {
     expect(normalized.lines).toHaveLength(1)
     expect(normalized.storeName).toBe('Sucursal Nogales')
     expect(normalized.sourceIdentifier).toBe('dev-1001')
+  })
+
+  it('importado de Ariat posterior al corte → el Ticket queda como sourceIdentifier; anterior al corte y nativo sin cambio', async () => {
+    const ticket = [{ key: 'Ticket', value: '7-27985' }]
+    fetchMock.mockResolvedValueOnce(gqlOrdersInRangeResponse([
+      makeMonthlyShopifyOrder({ id: 'imp-nov', name: '#54088', sourceName: 'pos-ariat-int', sourceIdentifier: null, processedAt: '2026-11-02T18:04:00Z', customAttributes: ticket }),
+      makeMonthlyShopifyOrder({ id: 'imp-oct', name: '#53990', sourceName: 'pos-ariat-int', sourceIdentifier: null, processedAt: '2026-10-31T20:00:00Z', customAttributes: ticket }),
+      makeMonthlyShopifyOrder({ id: 'native', customAttributes: ticket }),
+    ]))
+
+    const { ShopifyMonthlyOrderSource } = await import(
+      '../src/infrastructure/shopify/ShopifyMonthlyOrderSource'
+    )
+    const result = await new ShopifyMonthlyOrderSource().listOrdersInRange({
+      brandKey: 'ariat',
+      from: FROM,
+      to: TO,
+      cursor: null,
+    })
+
+    expect(result.orders.map(({ order }) => order.sourceIdentifier)).toEqual(['7-27985', null, 'dev-1001'])
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string)
+    expect(body.query).toContain('processedAt')
+    expect(body.query).toContain('customAttributes')
+    expect(body.variables.queryStr).toContain('created_at:>=')
   })
 
   it('múltiples pedidos en una página se normalizan todos', async () => {

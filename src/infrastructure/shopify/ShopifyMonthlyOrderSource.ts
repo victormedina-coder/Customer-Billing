@@ -40,6 +40,7 @@ import type {
   MonthlyOrder,
 } from '../../domain/global/ports/MonthlyOrderSource'
 import type { NormalizedPayment } from '../../domain/global/PaymentBucketPolicy'
+import { importedPosTicket } from '../../domain/global/AriatImportedOrderPolicy'
 import type { BrandKey } from './brands'
 import { getBrandConfig } from './brands'
 import { shopifyGraphQL } from './client'
@@ -64,10 +65,15 @@ const ORDERS_IN_RANGE_QUERY = /* graphql */ `
           id
           name
           createdAt
+          processedAt
           currencyCode
           email
           sourceName
           sourceIdentifier
+          customAttributes {
+            key
+            value
+          }
           displayFinancialStatus
           totalRefundedSet {
             shopMoney { amount currencyCode }
@@ -135,6 +141,8 @@ interface ShopifyTransaction {
 }
 
 interface ShopifyOrderWithTransactions extends ShopifyOrder {
+  processedAt: string
+  customAttributes: Array<{ key: string; value: string | null }>
   transactions: ShopifyTransaction[]
 }
 
@@ -180,6 +188,21 @@ function buildDateRangeQuery(from: Date, to: Date): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Importados de Ariat — el atributo `Ticket` hace de sourceIdentifier
+// (regla en AriatImportedOrderPolicy; los demás pedidos pasan intactos)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function withImportedPosTicket(
+  node: ShopifyOrderWithTransactions,
+  brandKey: string
+): ShopifyOrderWithTransactions {
+  if (node.sourceIdentifier) return node
+  const ticket = node.customAttributes.find((attr) => attr.key.trim().toLowerCase() === 'ticket')?.value
+  const sourceIdentifier = importedPosTicket(brandKey, node.sourceName, node.processedAt, ticket)
+  return sourceIdentifier ? { ...node, sourceIdentifier } : node
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ShopifyMonthlyOrderSource
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -198,7 +221,7 @@ export class ShopifyMonthlyOrderSource implements MonthlyOrderSource {
     )
 
     const orders: MonthlyOrder[] = data.orders.edges.map(({ node }) => ({
-      order: normalizeOrder(node, cfg.label, cfg.key),
+      order: normalizeOrder(withImportedPosTicket(node, cfg.key), cfg.label, cfg.key),
       payments: normalizePayments(node.transactions),
     }))
 
