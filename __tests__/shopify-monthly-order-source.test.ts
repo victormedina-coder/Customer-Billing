@@ -12,7 +12,6 @@
  *   - Error de red / HTTP / GraphQL → mismo mensaje que el adapter
  *     individual (propagado desde shopifyGraphQL, sin envoltura adicional).
  *   - Pedido sin transacciones → payments: [].
- *   - No usa el endpoint OAuth cuando la marca es de auth estático.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -46,22 +45,23 @@ function gqlOrdersInRangeResponse(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fixture de marca (auth estático — evita el paso OAuth en los tests)
+// Fixture de marca OAuth
 // ─────────────────────────────────────────────────────────────────────────────
 
-const STATIC_BRAND_CFG = {
+const ARIAT_BRAND_CFG = {
   key: 'ariat' as const,
   label: 'Ariat',
   storeDomain: 'ariat.myshopify.com',
-  auth: 'static' as const,
-  token: 'shpat_test_token',
+  auth: 'oauth' as const,
+  clientId: 'client-id-ariat',
+  clientSecret: 'client-secret-ariat',
 }
 
 vi.mock('../src/infrastructure/shopify/brands', async (importOriginal) => {
   const original = await importOriginal<typeof import('../src/infrastructure/shopify/brands')>()
   return {
     ...original,
-    getBrandConfig: vi.fn(() => STATIC_BRAND_CFG),
+    getBrandConfig: vi.fn(() => ARIAT_BRAND_CFG),
   }
 })
 
@@ -129,11 +129,15 @@ function makeMonthlyShopifyOrder(overrides: {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('ShopifyMonthlyOrderSource.listOrdersInRange', () => {
-  let fetchMock: ReturnType<typeof vi.fn>
+  let fetchMock: ReturnType<typeof vi.fn<(url: string, init: RequestInit) => Promise<Response>>>
 
   beforeEach(() => {
-    fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
+    fetchMock = vi.fn<(url: string, init: RequestInit) => Promise<Response>>()
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) =>
+      String(url).includes('/admin/oauth/access_token')
+        ? Promise.resolve(jsonResponse({ access_token: 'test-token', expires_in: 86400 }))
+        : fetchMock(url, init)
+    )
     vi.resetModules()
   })
 
@@ -350,26 +354,6 @@ describe('ShopifyMonthlyOrderSource.listOrdersInRange', () => {
 
     expect(result.orders).toHaveLength(2)
     expect(result.orders.map((o) => o.order.orderNumber)).toEqual(['#1001', '#1002'])
-  })
-
-  it('con auth=static usa el token directamente (NO llama al endpoint OAuth)', async () => {
-    fetchMock.mockResolvedValueOnce(gqlOrdersInRangeResponse([]))
-
-    const { ShopifyMonthlyOrderSource } = await import(
-      '../src/infrastructure/shopify/ShopifyMonthlyOrderSource'
-    )
-    await new ShopifyMonthlyOrderSource().listOrdersInRange({
-      brandKey: 'ariat',
-      from: FROM,
-      to: TO,
-      cursor: null,
-    })
-
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect((init.headers as Record<string, string>)['X-Shopify-Access-Token']).toBe(
-      'shpat_test_token'
-    )
   })
 
   // ───────────────────────────────────────────────────────────────────────────
