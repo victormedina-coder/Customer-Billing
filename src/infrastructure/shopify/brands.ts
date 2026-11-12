@@ -8,8 +8,7 @@ export interface BrandConfig {
   key: BrandKey
   label: string
   storeDomain: string
-  auth: 'static' | 'oauth'
-  token?: string
+  auth: 'oauth'
   clientId?: string
   clientSecret?: string
 }
@@ -37,8 +36,9 @@ function loadBrandConfigs(): Record<BrandKey, BrandConfig> {
       key: 'ariat',
       label: 'Ariat',
       storeDomain: process.env.ARIAT_SHOPIFY_STORE ?? '',
-      auth: 'static',
-      token: process.env.ARIAT_SHOPIFY_ACCESS_TOKEN ?? '',
+      auth: 'oauth',
+      clientId: process.env.ARIAT_SHOPIFY_CLIENT_ID ?? '',
+      clientSecret: process.env.ARIAT_SHOPIFY_CLIENT_SECRET ?? '',
     },
     stetson: {
       key: 'stetson',
@@ -63,25 +63,15 @@ function validateBrandConfig(cfg: BrandConfig): void {
   if (!cfg.storeDomain) {
     throw new Error(`[shopify] Falta STORE domain para la marca '${cfg.key}'.`)
   }
-  if (cfg.auth === 'static') {
-    if (!cfg.token) {
-      throw new Error(
-        `[shopify] Falta ACCESS_TOKEN estático (shpat_…) para la marca '${cfg.key}'.`
-      )
-    }
-  } else {
-    if (!cfg.clientId || !cfg.clientSecret) {
-      throw new Error(
-        `[shopify] Faltan CLIENT_ID y/o CLIENT_SECRET OAuth para la marca '${cfg.key}'.`
-      )
-    }
+  if (!cfg.clientId || !cfg.clientSecret) {
+    throw new Error(
+      `[shopify] Faltan CLIENT_ID y/o CLIENT_SECRET OAuth para la marca '${cfg.key}'.`
+    )
   }
 }
 
 function isBrandConfigured(cfg: BrandConfig): boolean {
-  if (!cfg.storeDomain) return false
-  if (cfg.auth === 'static') return Boolean(cfg.token)
-  return Boolean(cfg.clientId && cfg.clientSecret)
+  return Boolean(cfg.storeDomain && cfg.clientId && cfg.clientSecret)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

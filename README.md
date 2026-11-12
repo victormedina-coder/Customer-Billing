@@ -127,7 +127,7 @@ Todas las flechas apuntan **hacia el dominio**. `domain/` no importa de ninguna 
 
 - Node.js 20+
 - Acceso a una base de datos PostgreSQL (Railway recomendado)
-- Credenciales de Shopify por marca (Ariat: token estático; Stetson/WB: OAuth client credentials)
+- Credenciales de Shopify por marca (Ariat, Stetson y WB: OAuth client credentials)
 - Credenciales de Facturama (sandbox o producción)
 - Redis (opcional en desarrollo — sin `REDIS_URL` el rate limiting queda en no-op)
 
@@ -222,7 +222,7 @@ Ver `.env.example` para la plantilla completa. Agrupadas por propósito:
 | Variable | Descripción |
 |---|---|
 | `SHOPIFY_API_VERSION` | Versión del Admin API (default en código: `2025-07`) |
-| `ARIAT_SHOPIFY_STORE` / `ARIAT_SHOPIFY_ACCESS_TOKEN` | Dominio de la tienda y token estático (`shpat_…`) |
+| `ARIAT_SHOPIFY_STORE` / `ARIAT_SHOPIFY_CLIENT_ID` / `ARIAT_SHOPIFY_CLIENT_SECRET` | Dominio de `ariat-1522.myshopify.com` y credenciales OAuth client_credentials |
 | `STETSON_SHOPIFY_STORE` / `STETSON_SHOPIFY_CLIENT_ID` / `STETSON_SHOPIFY_CLIENT_SECRET` | Dominio y credenciales OAuth (client credentials) |
 | `WB_SHOPIFY_STORE` / `WB_SHOPIFY_CLIENT_ID` / `WB_SHOPIFY_CLIENT_SECRET` | Dominio y credenciales OAuth (Western Brothers) |
 

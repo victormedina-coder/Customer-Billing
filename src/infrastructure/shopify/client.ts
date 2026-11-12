@@ -24,15 +24,6 @@ const DEFAULT_EXPIRES_IN_S = 86_400
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function getShopifyToken(cfg: BrandConfig): Promise<string> {
-  if (cfg.auth === 'static') {
-    if (!cfg.token) {
-      throw new Error(
-        `[shopify] Token estático no configurado para la marca '${cfg.key}'.`
-      )
-    }
-    return cfg.token
-  }
-
   if (!cfg.clientId || !cfg.clientSecret) {
     throw new Error(
       `[shopify] CLIENT_ID o CLIENT_SECRET no configurados para la marca '${cfg.key}'.`
@@ -68,9 +59,8 @@ export async function getShopifyToken(cfg: BrandConfig): Promise<string> {
   }
 
   if (!res.ok) {
-    const text = await res.text().catch(() => '')
     throw new Error(
-      `[shopify] Shopify rechazó el token para '${cfg.key}' (HTTP ${res.status}): ${text.slice(0, 200)}`
+      `[shopify] Shopify rechazó el token para '${cfg.key}' (HTTP ${res.status}).`
     )
   }
 

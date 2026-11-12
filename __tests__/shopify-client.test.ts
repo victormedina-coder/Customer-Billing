@@ -3,8 +3,6 @@
  *
  * Cubre:
  *   getShopifyToken:
- *     - token estático: devuelve el token sin llamar a fetch
- *     - token estático sin configurar: lanza
  *     - OAuth: obtiene token nuevo con form-urlencoded y lo cachea
  *     - OAuth: reutiliza token cacheado (no llama fetch de nuevo)
  *     - OAuth: lanza si respuesta no es OK
@@ -18,7 +16,6 @@
  *     - lanza en errores GraphQL (body.errors)
  *     - lanza cuando data === null
  *     - lanza en error de red
- *     - con auth=static no llama al endpoint OAuth
  *
  *   ShopifyOrderSource.findOrder (fan-out + filtro sourceIdentifier):
  *     - devuelve null cuando ninguna marca tiene el folio (0 matches)
@@ -36,6 +33,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import type { BrandConfig } from '../src/infrastructure/shopify/brands'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers de respuestas fetch mock
@@ -66,12 +64,13 @@ function gqlOrderResponse(orders: unknown[] = []): Response {
 // Fixtures de configuración de marca
 // ─────────────────────────────────────────────────────────────────────────────
 
-const STATIC_BRAND_CFG = {
+const ARIAT_BRAND_CFG = {
   key:         'ariat'  as const,
   label:       'Ariat',
   storeDomain: 'ariat.myshopify.com',
-  auth:        'static' as const,
-  token:       'shpat_test_token',
+  auth:        'oauth' as const,
+  clientId:    'client-id-ariat',
+  clientSecret:'client-secret-ariat',
 }
 
 const OAUTH_BRAND_CFG = {
@@ -136,7 +135,7 @@ vi.mock('../src/infrastructure/shopify/brands', async (importOriginal) => {
   const original = await importOriginal<typeof import('../src/infrastructure/shopify/brands')>()
   return {
     ...original,
-    listConfiguredBrands: vi.fn(() => [STATIC_BRAND_CFG]),
+    listConfiguredBrands: vi.fn(() => [ARIAT_BRAND_CFG]),
   }
 })
 
@@ -144,16 +143,16 @@ vi.mock('../src/infrastructure/shopify/brands', async (importOriginal) => {
 // Helper para reconfigurar las marcas disponibles por test
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function setBrands(brands: typeof STATIC_BRAND_CFG[]) {
+async function setBrands(brands: BrandConfig[]) {
   const brandsModule = await import('../src/infrastructure/shopify/brands')
-  vi.mocked(brandsModule.listConfiguredBrands).mockReturnValue(brands as never)
+  vi.mocked(brandsModule.listConfiguredBrands).mockReturnValue(brands)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// getShopifyToken — auth estático
+// getShopifyToken — credenciales incompletas
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe('getShopifyToken — static auth', () => {
+describe('getShopifyToken — credenciales incompletas', () => {
   let fetchMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
@@ -164,22 +163,6 @@ describe('getShopifyToken — static auth', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
-  })
-
-  it('devuelve el token estático sin llamar a fetch', async () => {
-    const { getShopifyToken } = await import('../src/infrastructure/shopify/client')
-
-    const token = await getShopifyToken(STATIC_BRAND_CFG)
-    expect(token).toBe('shpat_test_token')
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it('lanza si auth=static pero token no está configurado', async () => {
-    const { getShopifyToken } = await import('../src/infrastructure/shopify/client')
-
-    await expect(
-      getShopifyToken({ ...STATIC_BRAND_CFG, token: undefined })
-    ).rejects.toThrow(/Token estático no configurado/)
   })
 
   it('lanza si auth=oauth pero sin clientId/clientSecret', async () => {
@@ -246,6 +229,16 @@ describe('getShopifyToken — OAuth flow', () => {
     const { getShopifyToken } = await import('../src/infrastructure/shopify/client')
 
     await expect(getShopifyToken(OAUTH_BRAND_CFG)).rejects.toThrow(/rechazó el token/)
+  })
+
+  it('no expone el cuerpo de un rechazo OAuth', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('secret-sentinel', { status: 401 }))
+    const { getShopifyToken } = await import('../src/infrastructure/shopify/client')
+
+    const err = await getShopifyToken(OAUTH_BRAND_CFG).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toMatch(/HTTP 401/)
+    expect((err as Error).message).not.toContain('secret-sentinel')
   })
 
   it('lanza si la respuesta de token no tiene access_token', async () => {
@@ -345,20 +338,6 @@ describe('shopifyGraphQL', () => {
     )
   })
 
-  it('con auth=static usa el token directamente (NO llama al endpoint OAuth)', async () => {
-    // Solo una llamada a fetch (la GraphQL), sin el paso de token OAuth
-    fetchMock.mockResolvedValueOnce(jsonResponse({ data: { result: 42 } }))
-
-    const { shopifyGraphQL } = await import('../src/infrastructure/shopify/client')
-    const result = await shopifyGraphQL<{ result: number }>(STATIC_BRAND_CFG, '{ result }')
-
-    expect(result).toEqual({ result: 42 })
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect((init.headers as Record<string, string>)['X-Shopify-Access-Token']).toBe(
-      'shpat_test_token'
-    )
-  })
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -366,13 +345,17 @@ describe('shopifyGraphQL', () => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe('ShopifyOrderSource.findOrder', () => {
-  let fetchMock: ReturnType<typeof vi.fn>
+  let fetchMock: ReturnType<typeof vi.fn<(url: string, init: RequestInit) => Promise<Response>>>
 
   beforeEach(async () => {
-    fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-    // Por defecto: una marca estática configurada
-    await setBrands([STATIC_BRAND_CFG])
+    fetchMock = vi.fn<(url: string, init: RequestInit) => Promise<Response>>()
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) =>
+      String(url).includes('/admin/oauth/access_token')
+        ? Promise.resolve(tokenResponse('test-token'))
+        : fetchMock(url, init)
+    )
+    // Por defecto: una marca OAuth configurada
+    await setBrands([ARIAT_BRAND_CFG])
   })
 
   afterEach(() => {
@@ -452,11 +435,11 @@ describe('ShopifyOrderSource.findOrder', () => {
     const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
     const result = await new ShopifyOrderSource().findOrder({ orderNumber: '15-5333', verifier: '' })
 
-    expect(result?.storeName).toBe(STATIC_BRAND_CFG.label)
+    expect(result?.storeName).toBe(ARIAT_BRAND_CFG.label)
   })
 
   it('tolera fallos parciales: una marca falla, la otra responde → devuelve el pedido', async () => {
-    await setBrands([STATIC_BRAND_CFG, STATIC_BRAND_CFG])
+    await setBrands([ARIAT_BRAND_CFG, OAUTH_BRAND_CFG])
 
     const order = makeShopifyOrder({ sourceIdentifier: 'dev-15-5333' })
     fetchMock
@@ -470,7 +453,7 @@ describe('ShopifyOrderSource.findOrder', () => {
   })
 
   it('lanza cuando TODAS las tiendas fallan', async () => {
-    await setBrands([STATIC_BRAND_CFG, STATIC_BRAND_CFG])
+    await setBrands([ARIAT_BRAND_CFG, OAUTH_BRAND_CFG])
     fetchMock.mockRejectedValue(new TypeError('connection refused'))
 
     const { ShopifyOrderSource } = await import('../src/infrastructure/shopify/ShopifyOrderSource')
@@ -504,7 +487,7 @@ describe('ShopifyOrderSource.findOrder', () => {
   })
 
   it('>1 matches (folio en más de una tienda) → devuelve el primero, emite warn', async () => {
-    await setBrands([STATIC_BRAND_CFG, STATIC_BRAND_CFG])
+    await setBrands([ARIAT_BRAND_CFG, OAUTH_BRAND_CFG])
 
     const order1 = makeShopifyOrder({ id: 'gid://Order/1', sourceIdentifier: 'dev-15-5333' })
     const order2 = makeShopifyOrder({ id: 'gid://Order/2', sourceIdentifier: 'dev-15-5333' })
